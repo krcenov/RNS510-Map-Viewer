@@ -1750,6 +1750,43 @@ confirmed (no other disc region was available to compare against a
 non-empty `.aff`). Reader: `research/aff_reader.py` (thin, given the empty
 body — mainly documents the now-shared header-field decode).
 
+### 3.13 `eeu.cal` — country/continent name catalog (23.3KB, NOT_COMPRESSED) — CRACKED
+94-byte header (record count 484 read straight off its own now-cracked
+`bytes[86:88]` field, §3.12), then exactly **484 fixed 48-byte records**,
+**validated exhaustively — every one of the 35 distinct groups inspected in
+full, not sampled**: `[uint16 LE country_id][uint8 is_continent][uint8
+lang_index][40-byte NUL-padded name][4 bytes constant 0xFFFFFFFF]`.
+- **`country_id` — CRACKED: alphabetical rank by ISO 3166-1 alpha-3 code.**
+  `0` is reserved for 2 "Europe" pseudo-entries (`EUROPE`/`ЕВРОПА`), not
+  tied to any real `eeu.ctr` row. `1`-`34` are the disc's 34 unique alpha-3
+  codes (`eeu.ctr` has 35 rows but lists Russia twice, once transliterated
+  and once in Cyrillic, both `RUS`) in exactly alphabetical order: `1`=ALB
+  (Albania) ... `8`=DEU (Germany) ... `21`=MKD (North Macedonia) ...
+  `34`=VAT (Vatican City). This is a **third, independent** country
+  numbering on this disc — distinct from both `eeu.ctr`'s own arbitrary row
+  order (§3.11-adjacent) and `eeu.cty`'s empirically-resolved `country_tag`
+  (§3.8) — found by directly sorting `eeu.ctr`'s already-cracked alpha-3
+  field and comparing against the observed groups, no new empirical
+  matching needed. Every name in every one of the 35 groups was checked and
+  is a genuine real-world name for that exact country/continent in some
+  real language — e.g. group 8 (Germany) has 13 entries spanning
+  Portuguese/Spanish/French/Turkish/German/Dutch/Italian/Russian/English/
+  Slovak/Czech/Polish/Scandinavian; group 21 (North Macedonia) alone has 40
+  entries, reflecting that country's real historical naming dispute (many
+  literally spell out "former Yugoslav Republic of Macedonia" in different
+  languages).
+- **`lang_index` — CRACKED: matches `eeu.abc`'s own per-language `index`
+  field exactly** (§3.11) — confirmed directly, e.g. `lang_index=24` ('eng')
+  on the English entries, `66` ('rus') on the Cyrillic entry, `30` ('fre')
+  on the French entries, `80` ('tur') on `ARNAVUTLUK` (Albania in
+  Turkish) — every cross-check correct, no exceptions.
+- **`is_continent`**: `1` only for the 2 Europe pseudo-entries, `0` for
+  every real country.
+- Trailing 4 bytes: constant `0xFFFFFFFF` on all 484 records — an unused
+  reserved sentinel, not real content.
+
+Full methodology: `research/cal_reader.py`'s module docstring.
+
 ---
 
 ## 4. ISO container handling
