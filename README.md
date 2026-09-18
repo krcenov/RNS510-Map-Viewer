@@ -1680,6 +1680,42 @@ shields) has no counterpart in anything decoded so far.
     `verify_index_triple()`, `find_index_record_for_offset()`,
     `KNOWN_DIRECTORY_TABLES` in `research/feature_reader.py`.
 
+### 3.11 `eeu.abc` — alphabet / supported-language table (897 bytes, NOT_COMPRESSED) — CRACKED
+The smallest file examined this session, and its name describes its content
+exactly. **Validated at full scale — zero leftover bytes across the entire
+803-byte body.** Layout: 94-byte header, then `[uint16 LE text_len][text_len
+bytes of UTF-8][fixed 7-byte language-table records to EOF]`.
+- **Character repertoire**: `text_len` (199) bytes of UTF-8 decode cleanly to
+  125 codepoints — space, basic punctuation, digits, plain uppercase Latin
+  A-Z, every accented/extended Latin uppercase letter used by a European
+  language on this disc, the full uppercase Cyrillic alphabet, and a
+  trailing NUL terminator. This is exactly the uppercase glyph set every
+  place/road name on this disc already uses (§3.1/§3.8/etc. — names are
+  consistently uppercase) — plausibly backing the firmware's on-screen
+  spelling keyboard (`AESpellerType`, §2.3) and/or TTS input validation.
+- **Language table — CRACKED**: the remaining 602 bytes parse as exactly
+  **86 fixed 7-byte records**, `[3-byte ISO-639-2-style language code][flag
+  byte A][uint8 index][flag byte B][the same index repeated]`. The `index`
+  field is a plain ascending 1..86 counter (record N's own position — not a
+  cross-reference to anything). 52 distinct language codes, mostly real
+  ISO 639-2/B abbreviations (`bul`, `cze`, `dan`, `dut`, `eng`, `fin`, `fre`,
+  `ger`, `gre`, `hun`, `ice`, `ita`, `pol`, `por`, `rum`, `rus`, `spa`,
+  `swe`, `tur`, `ukr`, `wel`, `arm`, `aze`, `baq`, `bel`, `mne`, plus `und` =
+  ISO 639-2's real "Undetermined" code) — a handful of non-standard-looking
+  codes also appear (`aaa`, `bet`, `grt`, `mat`, `rst`, `sct`, `ukt`),
+  unidentified against any standard list.
+- **`(flag_a, flag_b)` — behavior cracked, exact meaning open**: exactly 3
+  distinct pairs occur in the whole file — `(2, 2)` (42 records, the most
+  common), `(4, 8)` (23), `(1, 5)` (21) — no other combination appears. 32 of
+  the 52 languages get more than one record (up to all 3 pairs, e.g. `pol`
+  and `scr` each get all three); the other 20 get exactly one. Plausible
+  reading, not confirmed: a per-language "voice/TTS profile tier" flag —
+  which of up to 3 distinct synthesis profiles are available for that
+  language — but no independent evidence (e.g. a real voice-file inventory)
+  was available this session to confirm it over any other 3-valued
+  per-language property. Full methodology: `research/abc_reader.py`'s module
+  docstring.
+
 ---
 
 ## 4. ISO container handling
