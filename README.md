@@ -127,7 +127,23 @@ Filenames follow `eeu.<ext>` when uncompressed and **`eeuz.<ext>`** (note the `z
 compressed. All are for the East Europe (`eeu`) dataset on this specific disc.
 
 ### 3.1 `eeu.rd` — road/routing graph (590MB, NOT_COMPRESSED) — CRACKED
-- 94-byte header: ASCII `SIEMENS`, `(C) SIEMENS AG`, version strings.
+- 94-byte header: ASCII `SIEMENS`, `(C) SIEMENS AG`, version strings. **3 more
+  fields in this same header CRACKED this session (found while investigating
+  `eeu.aff`, §3.12, but verified across every NOT_COMPRESSED file on the
+  disc)**: `bytes[84:86]` (uint16 LE) is a small per-logical-file-type code,
+  unique per file (`eeu.rd`=4, `eeu.cty`=3, `eeu.typ`=1, ...); `bytes[86:88]`
+  (uint16 LE) is that file's own **record count, truncated to 16 bits** —
+  confirmed exact for every fixed-record file checked, including ones whose
+  real count exceeds 65,536 (e.g. `eeu.rd` itself: 8,809,081 mod 65536 =
+  27,257, matching the header exactly; `eeu.cty`: 939,351 mod 65536 = 21,847,
+  also exact) — genuinely useful for a not-yet-examined file: dividing
+  `(filesize - 94)` by this field (adding multiples of 65,536 if the result
+  isn't a clean integer) is a fast way to guess a real fixed record size
+  without fully reverse-engineering the body first; `bytes[90:94]` (uint32
+  LE) is the file's own total size in bytes — exact for 18/22 NOT_COMPRESSED
+  files checked, with 2 confirmed exceptions storing the BODY size instead
+  (`eeu.iof`, `eeu.mod` — both off from the real total by exactly 94, the
+  header's own size) and one unexplained mismatch (`eeu.cal`).
 - Then fixed **67-byte records**, no gaps: `(filesize - 94) / 67` records exactly
   (8,809,081 on the reference disc).
 - Each record = **24-byte binary header + 43-byte null-padded ASCII name**.
@@ -1715,6 +1731,24 @@ bytes of UTF-8][fixed 7-byte language-table records to EOF]`.
   was available this session to confirm it over any other 3-valued
   per-language property. Full methodology: `research/abc_reader.py`'s module
   docstring.
+
+### 3.12 `eeu.aff` — affix table (138 bytes, NOT_COMPRESSED) — CRACKED (structure); EMPTY on this disc
+94-byte header (see §3.1's now-cracked trailing fields: type code 2, record
+count 1, total size 138 — all consistent), then a **44-byte body that is
+entirely zero bytes** — i.e. exactly **1 record of 44 bytes**, per the
+header's own now-decoded record-count field, and that one record carries no
+real data on this disc. Genuinely fully characterized structurally (there is
+nothing left to decode — the record-count field, the body length, and the
+all-zero content all agree with each other), just not semantically
+informative here. The name plausibly stands for "affix" (cf. Hunspell's own
+`.aff` file convention for spell-checking/word-stripping rules), which would
+fit naturally alongside this disc's other language/TTS-support files
+(§3.5 `eeuz.pca`, §3.11 `eeu.abc`) — a single empty record is consistent
+with "this East-Europe dataset's languages don't need any affix-stripping
+rule for search/TTS normalization," though that reading isn't independently
+confirmed (no other disc region was available to compare against a
+non-empty `.aff`). Reader: `research/aff_reader.py` (thin, given the empty
+body — mainly documents the now-shared header-field decode).
 
 ---
 
