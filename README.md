@@ -758,6 +758,56 @@ still-uncracked directory encoding (see below).
     all is not explained, only cheaply discoverable per feature. Full
     numbers, mechanism, and all caveats: `resolve_topology_adjacency()`'s
     docstring in `map_compressed_reader.py`.
+    **UPDATE (README §10 "v16 -> v17"): a real false-positive bug in this
+    mechanism found via the map viewer's own edge click-to-identify
+    feature, root-caused and FIXED with a new per-edge distance filter.**
+    A user right-clicked 5 real rendered connected-roads lines in the
+    Sofia, Bulgaria area and reported their two endpoints as real,
+    confirmed-unrelated points 692m–2,917m apart (e.g. the real named
+    street "OBORISHTE" wrongly "connected" to an unrelated unnamed point
+    ~1.7km away) — all 5 reproduced exactly against the real ISO directly
+    via `resolve_topology_adjacency()` (not a UI-only bug). Root cause: two
+    points sharing a link-id value is necessary but **not sufficient** for
+    real adjacency — in 4/5 cases the shared value was the literal `0`
+    (almost certainly a padding/unset-field sentinel, the same role `0`
+    plays elsewhere in this tile format, e.g. the spatial sub-index's
+    "empty cell" markers earlier in this section), and the 5th shared a
+    small non-zero value (11) whose full "clique" of sharing points mixed
+    one genuine 38m edge with several 869m–1,345m bogus ones.
+    Measured directly: even the two existing human-verified ground-truth
+    tiles already had unnoticed implausible edges hiding inside their
+    otherwise-"high"-confidence resolved sets before this fix (`mg2` 20597:
+    up to 599.9m among 213 total edges, all 16 human-verified ones under
+    104.2m; `mp0` 91124: up to 2,039.6m among 331 total edges, all
+    16-18 human-verified ones under 45.3m) — the existing per-FEATURE
+    `confidence` gate is a MEDIAN-based statistic, robust by design against
+    exactly this kind of minority outlier, which is precisely why it never
+    caught these. **Fix**: `resolve_topology_adjacency()` gained a new,
+    independent per-EDGE distance sanity filter (`max_edge_m`, default
+    200m — chosen with a >6.6x empirical margin over the highest distance
+    among every human-verified real edge across both ground-truth tiles,
+    104.2m, and comfortably below the closest reported bad edge, 692.4m),
+    applied to the final edge list AFTER shift selection so it does not
+    disturb the existing `shift`/`median_edge_m`/`confidence` computation
+    or any previously-reported numbers. Re-validated: both ground-truth
+    tiles still resolve every one of their human-verified edges unchanged
+    (`mg2` 20597 still exactly 16/16, `mp0` 91124 still exactly 16/18)
+    while dropping a real number of other implausible edges (`mg2` 20597:
+    213→204 edges, 9 dropped; `mp0` 91124: 331→310, 21 dropped), and all 5
+    user-reported false edges are now confirmed excluded — see
+    `test_map_viewer.py`'s "8f" section for the full reproduction/
+    validation against the real ISO. A new `"edges_dropped_implausible"`
+    field reports the per-feature drop count. **Limitation, stated
+    honestly**: 200m is an empirically-justified, not formally-derived,
+    cutoff — a genuinely long rural real edge could in principle exceed it
+    (not observed in this project's validated samples, all under 110m),
+    and a short-but-still-wrong edge (e.g. two near-duplicate vertices at
+    the same real junction, like the already-documented `mp0` 91124
+    point-258-vs-259 case above) would not be caught by a pure distance
+    filter — this closes the "obviously wrong, far away" failure mode the
+    user's reports demonstrated, not every conceivable false-edge
+    mechanism. Full write-up: `resolve_topology_adjacency()`'s own
+    docstring, "PER-EDGE FALSE-POSITIVE FILTER" section.
   - trailing block: more small tagged records; the "one record per feature"
     (road-class/attribute) hypothesis was tested and **rejected** — the block
     runs to 878+ bytes after a single-feature tile and 3,900+ bytes after a
@@ -3789,6 +3839,164 @@ confirming it shares no code path with any of this.
   larger, purpose-built sample (many more tiles with a confirmed split) to
   resolve either way -- left as an open lead for a future session, not
   acted on here.
+
+### v16 → v17: red dots, clickable connected-roads edges, zoom-independent layer pooling, bitmap rasterization, and a real background-reload staleness bug found and fixed (this session)
+
+**The user's request (verbatim):** *"now in the map viewer make the points
+red dots not gray ones, also make the dots visible when roads are visible
+also and make roads clickable and show the road segment's connecting
+points 2 so i can debug this and tell you fixes also, always show the
+selected layers independent of zoom."*
+
+**Dots and edges.**
+- Points now rasterize as solid red (`DOT_COLOR = "#d32f2f"`), always --
+  previously they were only drawn when "Draw connected roads" was off
+  (dots-vs-lines used to be an either/or rendering choice); now a dot is
+  drawn at every real point regardless of that checkbox, with resolved
+  edges drawn on top when it's checked.
+- Edges are now clickable: right-clicking near the midpoint of a rendered
+  connected-roads line (`_add_edge_pick()`) identifies **both** endpoints
+  in one click (marked as an `edge<->#` pair in the picked-points panel,
+  distinguishable from two independent single-point picks) -- this is the
+  exact debugging tool that surfaced the real false-edge bug fixed in
+  §3.6's "v16 -> v17" update above (the user right-clicked 5 real rendered
+  lines and reported their endpoints as implausibly far apart; all 5
+  reproduced directly against the ISO and are now fixed and covered by a
+  regression test).
+
+**Zoom-independent layer pooling.** Previously (`"v5 -> v6"`)
+`layers_for_scale()` automatically restricted which layers got pooled
+based on the current zoom, as a cost-saving gate -- checkboxes only ever
+*narrowed* that automatic set further, they never had full control. Per
+the user's explicit request ("always show the selected layers independent
+of zoom"), `MapData.ensure_area_loaded()`'s `allowed_layers` is now the
+**only** restriction: the pooled set is exactly `available_layers() ∩
+allowed_layers`, at every scale, with `layers_for_scale()`/
+`SCALE_LAYER_THRESHOLDS` left in place as pure, tested, but no-longer-
+called functions. **Stated cost, not hidden:** this removes the gate that
+existed specifically because `mp0` alone can be tens of thousands of
+points over a real, wide, fully-zoomed-out viewport -- a user who wants
+that cost back can simply uncheck the heavier layers manually. Measured
+directly: a maximally-zoomed-out, all-layers-checked reload over a real
+Sofia-area viewport pooled 480,059 points (268,285 from `mp0` alone,
+across 1,062 tiles) in real end-to-end testing, taking several minutes on
+real hardware -- a genuine, disclosed tradeoff, not an oversight.
+
+**Bitmap rasterization rewrite.** The old renderer created one real
+Tkinter canvas item (`create_oval`/`create_line`) per point/edge --
+tens of thousands of individual widgets, which is where the actual
+"Not Responding" freezing the user reported came from (not CPU or disk
+speed). `App._redraw()` now rasterizes every point/edge into a single
+`PIL.Image`/`ImageDraw` bitmap, shown via exactly one
+`canvas.create_image()` call, regardless of point count. Measured
+directly: Sofia-area, all 5 layers (48,302 points, 36,849 dot pixels),
+0.086s per `_redraw()` -- one canvas item instead of tens of thousands.
+Tests were reworked to match: assertions sample real pixel colors from
+`App._current_image` at exact projected coordinates instead of counting
+canvas items.
+
+**A real background-reload staleness bug, found and fixed while building
+this section's own test coverage.** `App._maybe_reload_viewport()` starts
+each pan/zoom/checkbox-triggered reload on a background thread
+(`BackgroundTask`) and, on completion, applied its result unconditionally
+-- including writing `MapData.covered_bbox`/`covered_layers` (set as a
+side effect deep inside `MapData.ensure_area_loaded()`, on the worker
+thread) and `App.features`. With the old scale-based gate removed above,
+overlapping reloads became easy to trigger in practice (e.g. a debounced
+`_schedule_viewport_check()` reload left pending from an earlier pan,
+still queued in Tk's `after()` mechanism, whose worker thread keeps
+running and can finish **after** a newer, faster reload already
+completed) -- and there was no mechanism anywhere to detect or discard a
+stale, superseded completion. A late-finishing old reload would silently
+overwrite the current view's state with its own unrelated area/feature
+set, well after a newer request had already finished successfully.
+Reproduced directly while writing this session's own end-to-end GUI test
+(a real Sofia-area reload's own bookkeeping was observed reverting to an
+unrelated, much-earlier Tirana-area test's result, several minutes after
+the Sofia reload itself had already completed with the correct data).
+**Fix:** `App` now tracks its own generation counter
+(`self._load_token`, bumped every time a new reload actually starts) and
+the "what area/layers does the CURRENT view have loaded" state
+(`self._covered_bbox`/`self._covered_layers`) separately from
+`MapData.covered_bbox`/`covered_layers` (left unchanged -- still simple,
+unconditional bookkeeping on `MapData` itself, which existing direct/
+non-GUI tests rely on). `_maybe_reload_viewport()`'s `done()` callback now
+checks its own captured token against the current one first and discards
+the entire result (no `features`/`_covered_bbox`/`_redraw()` update) if a
+newer reload has since started, regardless of which `BackgroundTask`
+happens to finish first. This is a real correctness fix, not just a test
+artifact -- the same class of bug could analogously let a real user's
+slow, superseded pan/zoom reload revert their current view after a faster
+follow-up reload already updated it.
+
+**Test suite:** `test_map_viewer.py`'s GUI end-to-end section was extended
+with real, running-`App`-level coverage for all of the above (scale-
+independent layer pooling actually reaching the running app, not just
+`MapData`; the layer-visibility/hide-garbage checkboxes actually firing a
+real background reload; ground-truth pixel-sampled rendering checks for
+both dots and edges; edge click-to-identify against a known real edge).
+Two real test-hygiene issues surfaced and were fixed along the way: (1)
+the bbox-nesting "setup check" comparing a zoomed-out load against a
+subsequent zoom-in now computes both sides via `compute_visible_bbox()`
+against a canvas size captured once, synchronously, right before the
+load -- real canvas geometry is not guaranteed stable across the several
+real minutes a wide, all-layers reload takes (the window is pinned to a
+fixed size, but sibling widgets like the status bar can still shift how
+much of that fixed budget the canvas gets as its own text changes length)
+so re-reading `winfo_width()/height()` live at both ends of a long wait
+was flaky; (2) the "NAV -> Start" end-to-end jump test now temporarily
+disables connected-roads mode around the jump (same pattern already used
+elsewhere in this file) since the ~34x per-tile adjacency cost, paid over
+a real not-yet-cached area, is unrelated to what that check verifies and
+was blowing past its own timeout. Full suite re-run and passes end to end
+against the real ISO.
+
+### v17 → v18: discrete, real-hardware-style zoom steps (this session)
+
+**The user's request (verbatim):** *"make the start zoom at 5km and the
+zoom steps must be as follows: 500km, 400km, 300km, 200km, 150km, 100km,
+75km, 50km, 40km, 30km, 20km, 15km, 10km, 7.5km, 5km, 4km, 3km, 2km, 1.5km,
+1km, 750m, 500m, 400m, 300m, 200m, 150m, 100m, 75m, 50m, 25m."*
+
+Previously the mouse-wheel zoom was continuous: each tick multiplied
+`scale` by `1.15` (or divided), clamped only to a broad `[1, 5,000,000]`
+range -- not the fixed, discrete zoom "rings" a real GPS nav unit (and the
+real RNS510) actually has. Replaced with:
+- `ZOOM_LEVELS_M`: the exact 30-level table above, widest (500km) to
+  narrowest (25m).
+- `scale_for_zoom_span_m(span_m, width_px, height_px)`: converts a named
+  real-world span into a `scale` (pixels/degree) such that the SMALLER of
+  the canvas's two pixel dimensions spans exactly that distance --
+  `span_m / METERS_PER_DEGREE_LAT` (111,320m/° of latitude; longitude's own
+  shrink-by-`cos(lat)` is already handled by `project_point()`'s existing
+  factor, so the same `scale` value works for both axes).
+- `nearest_zoom_level_index(scale, width_px, height_px)`: finds which
+  table entry the CURRENT scale is closest to (compared on a log scale,
+  since the levels are geometric/multiplicative, not linear) -- this is
+  what lets `App._on_zoom()` step exactly one real level per wheel tick
+  from *whatever* `self.scale` happens to be (a previous discrete step, the
+  fixed jump default below, or a test setting `app.scale` directly),
+  without needing to separately track "which level am I on" as extra
+  mutable state. Zooming past either end of the table clamps there instead
+  of overshooting.
+- `DEFAULT_ZOOM_SPAN_M = 5,000.0`: a freshly-jumped-to location (search
+  result double-click, Address Entry "Start") now opens at the 5km level,
+  per the user's explicit request -- replacing the previous behavior of
+  auto-fitting the scale to whatever bounding box that jump's own decoded
+  features happened to have (`App._initial_scale()`, kept as a general
+  framing utility -- several ground-truth test sections still use it to
+  frame a specific area on screen, it's just no longer what a live jump's
+  own display scale uses).
+
+Covered by `test_map_viewer.py`: pure-function round-trip checks (every
+level's own `scale_for_zoom_span_m()` output resolves back to that same
+level via `nearest_zoom_level_index()`, and scale increases monotonically
+as the named span narrows), a real `App._on_zoom()` GUI check confirming
+one wheel tick moves exactly one table level (5km <-> 4km) and stays
+cursor-centered (the existing "keep the point under the cursor fixed"
+pan math, unchanged, re-verified against the new discrete `new_scale`),
+and clamping at both the 25m and 500km ends. Full suite re-run and passes
+end to end against the real ISO.
 
 ### How it works
 

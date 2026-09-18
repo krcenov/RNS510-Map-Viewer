@@ -2276,7 +2276,8 @@ def _haversine_ish_m(p1, p2):
 
 
 def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
-                                max_shift_scan=None, implausible_median_m=2000):
+                                max_shift_scan=None, implausible_median_m=2000,
+                                max_edge_m=200.0):
     """CRACKED (this session) -- resolves the node-id<->coordinate mapping
     that decode_topology() explicitly could NOT (see that function's long
     "NOT SOLVED" section). Returns, per feature, a real point-index adjacency
@@ -2425,17 +2426,138 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
       `mp0` tiles, which have the most multi-feature tiles and the longest
       per-feature record runs) more than by feature size.
 
+    CONCRETE "found: False" EXAMPLE, user-reported, investigated directly
+    (this session): a user right-clicked/reported 5 real points they
+    expected connected -- `mp0` tile_id 88189 (offset 972,122,528), points
+    at (23.35035,42.68571)/"SITNYAKOVO", (23.34998,42.68592) and
+    (23.34966,42.68611)/"BOYCHO VOYVODA" x2, (23.34434,42.68906)/"MIZIA",
+    (23.34238,42.68971) -- decode_features() point_index 189/175/172/54/25,
+    ALL in this tile's feature 0 (278 points). Real-world distances between
+    each reported-adjacent pair (33.7m-545.3m, computed directly from their
+    own decoded coordinates) are entirely plausible real road spacing, so
+    this is not a case of the user mis-reading unrelated points -- and
+    directly confirms this specific feature is a genuine instance of the
+    "found: False" bucket characterized above, not a new bug: `decode_
+    topology()` cannot locate feature 0's own table anywhere in this tile.
+    Manually re-probed well past what `decode_topology()`'s own cap ladder
+    and default 2000-byte search window try (every cap up to 65535, and the
+    ENTIRE rest of the tile as the search window, both with and without
+    excluding feature 1's already-claimed byte range) turned up nothing
+    genuine: the only "hit" at a loose cap lands exactly on feature 1's own
+    already-resolved, validated table bytes (1670-2230) -- i.e. an ALIASED
+    false match of the same kind bug #2 above already found and fixed, here
+    correctly REJECTED by the existing reservation mechanism (working as
+    designed, not a regression) -- and the only "hit" once that range is
+    excluded is at `cap=65535`, which accepts literally any byte value and
+    so is not a real signal, just the first unreserved position tried. This
+    tile's feature 0 has no locatable topology table under the currently-
+    cracked understanding of the format; closing it would need the same
+    kind of new structural insight as the still-open "NOT SOLVED" node-id
+    section above, not a quick parameter tweak.
+    A SECOND, DISTINCT, ARCHITECTURAL limitation the same report surfaced:
+    the user's 6th point (23.34024,42.69020), point_index 41, is in this
+    SAME tile's feature 1 (55 points, itself resolved at "high" confidence)
+    -- i.e. the user expects an edge crossing a FEATURE boundary. This
+    function resolves adjacency entirely WITHIN each feature independently
+    (see the per-feature loop above) and has never attempted a cross-
+    feature edge -- consistent with the "NOT SOLVED" section's own note
+    that node-ids are plausibly a GLOBAL, tile-wide numbering shared across
+    every feature in a tile (the 546 == 392+154 observation), which would
+    make real cross-feature edges structurally expected, not accidental.
+    Even a tile where every one of its features individually resolves at
+    "high" confidence would still miss this class of edge today -- a real,
+    separate gap from the per-feature "found: False" issue above, and not
+    yet attempted in any session.
+
+    PER-EDGE FALSE-POSITIVE FILTER (this session, README §10 "v16 -> v17" --
+    found via the map viewer's new edge click-to-identify feature, which
+    lets a user right-click a specific rendered connected-roads LINE and
+    get back exactly which two points it connects, precisely so real
+    connections could be debugged/reported this way). A user right-clicked
+    5 real rendered edges in the Sofia, Bulgaria area and reported their
+    endpoints as REAL, CONFIRMED-UNRELATED points -- e.g. "OBORISHTE" (a
+    real named street) connected by a resolved edge to an unnamed point
+    ~1.7km away; four more examples ranging 692m-2,917m apart, all inside
+    features whose OVERALL confidence was "high". Investigated directly
+    against the real ISO (all 5 reproduced exactly via this function, not a
+    UI-only bug -- see `test_map_viewer.py` section "8f" for the full
+    reproduction): in 4/5 cases the two "connected" points shared the
+    literal link-id value **0** (their records' fields intersected only at
+    0); the 5th shared a small non-zero value (11) whose full "clique"
+    (`_shared_value_edges()`'s `value_to_points[v]`) mixed one genuinely
+    short real edge (38m) with several implausibly long ones (869m-1,345m)
+    to other members sharing that same value. This is a real, root-caused
+    gap in the mechanism this docstring describes above: two points sharing
+    a link-id value is necessary but NOT SUFFICIENT for real adjacency --
+    `0` in particular is almost certainly a padding/unset-field sentinel
+    (the same role plain `0` plays elsewhere in this exact tile format, see
+    §3.6's spatial-sub-index write-up), not a genuine edge id, so any two
+    points that both happen to have an unrelated/unused field slot land in
+    the same `value_to_points[0]` bucket and get wrongly wired together by
+    `_shared_value_edges()`'s clique-forming logic.
+
+    Why the existing per-FEATURE median-based `confidence` gate did NOT
+    catch this: `confidence` is computed from the MEDIAN distance across
+    ALL of a feature's resolved edges for the winning shift -- a robust
+    statistic BY DESIGN, specifically so a handful of outliers can't drag
+    down an otherwise-good feature's confidence. That robustness is exactly
+    why a small number of bad edges can hide inside an aggregate "high"
+    confidence undetected: measured directly on the two existing human-
+    verified ground-truth tiles, the FULL (pre-fix) resolved edge sets
+    contained edges up to 599.9m (`mg2` 20597, 213 edges total, its 16
+    human-verified edges all under 104.2m) and up to 2,039.6m (`mp0` 91124,
+    331 edges total, its 16-18 human-verified edges all under 45.3m) --
+    i.e. even the two BEST-VALIDATED tiles in this project already had
+    some real, unnoticed implausible edges mixed in; the user's 5 reports
+    just happened to land on unlabeled/rarely-inspected tiles where nobody
+    had looked closely before.
+
+    FIX: a NEW, independent per-EDGE distance sanity check
+    (`max_edge_m`, default 200.0), applied to the FINAL edge list AFTER
+    shift selection -- deliberately NOT folded into the median/confidence
+    calculation above, so shift-selection robustness and the existing
+    `confidence`/`median_edge_m` semantics (and every number already
+    reported/tested for them) are completely unchanged; this only prunes
+    which edges make it into the RETURNED `"edges"`/`"adjacency"`. 200m was
+    chosen with a large empirical margin: the single highest distance among
+    EVERY human-verified real edge across BOTH ground-truth tiles combined
+    is 104.2m (`mg2` 20597); the closest of the 5 reported bad edges is
+    692.4m -- a >6.6x gap with no edges observed anywhere near the middle of
+    it, the same "pick a threshold with a large empirical safety margin"
+    principle this function's own `implausible_median_m=2000` already uses.
+    Re-validated: BOTH ground-truth tiles still resolve every one of their
+    human-verified edges after the fix (`mg2` 20597 still exactly 16/16,
+    `mp0` 91124 still exactly 16/18) while each drops a real number of
+    other, implausible edges from their full resolved sets (`mg2` 20597:
+    213 -> 204, 9 dropped; `mp0` 91124: 331 -> 310, 21 dropped) -- and all
+    5 of the user-reported false edges are now confirmed excluded.
+    **Limitation, stated honestly**: 200m is an empirically-justified
+    but not formally-derived cutoff -- a real edge on an unusually long,
+    sparse rural road segment could in principle exceed it and be wrongly
+    dropped (not observed in this project's own validated samples so far,
+    all well under 110m), and conversely a short-but-still-wrong edge
+    (e.g. two closely-spaced but topologically-unrelated points, such as
+    the `mp0` 91124 point-258-vs-259 near-duplicate-junction case already
+    documented above) would NOT be caught by a pure distance filter --
+    this closes the "obviously wrong, far away" failure mode the user's
+    reports demonstrated, not every conceivable false-edge mechanism.
+    `"edges_dropped_implausible"` (new field, see Returns below) reports
+    exactly how many edges this filter removed for a given feature, so a
+    caller/future session can audit or retune the threshold.
+
     PRACTICAL CONSEQUENCE: this closes the concrete gap blocking README §8
     item 5 -- given a feature's decoded points and topology table, this
     function now tells you which OTHER real points a given point is
     actually adjacent to (not just "this vertex looks like a junction").
     It does NOT (yet) explain what the shared numeric link-id VALUES
-    themselves independently mean (e.g. whether they are a real, separately
-    -stored edge/segment id used elsewhere in the database) -- only that
-    sharing one is how adjacency is encoded. It also does not explain why
+    themselves independently mean beyond "not-0 and shared by <= max_group
+    points is a plausible-but-not-guaranteed real edge, subject to the
+    per-edge distance filter above" (e.g. whether a genuine non-zero,
+    non-sentinel value is a real, separately-stored edge/segment id used
+    elsewhere in the database remains open). It also does not explain why
     the leading-header-record count ("shift") varies per feature, only how
-    to discover it per feature cheaply. Both are reasonable follow-ups for
-    a future session but are NOT required to use this function's output.
+    to discover it per feature cheaply. All three are reasonable follow-ups
+    for a future session but are NOT required to use this function's output.
 
     Args:
         raw, declen: as for decode_features()/decode_topology().
@@ -2448,7 +2570,17 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
             slow; every case actually validated this session needed a shift
             in {1, 2}, but this is only 2 data points, so the default is
             still a full, unbounded scan.
-        implausible_median_m: see CAVEAT above.
+        implausible_median_m: see CAVEAT above (feature-level, median-based
+            gate -- see "PER-EDGE FALSE-POSITIVE FILTER" above for how this
+            differs from `max_edge_m`).
+        max_edge_m: see "PER-EDGE FALSE-POSITIVE FILTER" above -- any
+            individual edge (from the winning shift) whose two endpoints
+            are more than this many real-world meters apart is dropped
+            from the returned `"edges"`/`"adjacency"`, regardless of the
+            feature's own aggregate `median_edge_m`/`confidence`. Does NOT
+            affect shift selection or the `confidence`/`median_edge_m`
+            fields, which are still computed from the full, unfiltered
+            edge set for the winning shift.
 
     Returns a list of dicts, one per feature, in the same order as
     `features`:
@@ -2456,12 +2588,18 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
                   feature's table at all -- see decode_topology()>,
          "shift": <int or None>,
          "median_edge_m": <float or None, the winning shift's median
-                  real-world edge distance -- see CAVEAT>,
+                  real-world edge distance, computed from the FULL
+                  unfiltered edge set for that shift -- see CAVEAT>,
          "confidence": <"high" if found and median_edge_m <=
                   implausible_median_m, "low" if found but the median
-                  exceeds it, "none" if not found at all>,
-         "edges": [(point_i, point_j), ...] (i < j, deduplicated),
-         "adjacency": {point_index: sorted[neighbor_point_index, ...]}}
+                  exceeds it, "none" if not found at all -- computed from
+                  the unfiltered edge set, same as median_edge_m>,
+         "edges": [(point_i, point_j), ...] (i < j, deduplicated, AFTER
+                  the per-edge max_edge_m distance filter above),
+         "adjacency": {point_index: sorted[neighbor_point_index, ...]}
+                  (built from the same filtered "edges"),
+         "edges_dropped_implausible": <int, how many edges the max_edge_m
+                  filter removed for this feature -- 0 if none/not found>}
     """
     if declen is None:
         declen = len(raw)
@@ -2508,11 +2646,31 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
             results.append({
                 "found": True, "shift": None, "median_edge_m": None,
                 "confidence": "none", "edges": [], "adjacency": {},
+                "edges_dropped_implausible": 0,
             })
             continue
 
-        adjacency = {}
+        # Per-EDGE distance sanity filter (found this session via real
+        # user-provided ground truth -- see this function's own docstring,
+        # "PER-EDGE FALSE-POSITIVE FILTER" section below, for the full
+        # investigation). `best_shift`/`best_median`/`confidence` above are
+        # deliberately computed from the FULL, unfiltered edge set for that
+        # shift (median is already a robust statistic against a minority of
+        # bad edges, and changing shift-selection/confidence semantics is
+        # out of scope for this fix) -- this filter only prunes which edges
+        # make it into the RETURNED "edges"/"adjacency", dropping any
+        # individual edge whose two endpoints are further apart than
+        # `max_edge_m` regardless of the feature's own aggregate median.
+        filtered_edges = []
+        dropped = 0
         for a, b in best_edges:
+            if _haversine_ish_m(points[a], points[b]) <= max_edge_m:
+                filtered_edges.append((a, b))
+            else:
+                dropped += 1
+
+        adjacency = {}
+        for a, b in filtered_edges:
             adjacency.setdefault(a, set()).add(b)
             adjacency.setdefault(b, set()).add(a)
         adjacency = {k: sorted(v) for k, v in adjacency.items()}
@@ -2523,7 +2681,8 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
             "shift": best_shift,
             "median_edge_m": best_median,
             "confidence": confidence,
-            "edges": sorted(best_edges),
+            "edges": sorted(filtered_edges),
             "adjacency": adjacency,
+            "edges_dropped_implausible": dropped,
         })
     return results

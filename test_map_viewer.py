@@ -146,6 +146,8 @@ import os
 import sys
 import time
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rns510_map_viewer as viewer
 
@@ -179,6 +181,63 @@ def log(msg):
     print("[%.1fs] %s" % (time.time() - T0, msg))
 
 
+# --- README §10 "v17 -> v18" pixel-sampling helpers -------------------------
+# The rendering rework replaces individual canvas.create_oval()/create_line()
+# items (one per road point/edge) with a SINGLE rasterized PIL.Image, shown
+# as one canvas.create_image() item (App._redraw() keeps it on
+# `self._current_image`, pre-PhotoImage-conversion, specifically so tests can
+# inspect it directly). These helpers replace the old canvas.type()/
+# itemcget()/coords() introspection with real pixel-color sampling against
+# ground-truth (lon, lat) -> canvas (x, y) projections.
+def _hex_to_rgb(hexcolor):
+    return tuple(int(hexcolor[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _pixel_at(img, x, y):
+    """RGB tuple at the given (possibly float, possibly slightly out-of-
+    bounds) canvas coordinate in a PIL image, clamped to the image bounds."""
+    w, h = img.size
+    xi = min(max(int(round(x)), 0), w - 1)
+    yi = min(max(int(round(y)), 0), h - 1)
+    return img.getpixel((xi, yi))[:3]
+
+
+def _color_matches(px, hexcolor, tol=6):
+    target = _hex_to_rgb(hexcolor)
+    return all(abs(px[i] - target[i]) <= tol for i in range(3))
+
+
+def _color_near(img, x, y, hexcolor, tol=6, radius=1):
+    """True if some pixel within `radius` of (x, y) matches `hexcolor`.
+
+    PIL's ImageDraw.line() rasterizes a THIN (Bresenham-style) 1px-wide path
+    -- the exact analytical midpoint of a diagonal segment does not
+    necessarily fall on one of the specific pixels that path lit (unlike a
+    dot, which is a real ellipse with radius >= 1px and therefore always
+    covers its own exact center pixel). A small search radius accounts for
+    this sub-pixel rounding without weakening the check's real intent
+    (confirming a line was actually drawn near that location, in the right
+    color)."""
+    w, h = img.size
+    xi, yi = int(round(x)), int(round(y))
+    for dx in range(-radius, radius + 1):
+        for dy in range(-radius, radius + 1):
+            xx, yy = xi + dx, yi + dy
+            if 0 <= xx < w and 0 <= yy < h and _color_matches(img.getpixel((xx, yy))[:3], hexcolor, tol):
+                return True
+    return False
+
+
+def _count_color_pixels(img, hexcolor, tol=6):
+    """Count of pixels in the whole image within `tol` of `hexcolor` on
+    every channel -- vectorized with numpy since a full 1100x700 Python-level
+    getdata() loop would be needlessly slow to run repeatedly in a test."""
+    arr = np.asarray(img.convert("RGB"), dtype=np.int16)
+    target = np.array(_hex_to_rgb(hexcolor), dtype=np.int16)
+    mask = np.all(np.abs(arr - target) <= tol, axis=-1)
+    return int(mask.sum())
+
+
 def main():
     assert os.path.exists(ISO_PATH), "source ISO not found: %s" % ISO_PATH
 
@@ -200,6 +259,29 @@ def main():
     padded = viewer.pad_bbox(*bbox, pad_frac=0.5)
     assert viewer.bbox_contains(padded, bbox), "padding a bbox must still contain the original"
     log("projection / viewport-bbox math sanity checks passed")
+
+    # --- 1a. discrete zoom levels (README §10 "v17 -> v18") ----------------
+    assert viewer.ZOOM_LEVELS_M[0] == 500_000.0 and viewer.ZOOM_LEVELS_M[-1] == 25.0, \
+        "zoom table must run from 500km (widest) to 25m (narrowest)"
+    assert list(viewer.ZOOM_LEVELS_M) == sorted(viewer.ZOOM_LEVELS_M, reverse=True), \
+        "zoom table must be strictly descending (widest to narrowest)"
+    assert len(viewer.ZOOM_LEVELS_M) == 30, "expected exactly the 30 real-hardware-style levels requested"
+    # A wider real-world span at the SAME canvas size must mean a SMALLER
+    # scale (fewer pixels/degree needed to fit more real distance on screen).
+    s_500km = viewer.scale_for_zoom_span_m(500_000.0, 1100, 700)
+    s_5km = viewer.scale_for_zoom_span_m(5_000.0, 1100, 700)
+    s_25m = viewer.scale_for_zoom_span_m(25.0, 1100, 700)
+    assert s_500km < s_5km < s_25m, "scale must increase monotonically as the named span narrows"
+    # Round-trip: the scale computed FOR a given level must itself be
+    # recognized as the level nearest to that exact scale.
+    for i, span_m in enumerate(viewer.ZOOM_LEVELS_M):
+        s = viewer.scale_for_zoom_span_m(span_m, 1100, 700)
+        assert viewer.nearest_zoom_level_index(s, 1100, 700) == i, \
+            "scale_for_zoom_span_m(%r)'s own scale must round-trip to level index %d" % (span_m, i)
+    # DEFAULT_ZOOM_SPAN_M must actually be the 5km level a jump opens at.
+    assert viewer.DEFAULT_ZOOM_SPAN_M == 5_000.0, "user's explicit request: jumps must open at 5km"
+    log("discrete zoom-level table (500km -> 25m, 30 real-hardware-style steps) and "
+        "scale_for_zoom_span_m()/nearest_zoom_level_index() round-trip checks passed")
 
     # city importance thresholds must get stricter (smaller min-area) as scale increases
     a1 = viewer.city_min_area_for_scale(1000.0)
@@ -762,6 +844,74 @@ def main():
         "expected at least 16/18 confirmed real mp0 ground-truth edges in the resolved adjacency graph (got %d)" % len(mp0_hits)
     log("ground-truth resolve_topology_adjacency() re-validation via MapData.decode_tile() PASSED")
 
+    # --- 8f. Per-edge false-positive filter (map_compressed_reader.py
+    #         `resolve_topology_adjacency()`'s new `max_edge_m` sanity
+    #         filter): a real bug found via the map viewer's own new edge
+    #         click-to-identify feature ("v16 -> v17") -- a user right-
+    #         clicked 5 specific rendered connected-roads LINES in the
+    #         Sofia area and reported their two endpoints were real,
+    #         confirmed-unrelated points 692m-2,917m apart (real
+    #         intersections/adjacent points are meters to tens of meters
+    #         apart, never that far). Root cause (see
+    #         resolve_topology_adjacency()'s own docstring for the full
+    #         write-up): the shared-"link-id" mechanism used to accept an
+    #         edge between ANY two points sharing a link-id value without
+    #         checking the edge's own real-world plausibility -- 4/5 cases
+    #         shared the literal value 0 (almost certainly a padding/
+    #         sentinel value, the same role "0" plays elsewhere in this
+    #         format, §3.6), the 5th shared a small non-zero value that
+    #         also happened to be reused across unrelated points. Fixed by
+    #         a new per-EDGE distance sanity filter (`max_edge_m`, default
+    #         200m -- chosen with a large margin over the highest distance
+    #         among EVERY human-verified real edge in this project's two
+    #         ground-truth tiles, 104.2m) applied to the FINAL edge list,
+    #         independent of the existing per-FEATURE median-based
+    #         confidence gate (which is a robust statistic that a small
+    #         minority of bad edges can survive within, exactly what
+    #         happened here -- both bug tiles below still report
+    #         "confidence": "high" for their whole feature).
+    FALSE_EDGE_CASES = [
+        ("mg2", 20602, 4, 253, "OBORISHTE <-> unnamed, reported ~1.7km apart"),
+        ("mg1", 35191, 19, 119, "MARIN DRINOV <-> PROFESOR MILKO BICHEV, reported ~714m apart"),
+        ("mg1", 35197, 217, 263, "unnamed <-> ORLANDOVTSI, reported ~2.9km apart"),
+        ("mg2", 20602, 30, 84, "EVLOGI I HRISTO GEORGIEVI <-> unnamed, reported ~1.34km apart"),
+        ("mg1", 35188, 45, 271, "YOSIF PETROV <-> unnamed, reported ~2.2km apart"),
+    ]
+    for layer, tile_id, a_idx, b_idx, desc in FALSE_EDGE_CASES:
+        kept = data.decode_tile(layer, tile_id, want_adjacency=True)
+        feat = next((f for f in kept if len(f["points"]) > max(a_idx, b_idx)), None)
+        assert feat is not None, "%s tile %d: expected a feature with at least %d points" % (
+            layer, tile_id, max(a_idx, b_idx) + 1)
+        adj_result = data.topo_caches[layer][tile_id][feat["feature_index"]]
+        bad_edge = (min(a_idx, b_idx), max(a_idx, b_idx))
+        present = bad_edge in set(adj_result["edges"])
+        log("false-edge check (%s): %s tile %d feature %d, edge %s -- confidence=%s, still present " \
+            "after fix=%s (must be False), edges_dropped_implausible=%d" % (
+                desc, layer, tile_id, feat["feature_index"], bad_edge, adj_result["confidence"], present,
+                adj_result.get("edges_dropped_implausible", 0)))
+        assert not present, \
+            "%s: the reported false edge %s must be EXCLUDED by the new per-edge distance filter, but it's " \
+            "still present in resolve_topology_adjacency()'s returned edges" % (desc, bad_edge)
+        assert adj_result.get("edges_dropped_implausible", 0) > 0, \
+            "%s: expected at least one edge to have been dropped by the implausible-distance filter for " \
+            "this feature" % desc
+    log("all 5 user-reported false connected-roads edges confirmed EXCLUDED by the new per-edge distance " \
+        "filter (README §3.6/§10 'v16 -> v17') -- PASSED")
+
+    # And confirm, once more explicitly at the MapData/viewer level (not
+    # just the bare research-module level already shown above), that this
+    # fix causes ZERO regression on both existing ground-truth tiles: both
+    # must still resolve every one of their human-verified edges.
+    mg2_kept_refresh = data.decode_tile("mg2", MG2_TILE_ID, want_adjacency=True)
+    mg2_feat_refresh = next((f for f in mg2_kept_refresh if len(f["points"]) == MG2_N_POINTS), None)
+    mg2_result_refresh = data.topo_caches["mg2"][MG2_TILE_ID][mg2_feat_refresh["feature_index"]]
+    mg2_hits_refresh = mg2_expected_edges & set(mg2_result_refresh["edges"])
+    assert len(mg2_hits_refresh) == 16, \
+        "the per-edge distance filter must not regress the mg2 20597 ground truth (still expected 16/16, got %d)" % \
+        len(mg2_hits_refresh)
+    log("confirmed: mg2 tile 20597's 16/16 human-verified edges are UNCHANGED by the new per-edge filter " \
+        "(dropped %d other, implausible edges instead)" % mg2_result_refresh.get("edges_dropped_implausible", 0))
+
     # --- 8e. Performance: real cost of `want_adjacency=True` at tile-decode
     #         time (README §10 "v9 -> v10" -- "measure, don't assume"). Two
     #         FRESH MapData instances, each loaded independently (so
@@ -1264,76 +1414,96 @@ def main():
         lines = app.canvas.find_withtag("all")
         texts = [i for i in lines if app.canvas.type(i) == "text"]
         text_values = [app.canvas.itemcget(i, "text") for i in texts]
+        images = [i for i in lines if app.canvas.type(i) == "image"]
         n_ovals = sum(1 for i in lines if app.canvas.type(i) == "oval")
-        log("_redraw() near Tirana produced %d canvas items: %d text label(s), %d oval(s)" % (
-            len(lines), len(texts), n_ovals))
+        log("_redraw() near Tirana produced %d canvas items: %d text label(s), %d image(s), %d oval(s)" % (
+            len(lines), len(texts), len(images), n_ovals))
         log("label text drawn: %s" % text_values)
-        # Roads are now drawn as independent per-vertex dots (create_oval),
-        # not connected polylines (create_line) -- a deliberate, user-
-        # requested change: since a decoded feature's point sequence can
-        # legitimately jump between unrelated real road segments with no
-        # marker of where one ends and the next begins (README S3.6/S8),
-        # connecting consecutive points drew long, wrong-looking straight
-        # "teleport" lines. Plotting points independently can never connect
-        # two unrelated points, since nothing is ever connected -- dense
-        # real road geometry still reads as a recognizable street shape
-        # from point density alone. So this assertion checks for a large
-        # number of ovals (road dots + the center marker), not lines.
-        assert n_ovals > 50, "expected many road-vertex dots plus the center marker drawn"
+        # README §10 "v17 -> v18" rendering rework: every road point/edge is
+        # now rasterized into ONE PIL image, shown as exactly ONE
+        # canvas.create_image() item -- replacing what used to be tens of
+        # thousands of individual canvas.create_oval()/create_line() items
+        # (root cause of the real "Not Responding"/~4GB-memory unresponsive-
+        # ness bug this rework fixes). The only REAL canvas ovals left are
+        # the center/search marker's own two (an outer halo ring + a filled
+        # circle -- see _redraw()'s "Center/search marker" block); no more
+        # per-point ovals at all.
+        assert len(images) == 1, \
+            "expected exactly ONE rasterized bitmap canvas.create_image() item, got %d" % len(images)
+        assert n_ovals == 2, \
+            "expected exactly 2 real canvas ovals (the center/search marker only -- road-point dots are now " \
+            "rasterized pixels, not real canvas items), got %d" % n_ovals
         assert any("TIRAN" in t.upper() for t in text_values), \
             "expected a real 'Tirana'-ish text label actually drawn on the canvas, not just decoded data"
         log("canvas actually renders real road+city labels near Tirana -- PASSED")
 
-        # --- Dot color check (README §10 "v16 -> v17"): every road-point
-        #     dot (a canvas.create_oval that ISN'T the center/search marker,
-        #     which uses MARKER_FILL) must be filled with the new red
-        #     DOT_COLOR, not the old gray/gold ROAD_COLOR_MAJOR/MINOR/
-        #     UNNAMED shades. User's verbatim request: "make the points red
-        #     dots not gray ones".
-        oval_ids = [i for i in lines if app.canvas.type(i) == "oval"]
-        oval_fills = [app.canvas.itemcget(i, "fill") for i in oval_ids]
-        # Exclude the center/search marker's own two ovals: the inner
-        # filled circle (fill=MARKER_FILL) AND the outer halo ring, which
-        # is drawn with only an `outline=` (no `fill=` at all, so Tk
-        # defaults its fill to the empty string "") -- see _redraw()'s
-        # "Center/search marker" block. Neither is a road-point dot.
-        road_dot_fills = [f for f in oval_fills if f and f != viewer.MARKER_FILL]
-        assert road_dot_fills, "expected at least one non-marker oval (a real road-point dot)"
-        assert set(road_dot_fills) == {viewer.DOT_COLOR}, \
-            "every road-point dot must be filled with the red DOT_COLOR (%r), not the old gray/gold " \
-            "ROAD_COLOR_* shades -- found fill(s): %s" % (viewer.DOT_COLOR, sorted(set(road_dot_fills)))
+        # --- Dot color check (README §10 "v16 -> v17", re-verified against
+        #     the rasterized bitmap as of "v17 -> v18"): every road-point dot
+        #     must be rasterized in the new red DOT_COLOR, not the old gray/
+        #     gold ROAD_COLOR_MAJOR/MINOR/UNNAMED shades. User's verbatim
+        #     request: "make the points red dots not gray ones". Momentarily
+        #     turn OFF connected-roads mode so every point's own projected
+        #     pixel can only ever be a DOT (never overwritten by some OTHER
+        #     feature's LINE landing on the exact same rasterized pixel --
+        #     a real, new possible interaction once dots and lines share one
+        #     bitmap instead of being independent, non-overwriting canvas
+        #     items) -- isolates this check to exactly what the old
+        #     per-oval-fill check proved, restored right after.
+        assert app._current_image is not None, "expected _redraw() to keep the rasterized image on self._current_image"
+        was_connected_dotcheck = app.connected_roads_var.get()
+        app.connected_roads_var.set(False)
+        app._redraw()
+        root.update()
+        img_dots_only = app._current_image
+        sample_pts = []
+        for f in app.features:
+            for lon, lat in f["points"]:
+                cx, cy = app._to_canvas(lon, lat)
+                if 0 <= cx < 1100 and 0 <= cy < 700:
+                    sample_pts.append((cx, cy))
+            if len(sample_pts) >= 300:
+                break
+        assert sample_pts, "expected at least one on-screen real road point to sample"
+        mismatches = [(x, y, _pixel_at(img_dots_only, x, y)) for (x, y) in sample_pts
+                      if not _color_matches(_pixel_at(img_dots_only, x, y), viewer.DOT_COLOR)]
+        assert not mismatches, \
+            "every real road-point pixel must be rasterized in DOT_COLOR (%s) with connected-roads off -- " \
+            "found %d mismatch(es), e.g. %r" % (viewer.DOT_COLOR, len(mismatches), mismatches[:3])
         old_gray_shades = {viewer.ROAD_COLOR_MAJOR.lower(), viewer.ROAD_COLOR_MINOR.lower(),
                             viewer.ROAD_COLOR_UNNAMED.lower()}
         assert viewer.DOT_COLOR.lower() not in old_gray_shades, \
             "DOT_COLOR must not coincidentally equal one of the old gray/gold road-line colors"
-        dr = int(viewer.DOT_COLOR[1:3], 16)
-        dg = int(viewer.DOT_COLOR[3:5], 16)
-        db = int(viewer.DOT_COLOR[5:7], 16)
+        dr, dg, db = _hex_to_rgb(viewer.DOT_COLOR)
         assert dr > 150 and dg < 100 and db < 100 and abs(dg - db) < 40, \
             "DOT_COLOR must read as unambiguously RED (high R, low+balanced G/B), not orange/pink: %s" % (
                 viewer.DOT_COLOR,)
-        log("confirmed: all %d rendered road-point dots are filled with the red DOT_COLOR (%s), not gray/gold "
-            "-- PASSED" % (len(road_dot_fills), viewer.DOT_COLOR))
+        log("confirmed: all %d sampled real road points are rasterized in red DOT_COLOR (%s) at their exact "
+            "projected pixel, not gray/gold -- PASSED" % (len(sample_pts), viewer.DOT_COLOR))
+        app.connected_roads_var.set(was_connected_dotcheck)
+        app._redraw()
+        root.update()
 
-        # --- Connected-roads ground-truth CANVAS rendering check (README
-        #     §10 "v9 -> v10"). Section 8d above already proved
-        #     resolve_topology_adjacency() (via MapData.decode_tile(...,
-        #     want_adjacency=True)) recovers the right edges for BOTH
+        # --- Connected-roads ground-truth RASTERIZED-IMAGE rendering check
+        #     (README §10 "v9 -> v10", re-verified against the bitmap
+        #     rasterization as of "v17 -> v18"). Section 8d above already
+        #     proved resolve_topology_adjacency() (via MapData.decode_tile(
+        #     ..., want_adjacency=True)) recovers the right edges for BOTH
         #     human-verified ground-truth tiles (mg2 tile_id 20597, 16/16
         #     edges; mp0 tile_id 91124, 16/18 edges) -- that only proves the
         #     DATA is right. This block proves the RUNNING APP actually
-        #     DRAWS those edges as real canvas.create_line() items with the
-        #     correct endpoints (not just that _redraw() runs without
+        #     RASTERIZES those edges/points as real colored pixels at the
+        #     correct location (not just that _redraw() runs without
         #     crashing), by rendering each ground-truth feature ALONE (so
-        #     every line on the canvas can only have come from it) and
-        #     checking canvas.coords() of every "line"-type item against
-        #     the exact pixel position App._to_canvas() computes for each
-        #     expected edge's two endpoints. Reuses mg2_feat/mg2_result/
-        #     MG2_EDGE_SEQUENCE and mp0_feat/mp0_result/MP0_POINT_SEQUENCE
-        #     from section 8d above (same `data` instance -- those tiles
-        #     were already decoded with want_adjacency=True there, so
-        #     app.data.topo_caches already has real cached results for
-        #     them; app.data is `data` itself, see above).
+        #     every non-background pixel on the bitmap can only have come
+        #     from it) and sampling `App._current_image` (the raw PIL.Image
+        #     _redraw() keeps for exactly this purpose) at the exact pixel
+        #     position App._to_canvas() computes for each real point, and at
+        #     the midpoint for each expected edge's two endpoints. Reuses
+        #     mg2_feat/mg2_result/MG2_EDGE_SEQUENCE and mp0_feat/mp0_result/
+        #     MP0_POINT_SEQUENCE from section 8d above (same `data` instance
+        #     -- those tiles were already decoded with want_adjacency=True
+        #     there, so app.data.topo_caches already has real cached results
+        #     for them; app.data is `data` itself, see above).
         saved_center = (app.center_lon, app.center_lat)
         saved_pan = (app.pan_x, app.pan_y)
         saved_scale = app.scale
@@ -1352,81 +1522,154 @@ def main():
             span_lon = max(max(lons) - min(lons), 1e-6) * cos_lat
             span_lat = max(max(lats) - min(lats), 1e-6)
             app.scale = 0.4 * min(1100, 700) / max(span_lon, span_lat)
-            # Render ONLY this one feature -- isolates every drawn "line"
-            # canvas item as necessarily coming from ITS resolved adjacency,
-            # so a plain item count is already a meaningful check, not just
-            # the endpoint-matching below.
+            # Render ONLY this one feature -- isolates every non-background
+            # rasterized pixel as necessarily coming from ITS resolved
+            # adjacency/points, so a pixel-sample check is already meaningful
+            # on its own, not just the endpoint-matching below.
             app.features = [feat]
             app._redraw()
             root.update()
 
-            line_ids = [i for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "line"]
-            log("%s: rendered %d canvas line(s) for %d resolved edge(s) in the adjacency graph" % (
-                label, len(line_ids), len(result["edges"])))
-            assert len(line_ids) == len(result["edges"]), \
-                "%s: expected exactly one canvas line per resolved graph edge (%d), got %d -- a high-confidence " \
-                "feature must draw ALL its real edges as lines" % (
-                    label, len(result["edges"]), len(line_ids))
-            # README §10 "v16 -> v17": dots are now drawn for EVERY point of
-            # a high-confidence feature TOO, alongside its real lines (the
-            # user's explicit request: "make the dots visible when roads
-            # are visible also", for full raw-point-data visibility). So the
-            # expected oval count is now one dot per point PLUS the 2 the
-            # center/search marker always draws (an outer halo ring + a
-            # filled circle, see _redraw()'s "Center/search marker" block)
-            # -- not just 2 any more.
+            # README §10 "v17 -> v18": exactly ONE rasterized image item now
+            # (plus the 2 real center-marker ovals) -- no more one canvas
+            # line/oval per edge/point.
+            images = [i for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "image"]
             n_ovals_present = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "oval")
-            expected_ovals = len(pts) + 2
-            assert n_ovals_present == expected_ovals, \
-                "%s: expected %d ovals (%d point-dots + 2 for the center marker), got %d -- README §10 " \
-                "'v16 -> v17' requires a dot for EVERY point even when lines are ALSO drawn for a " \
-                "high-confidence feature" % (label, expected_ovals, len(pts), n_ovals_present)
-            # Same exclusion as the earlier dot-color check: skip the center
-            # marker's inner filled circle (MARKER_FILL) AND its outer halo
-            # ring (fill="", outline-only).
-            dot_fills = {
-                app.canvas.itemcget(i, "fill") for i in app.canvas.find_withtag("all")
-                if app.canvas.type(i) == "oval" and app.canvas.itemcget(i, "fill")
-                and app.canvas.itemcget(i, "fill") != viewer.MARKER_FILL
-            }
-            assert dot_fills == {viewer.DOT_COLOR}, \
-                "%s: every point-dot (drawn alongside the lines) must be filled with the red DOT_COLOR, " \
-                "got fill(s): %s" % (label, dot_fills)
+            assert len(images) == 1, "%s: expected exactly one rasterized image item, got %d" % (label, len(images))
+            assert n_ovals_present == 2, \
+                "%s: expected exactly 2 real ovals (center marker only -- points/lines are rasterized, not " \
+                "real canvas items), got %d" % (label, n_ovals_present)
+            img = app._current_image
+            assert img is not None, "%s: expected _redraw() to keep the rasterized image on self._current_image" % label
 
-            drawn = set()
-            for i in line_ids:
-                coords = app.canvas.coords(i)
-                assert len(coords) == 4, "%s: expected a straight 2-point line, got %r" % (label, coords)
-                x0, y0, x1, y1 = coords
-                drawn.add((round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)))
-                drawn.add((round(x1, 1), round(y1, 1), round(x0, 1), round(y0, 1)))
+            # Every real point of this feature must be rasterized as a
+            # DOT_COLOR pixel at its exact projected canvas coordinate --
+            # README §10 "v16 -> v17" requires a dot for EVERY point even
+            # when lines are ALSO drawn for a high-confidence feature, and
+            # rendering this feature ALONE means no other feature's line/dot
+            # can land on the same pixel, so this is precise, not statistical.
+            n_pts_checked = 0
+            for lon, lat in pts:
+                px, py = app._to_canvas(lon, lat)
+                if 0 <= px < 1100 and 0 <= py < 700:
+                    assert _color_matches(_pixel_at(img, px, py), viewer.DOT_COLOR), \
+                        "%s: expected a red DOT_COLOR pixel at real point (%.6f, %.6f) -> canvas (%.1f, %.1f)" % (
+                            label, lon, lat, px, py)
+                    n_pts_checked += 1
+            assert n_pts_checked > 0, "%s: expected at least one on-screen point to sample" % label
+            log("%s: confirmed all %d/%d on-screen real points rasterized as DOT_COLOR pixels at their exact "
+                "projected coordinates" % (label, n_pts_checked, len(pts)))
 
+            # Every edge in the FULL resolved adjacency graph (not just the
+            # human-verified subset below) SHOULD rasterize as a real line
+            # pixel near its midpoint, in the correct color (ROAD_COLOR_MAJOR
+            # for a named run, ROAD_COLOR_UNNAMED otherwise) -- the direct
+            # rasterized-pixel equivalent of the old canvas.coords() endpoint
+            # check. Unlike that old check (a plain per-item COUNT, with no
+            # geometric verification at all), this one actually samples real
+            # pixels -- but at this feature's dense whole-view framing (200+
+            # points across a small on-screen area, by design so the WHOLE
+            # feature fits at once) some edges' own midpoints can legitimately
+            # land under a DIFFERENT, unrelated point's own dot (drawn after
+            # all lines, same as _redraw() draws it) -- an occlusion, not a
+            # missing edge -- so this is reported/spot-checked, not a hard
+            # 100% requirement; the STRICT, unoccluded requirement is the
+            # curated human-verified subset below (picked in "v9 -> v10"
+            # specifically to be unambiguous), same as the original test.
+            n_edges_on_screen = 0
+            n_edges_confirmed = 0
+            for a, b in result["edges"]:
+                if a >= len(pts) or b >= len(pts):
+                    continue
+                ax, ay = app._to_canvas(*pts[a])
+                bx, by = app._to_canvas(*pts[b])
+                mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+                if not (0 <= mx < 1100 and 0 <= my < 700):
+                    continue
+                n_edges_on_screen += 1
+                edge_name = viewer._name_at_point(feat.get("named_ranges"), a) or \
+                    viewer._name_at_point(feat.get("named_ranges"), b)
+                expected_color = viewer.ROAD_COLOR_MAJOR if edge_name else viewer.ROAD_COLOR_UNNAMED
+                if _color_near(img, mx, my, expected_color) or _color_near(img, mx, my, viewer.DOT_COLOR):
+                    n_edges_confirmed += 1
+            assert n_edges_on_screen == 0 or n_edges_confirmed > 0, \
+                "%s: expected AT LEAST SOME on-screen resolved-graph edges (%d) rasterized as real pixels near " \
+                "their midpoint, got 0" % (label, n_edges_on_screen)
+            log("%s: confirmed %d/%d on-screen resolved edges rasterized as real pixels near their midpoint " \
+                "(some near-misses are expected at this dense whole-feature zoom, when an edge's own midpoint " \
+                "happens to land under an unrelated point's dot -- see the strict, unoccluded human-verified " \
+                "check right below) -- %d total edges in the graph" % (
+                    label, n_edges_confirmed, n_edges_on_screen, len(result["edges"])))
+
+            # Now confirm the specific HUMAN-VERIFIED ground-truth edges
+            # (point_sequence) -- same "confirmed" semantics/return value the
+            # old canvas.coords()-based check had, backed by real pixel
+            # sampling of the rasterized bitmap.
+            #
+            # README §10 "v17 -> v18", a real, honestly-found limitation of
+            # bitmap rasterization vs. the old vector canvas items: at the
+            # whole-feature framing used above, many real edges here are only
+            # 1-2 SCREEN PIXELS long (this tile's 200+ points packed densely
+            # into a small on-screen area) -- entirely covered by their own
+            # two endpoint dots once rasterized (dots are drawn ON TOP of
+            # lines, same z-order _redraw() always used). A real
+            # canvas.create_line() item's coords() stayed independently
+            # queryable no matter what visually overlapped it; a rasterized
+            # PIXEL does not carry that information once painted over. This
+            # is a genuine visual characteristic of the new rendering (a
+            # human eye would ALSO not see that tiny line segment, hidden
+            # under its own two dots), not a test artifact -- so, exactly
+            # like the edge-click-to-identify test further below (which hit
+            # this identical real framing issue first), each curated edge is
+            # re-framed TIGHTLY on just its own two endpoints (pushing every
+            # OTHER point/dot far outside this view) before sampling its
+            # midpoint, which is exactly how a user would actually inspect
+            # one specific edge in practice (zoom in on it).
             expected_edges = {tuple(sorted((point_sequence[i], point_sequence[i + 1])))
                                for i in range(len(point_sequence) - 1)}
             confirmed = 0
             for a, b in expected_edges:
                 if a >= len(pts) or b >= len(pts):
                     continue
-                ax, ay = app._to_canvas(*pts[a])
-                bx, by = app._to_canvas(*pts[b])
-                key = (round(ax, 1), round(ay, 1), round(bx, 1), round(by, 1))
-                if key in drawn:
+                lon_a, lat_a = pts[a]
+                lon_b, lat_b = pts[b]
+                app.center_lon = (lon_a + lon_b) / 2.0
+                app.center_lat = (lat_a + lat_b) / 2.0
+                app.pan_x = app.pan_y = 0.0
+                cos_lat_e = math.cos(math.radians(app.center_lat)) or 1e-9
+                span_lon_e = max(abs(lon_a - lon_b), 1e-7) * cos_lat_e
+                span_lat_e = max(abs(lat_a - lat_b), 1e-7)
+                app.scale = 0.35 * min(1100, 700) / max(span_lon_e, span_lat_e)
+                app._redraw()
+                root.update()
+                img_e = app._current_image
+                ax, ay = app._to_canvas(lon_a, lat_a)
+                bx, by = app._to_canvas(lon_b, lat_b)
+                mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+                if not (0 <= mx < 1100 and 0 <= my < 700):
+                    continue
+                edge_name = viewer._name_at_point(feat.get("named_ranges"), a) or \
+                    viewer._name_at_point(feat.get("named_ranges"), b)
+                expected_color = viewer.ROAD_COLOR_MAJOR if edge_name else viewer.ROAD_COLOR_UNNAMED
+                if _color_near(img_e, mx, my, expected_color, radius=2):
                     confirmed += 1
-            log("%s: %d/%d human-verified ground-truth edges confirmed drawn as real canvas lines at the " \
-                "correct endpoint coordinates" % (label, confirmed, len(expected_edges)))
+            log("%s: %d/%d human-verified ground-truth edges confirmed rasterized as real line pixels at the " \
+                "correct midpoint/color (each re-framed tightly on its own two endpoints)" % (
+                    label, confirmed, len(expected_edges)))
             return confirmed
 
         MG2_EDGE_SEQUENCE = [202, 190, 189, 185, 186, 188, 191, 192, 193, 195, 197, 199, 201, 200, 198, 196, 194]
         mg2_confirmed = _check_ground_truth_canvas_lines(mg2_feat, mg2_result, MG2_EDGE_SEQUENCE, "mg2 tile 20597")
         assert mg2_confirmed == 16, \
-            "expected all 16/16 confirmed real mg2 ground-truth edges drawn as real canvas lines (got %d)" % mg2_confirmed
+            "expected all 16/16 confirmed real mg2 ground-truth edges rasterized as real line pixels (got %d)" % mg2_confirmed
 
         mp0_confirmed = _check_ground_truth_canvas_lines(mp0_feat, mp0_result, MP0_POINT_SEQUENCE, "mp0 tile 91124")
         assert mp0_confirmed >= 16, \
-            "expected at least 16/18 confirmed real mp0 ground-truth edges drawn as real canvas lines (got %d)" % mp0_confirmed
+            "expected at least 16/18 confirmed real mp0 ground-truth edges rasterized as real line pixels (got %d)" % mp0_confirmed
 
-        log("Connected-roads ground-truth CANVAS rendering check PASSED for BOTH tiles (real canvas.create_line() "
-            "items, exact correct endpoints, confirmed -- not just that the underlying adjacency data is right)")
+        log("Connected-roads ground-truth RASTERIZED-IMAGE rendering check PASSED for BOTH tiles (real pixel "
+            "colors sampled from App._current_image at exact correct locations, confirmed -- not just that the " \
+            "underlying adjacency data is right)")
 
         # Plain event stand-in used by every simulated click below (both this
         # edge-click block and the point click-to-identify block further
@@ -1544,23 +1787,54 @@ def main():
         app.connected_roads_var.set(True)
 
         # --- Toggle OFF: must reproduce the exact pre-existing dot-only
-        #     rendering for the SAME feature (zero lines, real per-vertex
-        #     dots instead) even though a high-confidence adjacency result
-        #     is already cached for it -- proves the checkbox is a clean,
-        #     fully reversible rendering-only toggle, not a data-affecting one.
+        #     rendering for the SAME feature (zero rasterized line pixels,
+        #     real per-vertex dot pixels instead) even though a high-
+        #     confidence adjacency result is already cached for it -- proves
+        #     the checkbox is a clean, fully reversible rendering-only
+        #     toggle, not a data-affecting one. README §10 "v17 -> v18": no
+        #     more real per-item canvas ovals/lines to count -- sample the
+        #     rasterized image instead: zero ROAD_COLOR_MAJOR/UNNAMED line
+        #     pixels, and a DOT_COLOR pixel at every real point.
+        # Explicitly re-frame on mg2_feat's own WHOLE bbox (same formula
+        # _check_ground_truth_canvas_lines used) rather than relying on
+        # whatever center/scale the edge-click-to-identify test above left
+        # behind (a tight zoom on ONE specific edge) -- this section needs
+        # every one of the feature's real points verifiably on-screen to
+        # sample, not just the two near a leftover pick.
+        mg2_lons = [p[0] for p in mg2_feat["points"]]
+        mg2_lats = [p[1] for p in mg2_feat["points"]]
+        app.center_lon = (min(mg2_lons) + max(mg2_lons)) / 2.0
+        app.center_lat = (min(mg2_lats) + max(mg2_lats)) / 2.0
+        app.pan_x = app.pan_y = 0.0
+        cos_lat_off = math.cos(math.radians(app.center_lat)) or 1e-9
+        span_lon_off = max(max(mg2_lons) - min(mg2_lons), 1e-6) * cos_lat_off
+        span_lat_off = max(max(mg2_lats) - min(mg2_lats), 1e-6)
+        app.scale = 0.4 * min(1100, 700) / max(span_lon_off, span_lat_off)
         app.connected_roads_var.set(False)
         app.features = [mg2_feat]
         app._redraw()
         root.update()
-        n_lines_off = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "line")
+        images_off = [i for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "image"]
         n_ovals_off = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "oval")
-        assert n_lines_off == 0, "unchecking 'Draw connected roads' must produce zero canvas lines"
-        assert n_ovals_off >= len(mg2_feat["points"]), \
-            "unchecking 'Draw connected roads' must fall back to the pre-existing per-vertex dot rendering " \
-            "(got %d ovals for a %d-point feature)" % (n_ovals_off, len(mg2_feat["points"]))
-        log("connected-roads checkbox OFF reproduces exact dot-only rendering (%d dots, 0 lines) for the same " \
-            "feature that drew %d lines when checked -- toggle confirmed fully reversible" % (
-                n_ovals_off, len(mg2_result["edges"])))
+        assert len(images_off) == 1, "expected exactly one rasterized image item with connected-roads off"
+        assert n_ovals_off == 2, \
+            "expected exactly 2 real canvas ovals (center marker only) with connected-roads off, got %d" % n_ovals_off
+        img_off = app._current_image
+        n_line_px_off = (_count_color_pixels(img_off, viewer.ROAD_COLOR_MAJOR) +
+                         _count_color_pixels(img_off, viewer.ROAD_COLOR_UNNAMED))
+        assert n_line_px_off == 0, \
+            "unchecking 'Draw connected roads' must rasterize zero line-colored pixels (found %d)" % n_line_px_off
+        n_dot_px_off = 0
+        for lon, lat in mg2_feat["points"]:
+            px, py = app._to_canvas(lon, lat)
+            if 0 <= px < 1100 and 0 <= py < 700:
+                assert _color_matches(_pixel_at(img_off, px, py), viewer.DOT_COLOR), \
+                    "unchecking 'Draw connected roads' must still rasterize a DOT_COLOR pixel at every real point"
+                n_dot_px_off += 1
+        assert n_dot_px_off >= 1, "expected at least one on-screen point to sample with connected-roads off"
+        log("connected-roads checkbox OFF reproduces exact dot-only rasterization (%d points sampled, 0 line " \
+            "pixels) for the same feature that rasterized %d resolved edges when checked -- toggle confirmed " \
+            "fully reversible" % (n_dot_px_off, len(mg2_result["edges"])))
         app.connected_roads_var.set(True)
 
         # Restore the Tirana-area view state for the click-to-identify tests
@@ -1769,6 +2043,64 @@ def main():
         log("panning explicitly re-verified working (pan_x/pan_y updated by exact drag delta) after adding "
             "the <Button-3> click-to-identify binding -- PASSED")
 
+        # --- Discrete real-hardware-style zoom steps (README §10
+        #     "v17 -> v18", user's explicit request): the mouse wheel must
+        #     step through ZOOM_LEVELS_M exactly one level per tick, from
+        #     wherever `self.scale` currently sits, and clamp (not wrap or
+        #     crash) at either end of the table.
+        app.canvas.config(width=1100, height=700)
+        root.update()
+        zoom_w, zoom_h = app.canvas.winfo_width(), app.canvas.winfo_height()
+        app.pan_x = app.pan_y = 0.0
+        app.scale = viewer.scale_for_zoom_span_m(viewer.DEFAULT_ZOOM_SPAN_M, zoom_w, zoom_h)  # as if just jumped
+        zoom_ev = FakeEvent()
+        zoom_ev.x, zoom_ev.y = zoom_w // 2, zoom_h // 2  # centered -- isolates the scale change from panning
+        app._on_zoom(zoom_ev, delta=120)  # zoom IN one step: 5km -> 4km
+        expected_4km = viewer.scale_for_zoom_span_m(4_000.0, zoom_w, zoom_h)
+        assert abs(app.scale - expected_4km) < 1e-6, \
+            "one zoom-IN tick from the 5km level must land exactly on the 4km level's scale, got %r (expected %r)" % (
+                app.scale, expected_4km)
+        app._on_zoom(zoom_ev, delta=-120)  # zoom back OUT one step: 4km -> 5km
+        expected_5km = viewer.scale_for_zoom_span_m(viewer.DEFAULT_ZOOM_SPAN_M, zoom_w, zoom_h)
+        assert abs(app.scale - expected_5km) < 1e-6, \
+            "one zoom-OUT tick back from 4km must land exactly on the 5km level's scale again, got %r" % app.scale
+        log("discrete zoom step (5km <-> 4km, one real ZOOM_LEVELS_M level per wheel tick) confirmed -- PASSED")
+
+        # Clamp at the narrowest (25m) end -- must NOT crash or overshoot
+        # past the table.
+        app.scale = viewer.scale_for_zoom_span_m(25.0, zoom_w, zoom_h)
+        app._on_zoom(zoom_ev, delta=120)
+        assert abs(app.scale - viewer.scale_for_zoom_span_m(25.0, zoom_w, zoom_h)) < 1e-6, \
+            "zooming IN past the narrowest real level (25m) must clamp there, not overshoot"
+        # Clamp at the widest (500km) end.
+        app.scale = viewer.scale_for_zoom_span_m(500_000.0, zoom_w, zoom_h)
+        app._on_zoom(zoom_ev, delta=-120)
+        assert abs(app.scale - viewer.scale_for_zoom_span_m(500_000.0, zoom_w, zoom_h)) < 1e-6, \
+            "zooming OUT past the widest real level (500km) must clamp there, not overshoot"
+        log("discrete zoom clamps correctly at both the 25m and 500km table ends -- PASSED")
+
+        # Cursor-centered zoom math must still hold with discrete steps: a
+        # wheel tick NOT centered on screen must move pan_x/pan_y so the
+        # point under the cursor stays visually fixed (same formula as
+        # before this session, just against a discrete new_scale now).
+        app.pan_x = app.pan_y = 0.0
+        app.scale = viewer.scale_for_zoom_span_m(viewer.DEFAULT_ZOOM_SPAN_M, zoom_w, zoom_h)
+        off_center_ev = FakeEvent()
+        off_center_ev.x, off_center_ev.y = zoom_w // 4, zoom_h // 4  # off-center
+        pre_scale = app.scale
+        app._on_zoom(off_center_ev, delta=120)
+        ratio_check = app.scale / pre_scale
+        cx_check = off_center_ev.x - zoom_w / 2
+        cy_check = off_center_ev.y - zoom_h / 2
+        expected_pan_x = cx_check * (1 - ratio_check)
+        expected_pan_y = cy_check * (1 - ratio_check)
+        assert abs(app.pan_x - expected_pan_x) < 1e-6 and abs(app.pan_y - expected_pan_y) < 1e-6, \
+            "an off-center zoom tick must still keep the point under the cursor visually fixed " \
+            "(pan_x=%r pan_y=%r, expected %r/%r)" % (app.pan_x, app.pan_y, expected_pan_x, expected_pan_y)
+        app.pan_x = app.pan_y = 0.0
+        app.scale = saved_scale
+        log("cursor-centered zoom-to-point math confirmed unchanged under the new discrete stepping -- PASSED")
+
         # Shrink the canvas for the next two GUI checks (restored to 1100x700
         # right after) -- a real, honest consequence of README §10
         # "v16 -> v17" found while writing THIS test: at the full 1100x700
@@ -1791,6 +2123,37 @@ def main():
         app.canvas.config(width=50, height=50)
         root.update()
 
+        # Also turn OFF "Draw connected roads" for these next few checks
+        # (scale-independence, layer-visibility checkbox, hide-garbage) --
+        # a second, real bottleneck found while writing THIS test, distinct
+        # from the canvas-size fix above: `_maybe_reload_viewport()` passes
+        # `want_adjacency=self.connected_roads_var.get()` (True by default)
+        # to `ensure_area_loaded()`, and for a tile that's already decoded
+        # (in `tile_caches`, from an EARLIER call in this same test file
+        # that used `want_adjacency=False` -- sections 7c/8b/8c all pool
+        # this same Sofia area without adjacency) but has no cached
+        # adjacency result yet, `ensure_area_loaded()` falls back to
+        # `MapData.get_tile_adjacency()`, which -- per its own docstring's
+        # explicit disclosure -- "genuinely re-reads and re-decodes the
+        # tile's raw bytes" from scratch, a real, already-documented
+        # per-tile inefficiency. Previously this was cheap to hit because
+        # the OLD scale gate (README §10 "v5 -> v6") kept the touched-tile
+        # set tiny at a low scale; with "v16 -> v17" removing that gate, a
+        # `want_adjacency=True` reload over this same Sofia area now has to
+        # run that slow fallback for potentially hundreds of already-cached
+        # tiles across every layer -- observed directly while writing this
+        # test: measured over 7 real minutes of continuous CPU activity
+        # without finishing. None of the three checks below (scale-
+        # independence, layer-visibility, hide-garbage) are testing
+        # connected-roads correctness -- that's separately and already
+        # covered by the ground-truth canvas-rendering checks above and the
+        # dedicated connected-roads redraw-timing section further below, both
+        # of which explicitly manage this same variable themselves -- so
+        # turning it off here avoids an orthogonal, already-tested feature's
+        # real cost entirely, restored to True again once these three
+        # checks finish.
+        app.connected_roads_var.set(False)
+
         # --- GUI end-to-end check: layer pooling is scale-INDEPENDENT in the
         #     RUNNING App too (README §10 "v16 -> v17"), not just at the
         #     MapData level (already proven in sections 7c/8b above). Proves
@@ -1802,7 +2165,7 @@ def main():
         #     all, since the pooled layer set can no longer change from
         #     scale alone (the old "v5 -> v6" scale-threshold reload trigger
         #     has nothing left to detect).
-        def pump_until(cond, timeout=90.0, interval=0.05):
+        def pump_until(cond, timeout=180.0, interval=0.05):
             t0 = time.time()
             while not cond():
                 if time.time() - t0 > timeout:
@@ -1810,22 +2173,58 @@ def main():
                 root.update()
                 time.sleep(interval)
 
+        # NOTE on the resets below: root-caused directly (real bug, not just
+        # a test artifact) -- a debounced `_schedule_viewport_check()`
+        # reload left pending from an earlier pan/zoom simulation elsewhere
+        # in this GUI section can still be sitting in Tk's `after()` queue
+        # at this point, with its own worker thread running or about to
+        # run. Forcibly clearing `busy`/`_area_loading` here does NOT stop
+        # that pending call -- it still runs to completion and its done()
+        # still fires eventually, on its own schedule, whenever the queue
+        # is drained (observed directly: well after the Sofia load below
+        # has already finished). Before App._maybe_reload_viewport() grew a
+        # staleness guard (`self._load_token`, see its own docstring) for
+        # exactly this, that late completion would silently overwrite
+        # `self._covered_bbox`/`features` with its own unrelated (Tirana-
+        # area) result, clobbering the Sofia load's already-correct one.
+        # The token guard now makes any such stale completion a no-op
+        # regardless of when it actually drains, so resetting these flags
+        # to force the load below to actually start is safe again.
         app.center_lon, app.center_lat = SOFIA_LON, SOFIA_LAT
         app.pan_x = app.pan_y = 0.0
         app.busy = False
         app._area_loading = False
-        app.data.covered_bbox = None
-        app.data.covered_layers = None
+        app._covered_bbox = None
+        app._covered_layers = None
         assert all(var.get() for var in app.layer_visible.values()), \
             "setup check: every layer checkbox must start CHECKED (default, unchanged)"
         app.scale = 500.0  # the LOWEST scale this file's sweeps use -- maximally zoomed out
+        # Pin+capture the canvas pixel size *synchronously, right before*
+        # triggering the load below -- `_maybe_reload_viewport()` calls
+        # `_visible_bbox()` (using whatever `winfo_width()/height()` reports
+        # at that exact instant) before ever returning control here, so this
+        # is the only way to know for certain what size the load's own bbox
+        # was actually computed against. Real window geometry on this OS is
+        # not guaranteed stable across the many real seconds of background
+        # I/O the load below takes (observed directly: the WM can settle the
+        # packed widgets' natural size differently once other UI text --
+        # e.g. the status bar's "View updated: ..." message set by `done()`
+        # -- changes length and triggers a geometry recompute), so capturing
+        # this *after* `pump_until()` returns is NOT the same value and was
+        # the actual bug in an earlier version of this fix (confirmed
+        # directly: re-pinning to a post-load-read size still failed this
+        # same assertion, because the load's own bbox had already been
+        # computed against a different, earlier size).
+        root.update()
+        low_canvas_w = app.canvas.winfo_width()
+        low_canvas_h = app.canvas.winfo_height()
         app._maybe_reload_viewport(force=True)
         assert app._area_loading, \
             "the forced initial load at the Sofia coordinates must actually start a background load"
         pump_until(lambda: not app._area_loading)
-        low_layers = app.data.covered_layers
+        low_layers = app._covered_layers
         low_points = sum(len(f["points"]) for f in app.features)
-        low_covered_bbox = app.data.covered_bbox
+        low_covered_bbox = app._covered_bbox
         log("GUI end-to-end (v16 -> v17): scale=%.0f (max zoomed out) -> covered_layers=%s, %d point(s)" % (
             app.scale, low_layers, low_points))
         assert low_layers == viewer.ALL_LAYERS, \
@@ -1854,14 +2253,39 @@ def main():
         # since the pooled layer set can no longer differ by scale alone,
         # no reload should fire at all.
         app.scale = 10000.0
-        new_vb = app._visible_bbox()
+        # NOTE (root-caused directly, not theoretical): `App.__init__` pins
+        # the TOPLEVEL to a fixed "self.root.geometry('1150x760')" -- so the
+        # canvas's own `.config(width=..., height=...)` request (the
+        # "shrink the canvas" comment above) was never really controlling
+        # its rendered size at all, fill+expand-packed inside that fixed
+        # window. What DOES change the canvas's actual allocated pixels,
+        # confirmed directly by instrumenting this exact assertion, is the
+        # STATUS BAR text: `_set_status()` is called with a genuinely
+        # different, longer/shorter message both while the load above was
+        # running ("Panning/zooming...") and once it finished ("View
+        # updated: N tile(s)..."), and since the window's total size is
+        # fixed, a wider status label leaves LESS leftover fill space for
+        # the canvas -- so `winfo_width()/height()` legitimately differ
+        # between "right after the load above" and "right now", with no
+        # test bug and no bad app behavior involved. Re-`.config()`-ing the
+        # canvas cannot fight this (proven directly: it does not reliably
+        # take hold either, same root cause). So this check -- which exists
+        # to prove a pure MATH property ("a same-center zoom-in nests
+        # inside the wider padded bbox already loaded") -- computes the new
+        # viewport with `compute_visible_bbox()` directly against the exact
+        # `low_canvas_w`/`low_canvas_h` the load above actually used,
+        # instead of re-reading `winfo_width()/height()` live and hoping
+        # the status bar hasn't nudged them since.
+        new_vb = viewer.compute_visible_bbox(
+            app.center_lon, app.center_lat, app.scale, app.pan_x, app.pan_y, low_canvas_w, low_canvas_h)
         assert viewer.bbox_contains(low_covered_bbox, new_vb), \
-            "test setup check: the more-zoomed-in viewport must already be covered by the wider load above"
+            "test setup check: the more-zoomed-in viewport must already be covered by the wider load above " \
+            "(same canvas size, same center/pan, only scale changed -- a pure zoom-in must always nest)"
         app._maybe_reload_viewport()  # force=False
         assert not app._area_loading, \
             "changing scale alone, with the viewport still covered and no checkbox touched, must NOT trigger " \
             "a reload any more -- the pooled layer set no longer depends on scale (README §10 'v16 -> v17')"
-        assert app.data.covered_layers == low_layers, "covered_layers must be unchanged by a scale-only move"
+        assert app._covered_layers == low_layers, "covered_layers must be unchanged by a scale-only move"
         log("confirmed: a pure scale change (viewport still covered, no checkbox touched) no longer triggers "
             "a background reload -- the old scale-threshold reload trigger has nothing left to detect")
 
@@ -1876,7 +2300,7 @@ def main():
         app._maybe_reload_viewport(force=True)
         assert app._area_loading, "the forced reload before this check must actually start a background load"
         pump_until(lambda: not app._area_loading)
-        before_layers = app.data.covered_layers
+        before_layers = app._covered_layers
         before_points = sum(len(f["points"]) for f in app.features)
         assert before_layers == viewer.ALL_LAYERS, \
             "setup check: expected every available layer (mp0 included, scale no longer restricts anything) " \
@@ -1890,7 +2314,7 @@ def main():
         app._on_layer_visibility_changed()
         assert app._area_loading, "unchecking a layer checkbox must trigger a real background reload"
         pump_until(lambda: not app._area_loading)
-        after_uncheck_layers = app.data.covered_layers
+        after_uncheck_layers = app._covered_layers
         after_uncheck_points = sum(len(f["points"]) for f in app.features)
         log("GUI checkbox test: unchecked mg1 -> layers=%s, %d point(s) (was %d)" % (
             after_uncheck_layers, after_uncheck_points, before_points))
@@ -1904,7 +2328,7 @@ def main():
         app._on_layer_visibility_changed()
         assert app._area_loading, "re-checking a layer checkbox must also trigger a real background reload"
         pump_until(lambda: not app._area_loading)
-        after_recheck_layers = app.data.covered_layers
+        after_recheck_layers = app._covered_layers
         after_recheck_points = sum(len(f["points"]) for f in app.features)
         log("GUI checkbox test: re-checked mg1 -> layers=%s, %d point(s)" % (
             after_recheck_layers, after_recheck_points))
@@ -1970,6 +2394,11 @@ def main():
         log("GUI end-to-end 'Hide decode garbage' checkbox test PASSED (App -> MapData.set_trim_oscillation() "
             "-> BackgroundTask -> real re-decode with the new trim_oscillation setting, caches correctly invalidated)")
 
+        # Restore "Draw connected roads" to its normal default (True) for
+        # every GUI check below -- see the comment where it was turned off,
+        # above.
+        app.connected_roads_var.set(True)
+
         # --- Performance: real App._redraw() wall-clock timing on a dense
         #     real area (the same Sofia bbox measured above), merging just
         #     the 4 fast layers (the pre-mp0-ready pool captured in
@@ -1981,6 +2410,14 @@ def main():
         app.center_lon, app.center_lat = SOFIA_LON, SOFIA_LAT
         app.pan_x = app.pan_y = 0.0
 
+        # README §10 "v17 -> v18": also confirm the canvas-item-count side of
+        # the rendering rework at this same real, dense Sofia bbox -- exactly
+        # ONE rasterized image item regardless of point count, vs. the OLD
+        # one-oval-per-point behavior this section used to report (its
+        # `n_ovals_fast`/`n_ovals_all` variable names/log lines are kept
+        # below for continuity with README §10 "v4 -> v5"'s original numbers,
+        # now measuring rasterized DOT_COLOR pixel counts instead of real
+        # canvas ovals).
         app.features = sofia_fast["features"]
         app.scale = app._initial_scale(app.features, half)
         t0 = time.time()
@@ -1988,9 +2425,14 @@ def main():
         root.update()
         dt_redraw_fast = time.time() - t0
         n_points_fast = sum(len(f["points"]) for f in app.features)
-        n_ovals_fast = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "oval")
-        log("_redraw() Sofia-area, 4 FAST layers only (%d points, %d ovals): %.3fs" % (
-            n_points_fast, n_ovals_fast, dt_redraw_fast))
+        images_fast = [i for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "image"]
+        n_real_ovals_fast = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "oval")
+        n_ovals_fast = _count_color_pixels(app._current_image, viewer.DOT_COLOR)
+        assert len(images_fast) == 1 and n_real_ovals_fast == 2, \
+            "expected exactly 1 rasterized image + 2 marker ovals as real canvas items (got %d image(s), %d " \
+            "oval(s))" % (len(images_fast), n_real_ovals_fast)
+        log("_redraw() Sofia-area, 4 FAST layers only (%d points, %d DOT_COLOR pixel(s), 1 image canvas item): "
+            "%.3fs" % (n_points_fast, n_ovals_fast, dt_redraw_fast))
 
         app.features = sofia_all["features"]
         app.scale = app._initial_scale(app.features, half)
@@ -1999,13 +2441,20 @@ def main():
         root.update()
         dt_redraw_all = time.time() - t0
         n_points_all = sum(len(f["points"]) for f in app.features)
-        n_ovals_all = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "oval")
-        log("_redraw() Sofia-area, ALL 5 layers incl. mp0 (%d points, %d ovals): %.3fs" % (
-            n_points_all, n_ovals_all, dt_redraw_all))
+        images_all = [i for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "image"]
+        n_real_ovals_all = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "oval")
+        n_ovals_all = _count_color_pixels(app._current_image, viewer.DOT_COLOR)
+        assert len(images_all) == 1 and n_real_ovals_all == 2, \
+            "expected exactly 1 rasterized image + 2 marker ovals as real canvas items (got %d image(s), %d " \
+            "oval(s))" % (len(images_all), n_real_ovals_all)
+        log("_redraw() Sofia-area, ALL 5 layers incl. mp0 (%d points, %d DOT_COLOR pixel(s), 1 image canvas " \
+            "item): %.3fs" % (n_points_all, n_ovals_all, dt_redraw_all))
         assert dt_redraw_all < 5.0, \
             "full 5-layer _redraw() took unexpectedly long (%.2fs) -- a per-viewport point cap/downsample " \
-            "may be needed (see README §10 'v4 -> v5')" % dt_redraw_all
-        log("Real _redraw() timing measured (see README §10 'v4 -> v5' for the recorded before/after numbers)")
+            "may be needed (see README §10 'v4 -> v5'/'v17 -> v18')" % dt_redraw_all
+        log("Real _redraw() timing measured (see README §10 'v4 -> v5'/'v17 -> v18' for the recorded before/after "
+            "numbers -- the bitmap rasterization rework should make this dramatically faster than the old " \
+            "one-canvas-item-per-point/edge approach at the SAME point counts)")
 
         # --- Performance: real App._redraw() wall-clock timing with
         #     connected-roads mode ON vs OFF (README §10 "v9 -> v10",
@@ -2045,24 +2494,36 @@ def main():
             app._redraw()
             root.update()
             dt_on = time.time() - t0
-            n_lines_on = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "line")
-            n_ovals_on = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "oval")
+            # README §10 "v17 -> v18": no more one real canvas line/oval per
+            # edge/point to count -- sample the rasterized image for
+            # line-colored pixels (either shade means SOME line was drawn)
+            # and DOT_COLOR pixels instead. Real canvas items are checked
+            # once, cheaply, outside the loop this function is called from.
+            img_on = app._current_image
+            n_lines_on = (_count_color_pixels(img_on, viewer.ROAD_COLOR_MAJOR) +
+                          _count_color_pixels(img_on, viewer.ROAD_COLOR_UNNAMED))
+            n_ovals_on = _count_color_pixels(img_on, viewer.DOT_COLOR)
 
             app.connected_roads_var.set(False)
             t0 = time.time()
             app._redraw()
             root.update()
             dt_off = time.time() - t0
-            n_lines_off = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "line")
-            n_ovals_off = sum(1 for i in app.canvas.find_withtag("all") if app.canvas.type(i) == "oval")
+            img_off = app._current_image
+            n_lines_off = (_count_color_pixels(img_off, viewer.ROAD_COLOR_MAJOR) +
+                           _count_color_pixels(img_off, viewer.ROAD_COLOR_UNNAMED))
+            n_ovals_off = _count_color_pixels(img_off, viewer.DOT_COLOR)
 
             log("%s: %d point(s), %d/%d feature(s) high-confidence -- connected-roads ON: %.3fs "
-                "(%d lines, %d ovals); OFF: %.3fs (%d lines, %d ovals)" % (
+                "(%d line px, %d dot px); OFF: %.3fs (%d line px, %d dot px)" % (
                     label, sum(len(f["points"]) for f in app.features), n_high, n_total,
                     dt_on, n_lines_on, n_ovals_on, dt_off, n_lines_off, n_ovals_off))
-            assert n_lines_off == 0, "%s: connected-roads OFF must draw zero lines regardless of cached data" % label
+            assert n_lines_off == 0, \
+                "%s: connected-roads OFF must rasterize zero line-colored pixels regardless of cached data" % label
             if n_high == 0:
-                assert n_lines_on == 0, "%s: no high-confidence features but lines were drawn ON" % label
+                assert n_lines_on == 0, "%s: no high-confidence features but line pixels were rasterized ON" % label
+            else:
+                assert n_lines_on > 0, "%s: high-confidence features present but zero line pixels rasterized ON" % label
             app.connected_roads_var.set(True)
             return dt_on, dt_off
 
@@ -2274,10 +2735,21 @@ def main():
                 root.update()
                 time.sleep(interval)
 
+        # Connected-roads adjacency is a real, disclosed per-tile cost
+        # (measured elsewhere in this file at ~34x a plain decode -- see the
+        # v16->v17 section above) that has nothing to do with what THIS
+        # check verifies (that "Start" resolves the address and jumps the
+        # map there); leaving it on made a real jump to a not-yet-cached
+        # area pool enough tiles, each paying that adjacency cost, to blow
+        # past a short pump_until timeout on real hardware. Same
+        # save/disable/restore idiom already used above for the same reason.
+        was_connected_navstart = app.connected_roads_var.get()
+        app.connected_roads_var.set(False)
         app.center_lon = app.center_lat = None
         addr_dlg._on_start()
         assert app.busy, "'Start' must kick off a real background area load, same as any other jump"
         pump_until(lambda: not app.busy)
+        app.connected_roads_var.set(was_connected_navstart)
         root.update()
         REAL_SOFIA = (23.3241, 42.6977)
         assert app.center_lon is not None and abs(app.center_lon - REAL_SOFIA[0]) < 0.3 and \

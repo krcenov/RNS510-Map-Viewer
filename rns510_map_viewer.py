@@ -29,6 +29,13 @@ Core logic (MapData class, viewport/bbox math, label-placement decisions) is
 plain Python with no GUI dependency, so it can be exercised directly by a
 non-GUI test script (test_map_viewer.py) against the real ISO.
 
+Depends on numpy (already required) and, as of README §10 "v17 -> v18",
+Pillow (PIL) -- the road-point dots and connected-roads lines are rasterized
+into one Pillow image per redraw and shown as a single canvas.create_image()
+item, instead of tens of thousands of individual canvas.create_oval()/
+create_line() items (see App._redraw()'s own docstring/comments for the full
+rationale and before/after numbers). `py -m pip install Pillow` if missing.
+
 Run with:
     py rns510_map_viewer.py
 
@@ -317,6 +324,7 @@ import zlib
 from tkinter import ttk, filedialog, messagebox
 
 import numpy as np
+from PIL import Image, ImageDraw, ImageTk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "research"))
@@ -452,6 +460,71 @@ def layers_for_scale(scale, available):
 # Initial half-span (degrees) loaded around a freshly-searched/entered
 # point, before any pan/zoom-triggered reload happens.
 DEFAULT_JUMP_SPAN_DEG = 0.3
+
+# Real-hardware-style discrete zoom levels (README §10 "v17 -> v18", user's
+# explicit request): the mouse-wheel zoom steps through this fixed table of
+# real-world distances -- matching how the actual RNS510's zoom
+# knob/buttons work -- instead of the previous continuous
+# `scale *= 1.15`-per-tick zoom. Ordered widest (most zoomed OUT) to
+# narrowest (most zoomed IN); `scale_for_zoom_span_m()` converts a span here
+# into a `scale` (pixels/degree) value, and `nearest_zoom_level_index()`
+# finds the table entry closest to the CURRENT `scale`, so stepping always
+# advances exactly one real level regardless of how `self.scale` was last
+# set (a discrete step, a jump's fixed default below, or -- in tests -- an
+# arbitrary direct assignment).
+ZOOM_LEVELS_M = (
+    500_000.0, 400_000.0, 300_000.0, 200_000.0, 150_000.0,
+    100_000.0, 75_000.0, 50_000.0, 40_000.0, 30_000.0,
+    20_000.0, 15_000.0, 10_000.0, 7_500.0, 5_000.0,
+    4_000.0, 3_000.0, 2_000.0, 1_500.0, 1_000.0,
+    750.0, 500.0, 400.0, 300.0, 200.0,
+    150.0, 100.0, 75.0, 50.0, 25.0,
+)
+
+# The zoom level a freshly-jumped-to location (search result, address entry
+# "Start", etc.) opens at -- user's explicit request ("make the start zoom
+# at 5km"), replacing the previous behavior of auto-fitting the scale to
+# whatever bounding box the jump's own decoded features happened to have
+# (App._initial_scale(), kept below as a general-purpose framing utility --
+# still used elsewhere, e.g. by tests that frame a specific ground-truth
+# area -- just no longer what a live jump uses for its OWN display scale).
+DEFAULT_ZOOM_SPAN_M = 5_000.0
+
+# Standard great-circle-adjacent approximation, meters per degree of
+# LATITUDE (longitude's own meters/degree shrinks by cos(lat), already
+# handled by project_point()'s own cos(center_lat) factor -- see its
+# docstring -- so this single constant, applied to the SAME `scale` value
+# project_point() uses for both axes, is enough for both).
+METERS_PER_DEGREE_LAT = 111_320.0
+
+
+def scale_for_zoom_span_m(span_m, width_px, height_px):
+    """`scale` (pixels/degree, as project_point()/App.scale use it) such
+    that the SMALLER of the canvas's two pixel dimensions spans exactly
+    `span_m` real-world meters -- the conversion behind ZOOM_LEVELS_M's
+    discrete steps and DEFAULT_ZOOM_SPAN_M. Using the smaller dimension
+    keeps the whole named span visible on screen regardless of the
+    canvas's own aspect ratio."""
+    span_deg = max(span_m, 1e-6) / METERS_PER_DEGREE_LAT
+    return max(min(width_px, height_px), 1) / span_deg
+
+
+def nearest_zoom_level_index(scale, width_px, height_px, levels=ZOOM_LEVELS_M):
+    """Index into `levels` (ZOOM_LEVELS_M by default) whose own
+    scale_for_zoom_span_m() is closest to the given `scale` -- lets
+    App._on_zoom() step exactly one discrete real-world level per wheel
+    tick from WHATEVER `self.scale` currently is (a previous discrete step,
+    the DEFAULT_ZOOM_SPAN_M a jump opened at, or an arbitrary value a test
+    set directly), without needing to separately track "which level am I
+    on" as extra mutable state."""
+    scale = max(scale, 1e-9)
+    best_i, best_diff = 0, None
+    for i, span_m in enumerate(levels):
+        level_scale = scale_for_zoom_span_m(span_m, width_px, height_px)
+        diff = abs(math.log(level_scale) - math.log(scale))
+        if best_diff is None or diff < best_diff:
+            best_i, best_diff = i, diff
+    return best_i
 
 # How far beyond the requested bbox MapData.ensure_area_loaded() loads, as a
 # fraction of the requested bbox's own size -- gives the user some pan
@@ -978,6 +1051,7 @@ def _feature_keep_indices(features, anchor):
 _NO_ADJACENCY = {
     "found": False, "shift": None, "median_edge_m": None,
     "confidence": "none", "edges": [], "adjacency": {},
+    "edges_dropped_implausible": 0,
 }
 
 
@@ -1097,6 +1171,24 @@ class MapData:
         # decode_tile()'s `want_adjacency` / get_tile_adjacency()) and never
         # evicted once computed, same lifetime policy as tile_caches itself.
         self.topo_caches = {layer: {} for layer in ALL_LAYERS}
+        # Per-layer "pre-filter decode" cache (README §10 "v17 -> v18",
+        # adjacency-backfill performance fix): {layer: {tile_id: (raw,
+        # declen, features, keep_idx)}} -- the intermediate state
+        # decode_tile() ALWAYS computes anyway (raw decompressed bytes +
+        # decode_features() output + this tile's _feature_keep_indices()
+        # result) is kept here too, regardless of `want_adjacency`, purely
+        # so get_tile_adjacency()'s fallback path (see its own docstring)
+        # never has to re-open the layer file / re-seek / re-decompress /
+        # re-run decode_features() from scratch for a tile that's already
+        # been read once -- that redundant re-read was the real, measured
+        # cost that made turning on "Draw connected roads" over an already
+        # panned-around area take minutes (see get_tile_adjacency()'s
+        # docstring for the full writeup). Never evicted, same lifetime
+        # policy as tile_caches/topo_caches -- this roughly doubles this
+        # class's per-tile memory footprint (raw decompressed bytes are now
+        # kept alongside the already-kept decoded feature dicts), a
+        # deliberate, disclosed memory-for-speed tradeoff.
+        self._predecode_caches = {layer: {} for layer in ALL_LAYERS}
         self.covered_bbox = None    # (lon_min, lon_max, lat_min, lat_max)
         self.covered_layers = None  # list of layers covered_bbox's tiles were pooled from
         self.active_tile_ids = {}   # {layer: [tile_id, ...]} currently pooled for drawing
@@ -1357,6 +1449,14 @@ class MapData:
             feat["feature_index"] = len(kept)
             kept.append(feat)
 
+        # Cache the pre-filter decode state (raw bytes + decode_features()
+        # output + keep_idx) regardless of `want_adjacency` -- see
+        # `_predecode_caches`'s own comment in __init__ -- so a LATER
+        # get_tile_adjacency() fallback call for this exact tile_id never
+        # needs to redo the disk read/decompress/decode_features() work
+        # this method already did.
+        self._predecode_caches[layer][tile_id] = (raw, declen, features, keep_idx)
+
         if want_adjacency:
             try:
                 topo = mcr.decode_topology(raw, declen, features)
@@ -1380,28 +1480,50 @@ class MapData:
         is therefore already sitting in `tile_caches`) BEFORE
         connected-roads mode needed it -- e.g. the checkbox was off when
         that tile was first loaded, or a coarser/earlier call decoded it.
-        Unlike `decode_tile(..., want_adjacency=True)`, this genuinely
-        re-reads and re-decodes the tile's raw bytes (decode_tile() already
-        did that once for this exact tile, but didn't keep the pre-filter
-        feature list or a computed topology table around afterward) -- a
-        real, one-time, per-tile inefficiency, honestly not eliminated, but
-        it only ever happens once per tile (the result is cached forever
-        after, exactly like `tile_caches` itself) and is only ever called
-        from inside `ensure_area_loaded()`, i.e. inside a background
-        `BackgroundTask` thread, never on the Tk main thread during a
-        redraw -- see `ensure_area_loaded()`'s `want_adjacency` handling."""
+
+        **README §10 "v17 -> v18" performance fix**: this used to
+        unconditionally re-open the layer file, re-seek, re-decompress and
+        re-run decode_features() from scratch for every single call,
+        EVEN THOUGH decode_tile() already did all of that once for this
+        exact tile_id -- it just never kept that intermediate state around
+        for later reuse. That redundant full re-decode, multiplied across
+        potentially hundreds of already-visible tiles the moment "Draw
+        connected roads" got checked on over an already-panned-around area
+        (made much more likely once "v16 -> v17" removed the scale gate
+        that used to keep the touched-tile set tiny), was directly
+        responsible for a real, user-reported multi-minute stall. Fixed by
+        `_predecode_caches` (see its own comment in `__init__`):
+        decode_tile() now ALWAYS stashes its raw bytes + decode_features()
+        output + keep_idx there, regardless of `want_adjacency`, so this
+        method's fallback -- when the cache has an entry -- skips the
+        disk read/decompress/decode_features() entirely and does ONLY the
+        work that's genuinely new for this tile: `decode_topology()` +
+        `resolve_topology_adjacency()`. A tile this method is asked about
+        that was somehow never routed through decode_tile() at all (should
+        not normally happen -- see the `except Exception` fallback below)
+        still re-reads from disk as a defensive last resort. Either way,
+        the result is cached forever after in `topo_caches`, exactly like
+        before, and this is only ever called from inside
+        `ensure_area_loaded()`, i.e. inside a background `BackgroundTask`
+        thread, never on the Tk main thread during a redraw -- see
+        `ensure_area_loaded()`'s `want_adjacency` handling."""
         cache = self.topo_caches[layer]
         if tile_id in cache:
             return cache[tile_id]
         try:
-            offset, declen, complen = self.directories[layer]["entries"][tile_id]
-            with open(self.layer_paths[layer], "rb") as f:
-                f.seek(offset)
-                raw = zlib.decompress(f.read(complen))
-            features = mcr.decode_features(raw, declen, trim_oscillation=True)
-            geo_index = self.geo_indexes.get(layer)
-            anchor = geo_index.get(tile_id) if geo_index else None
-            keep_idx = _feature_keep_indices(features, anchor)
+            pre = self._predecode_caches[layer].get(tile_id)
+            if pre is not None:
+                raw, declen, features, keep_idx = pre
+            else:
+                offset, declen, complen = self.directories[layer]["entries"][tile_id]
+                with open(self.layer_paths[layer], "rb") as f:
+                    f.seek(offset)
+                    raw = zlib.decompress(f.read(complen))
+                features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
+                geo_index = self.geo_indexes.get(layer)
+                anchor = geo_index.get(tile_id) if geo_index else None
+                keep_idx = _feature_keep_indices(features, anchor)
+                self._predecode_caches[layer][tile_id] = (raw, declen, features, keep_idx)
             topo = mcr.decode_topology(raw, declen, features)
             adj_full = mcr.resolve_topology_adjacency(raw, declen, features, topo)
             result = [adj_full[i] for i in keep_idx]
@@ -1429,6 +1551,7 @@ class MapData:
         self.trim_oscillation = value
         self.tile_caches = {layer: {} for layer in ALL_LAYERS}
         self.topo_caches = {layer: {} for layer in ALL_LAYERS}
+        self._predecode_caches = {layer: {} for layer in ALL_LAYERS}
 
     # --------------------------------------------------------- road names
 
@@ -1995,6 +2118,25 @@ class App:
         self.busy = False
         self._area_loading = False
         self._viewport_check_id = None
+        # Generation token guarding against a stale reload's late completion
+        # clobbering newer state (see _maybe_reload_viewport()'s docstring):
+        # e.g. a debounced _schedule_viewport_check() reload left pending
+        # from an earlier pan/zoom can still be sitting in Tk's event queue
+        # when a LATER, unrelated jump/reload starts and finishes first --
+        # without this guard, the stale one's own done() would fire anyway
+        # once its queued completion is drained, overwriting the already-
+        # current view's `_covered_bbox`/`features` with its own, unrelated
+        # (and by then meaningless) result.
+        self._load_token = 0
+        self._covered_bbox = None    # App-level "what the CURRENT view has loaded" (see above -- NOT
+        self._covered_layers = None  # the same thing as MapData.covered_bbox/covered_layers, see below)
+
+        # README §10 "v17 -> v18": the single rasterized PIL/Tk image
+        # _redraw() builds every call -- kept alive here since Tkinter does
+        # not itself hold a strong reference to a PhotoImage (a classic
+        # gotcha; without this it would be garbage-collected and vanish).
+        self._current_photo = None
+        self._current_image = None  # raw PIL Image behind it -- see _redraw()
 
         # Click-to-identify picks (README §10 "v6 -> v7"): a running,
         # numbered list of points the user has right-clicked, each an
@@ -2757,7 +2899,13 @@ class App:
             self.center_lon, self.center_lat = lon, lat
             self.pan_x = self.pan_y = 0.0
             self.features = result["features"]
-            self.scale = self._initial_scale(self.features, span_deg)
+            # README §10 "v17 -> v18", user's explicit request: a jump opens
+            # at the fixed DEFAULT_ZOOM_SPAN_M (5km) level, not auto-fit to
+            # whatever bbox this jump's own decoded features happened to
+            # have (the old App._initial_scale() behavior -- still used
+            # elsewhere for test/ground-truth framing, just not here).
+            self.scale = scale_for_zoom_span_m(
+                DEFAULT_ZOOM_SPAN_M, self.canvas.winfo_width(), self.canvas.winfo_height())
             self._redraw()
             n_points = sum(len(f["points"]) for f in self.features)
             n_named = sum(1 for f in self.features for (_, _, name) in f.get("named_ranges", ()) if name)
@@ -2767,11 +2915,8 @@ class App:
                 "(%d named segment runs), %d total vertices. Drag to pan, scroll to zoom." % (
                     n_tiles, len(result["layers"]), lon, lat, len(self.features), n_named, n_points))
             # mp0 may finish building in the background after this initial
-            # load returns, AND the real post-auto-fit scale may differ from
-            # the do_load_area() estimate above -- re-check right away so
-            # the view folds in mp0's points and/or corrects to the
-            # scale-appropriate cumulative layer set immediately, not just
-            # on the next pan/zoom.
+            # load returns -- re-check right away so the view folds in mp0's
+            # points immediately, not just on the next pan/zoom.
             self._maybe_reload_viewport(force=True)
 
         BackgroundTask(self.root, do_load_area, self._set_status, done).start()
@@ -2893,12 +3038,70 @@ class App:
         return [winner] + rest[:max(0, MAX_CITY_LABELS - 1)]
 
     def _redraw(self):
+        """Full redraw of the map view.
+
+        **README §10 "v17 -> v18" rendering rework**: every road-point DOT
+        and connected-roads LINE used to be its own real Tkinter canvas
+        item (`canvas.create_oval()`/`canvas.create_line()`) -- at a
+        typical dense real bbox with multiple layers pooled and "Draw
+        connected roads" on, that's 30,000-60,000+ individual canvas
+        items. Tkinter's canvas (backed by Tcl's single-threaded,
+        non-batched, per-item canvas engine) is not built to manage that
+        many discrete items -- the app became genuinely unresponsive
+        ("Not Responding", ~4GB memory) while panning/zooming under that
+        load, and this does NOT improve with faster CPU/disk since it's a
+        toolkit architectural limit, not an I/O or raw-compute bottleneck.
+
+        User's explicit, deliberate architectural decision (discussed and
+        confirmed, not a workaround guessed at here): keep Tkinter as the
+        app shell -- every dialog/checkbox/click-handler below is
+        unchanged -- but replace the DRAWING mechanism for points/lines
+        with rasterization into a single bitmap: every dot and every
+        high-confidence connected-roads edge is drawn into one
+        `PIL.Image` via `PIL.ImageDraw`, converted to one
+        `ImageTk.PhotoImage`, and shown as exactly ONE
+        `canvas.create_image()` item -- regardless of how many points/
+        edges it contains. `self._current_photo` keeps a live Python
+        reference to that PhotoImage (Tkinter garbage-collects a
+        PhotoImage with no surviving reference -- a classic gotcha; the
+        image would otherwise vanish from screen on the next GC pass).
+
+        Explicitly EXCLUDED from rasterization, still drawn as normal,
+        separate, lightweight canvas items ON TOP of the one bitmap image
+        (always low-count -- tens, not tens-of-thousands -- and benefit
+        from staying real/interactive Tkinter items): road/city text
+        labels (`canvas.create_text`), the center/search marker, and the
+        click-to-identify picked-point rings/numbers (`self.picked_points`).
+        Click-to-identify itself (`find_nearest_point()`/
+        `find_nearest_line_segment()`, see their own docstrings) was
+        already implemented entirely against this same in-memory point/
+        edge DATA, never by inspecting canvas item types/positions
+        (no `find_withtag`/`find_closest` against oval/line items
+        anywhere in this file) -- so it is completely unaffected by there
+        no longer being individual oval/line canvas items to inspect.
+
+        Real measured redraw timing (Sofia bbox, see README §10 "v17 ->
+        v18" for the full numbers/methodology) dropped from ~0.4-0.5s
+        (the old per-item canvas build, already the subject of the
+        "v3 -> v4" pan-drag workaround below) to a small fraction of that
+        for the SAME point/edge counts, since Pillow's C-level ImageDraw
+        is vectorized/batched instead of paying Tcl per-item overhead
+        30,000-60,000+ times over."""
         self.canvas.delete("all")
         if self.center_lon is None:
+            self._current_photo = None
+            self._current_image = None
             self._update_scale_bar()
             return
         w = max(self.canvas.winfo_width(), 1)
         h = max(self.canvas.winfo_height(), 1)
+
+        # Single rasterization target for this redraw -- every dot/edge
+        # below is drawn into this PIL image, never as its own canvas item.
+        # RGB (not RGBA): the map background is fully opaque everywhere
+        # (BG_COLOR), so there's no need for a real alpha channel here.
+        img = Image.new("RGB", (w, h), BG_COLOR)
+        draw = ImageDraw.Draw(img)
 
         placed = []  # [(name, x, y), ...] already-drawn labels, for de-dup
 
@@ -2966,7 +3169,11 @@ class App:
                         line_color, line_width = ROAD_COLOR_MAJOR, 1.6
                     else:
                         line_color, line_width = ROAD_COLOR_UNNAMED, 1.0
-                    self.canvas.create_line(ax, ay, bx, by, fill=line_color, width=line_width)
+                    # Rasterized into `img` (README §10 "v17 -> v18"), not a
+                    # real canvas item -- see _redraw()'s own docstring.
+                    # PIL's line width is an int pixel count (no fractional
+                    # anti-aliased width like Tk's) -- round, floor at 1px.
+                    draw.line([(ax, ay), (bx, by)], fill=line_color, width=max(1, round(line_width)))
 
             for start, end, name in ranges:
                 seg = pts[start:end + 1]
@@ -3015,11 +3222,16 @@ class App:
                 # (README §10 "v16 -> v17", edge click-to-identify) needs:
                 # every point is inspectable, whether or not it ended up
                 # part of a resolved edge.
+                # Rasterized into `img` (README §10 "v17 -> v18"), not a
+                # real canvas item per point -- see _redraw()'s own
+                # docstring for why (this loop alone used to be tens of
+                # thousands of individual canvas.create_oval() items at a
+                # dense real bbox).
                 for i in range(0, len(coords), 2):
                     px, py = coords[i], coords[i + 1]
-                    self.canvas.create_oval(
-                        px - radius, py - radius, px + radius, py + radius,
-                        fill=DOT_COLOR, outline="")
+                    draw.ellipse(
+                        [px - radius, py - radius, px + radius, py + radius],
+                        fill=DOT_COLOR)
 
                 if name:
                     x0, y0 = coords[0], coords[1]
@@ -3030,6 +3242,26 @@ class App:
                         mlon, mlat = pts[mid]
                         mx, my = self._to_canvas(mlon, mlat)
                         road_label_candidates.append((pix_len, name, mx, my))
+
+        # Hand the finished rasterization off to Tk as ONE canvas item
+        # (README §10 "v17 -> v18") -- everything drawn above (every dot,
+        # every high-confidence connected-roads line) is now baked into
+        # `img`; this is the ONLY canvas item this method creates for all
+        # of that content, no matter how many points/edges it contains.
+        # `anchor="nw"` places its (0, 0) pixel at canvas (0, 0), matching
+        # _to_canvas()'s own coordinate system exactly. The PhotoImage
+        # reference is kept on `self` (`self._current_photo`) -- Tkinter
+        # does not keep its own strong reference to a PhotoImage, so
+        # without this the image would be garbage-collected and vanish
+        # from screen the moment this method returns. `self._current_image`
+        # (the raw PIL Image, pre-PhotoImage-conversion) is ALSO kept, purely
+        # so test_map_viewer.py can sample real pixel colors at known
+        # (x, y) canvas coordinates directly (Image.getpixel()) instead of
+        # inspecting Tk canvas items that no longer exist per-point/edge --
+        # not read anywhere else in this file.
+        self._current_image = img
+        self._current_photo = ImageTk.PhotoImage(img)
+        self.canvas.create_image(0, 0, image=self._current_photo, anchor="nw")
 
         # Draw the most visually-prominent (longest on-screen) runs' labels
         # first so they win the dedup slots over short, easily-repeated ones.
@@ -3137,9 +3369,8 @@ class App:
         self._drag_last_xy = (event.x, event.y)
 
     def _on_drag_move(self, event):
-        # Perf fix: dragging used to call the full _redraw() (delete +
-        # recreate every canvas item -- now including one oval per road
-        # vertex, per the switch to unconnected dot rendering) on every
+        # Perf fix (README §10 "v3 -> v4", pan-drag): dragging used to call
+        # the full _redraw() (delete + recreate every canvas item) on every
         # single mouse-move tick, which measured ~0.4-0.5s per redraw on a
         # moderately dense mp0-level view -- unusably choppy for a
         # continuous drag gesture. A pure pan never changes which pixel any
@@ -3148,6 +3379,18 @@ class App:
         # incremental delta (canvas.move, a cheap coordinate-only update),
         # and only pay for a real, accurate _redraw() once the drag
         # actually stops (_on_drag_end) or a zoom/new-data event happens.
+        #
+        # README §10 "v17 -> v18": since the point/edge rasterization rework,
+        # this same `canvas.move("all", ...)` now moves exactly ONE image
+        # item (plus the small number of label/marker/pick items) instead of
+        # tens of thousands of individual ovals/lines -- trivially cheap
+        # regardless of how many points/edges are behind it, vs. the old
+        # per-item move cost that scaled with point count. The one visible
+        # tradeoff (unchanged from before, just now purely a bitmap-edge
+        # effect instead of a point-count one): a moved-but-not-yet-redrawn
+        # image shows slightly stale pixels/edges right at the canvas
+        # boundary until the drag ends and a real _redraw() runs -- expected,
+        # not a bug.
         if self._drag_start is None:
             return
         sx, sy, px, py = self._drag_start
@@ -3169,16 +3412,27 @@ class App:
             self._redraw()
 
     def _on_zoom(self, event, delta=None):
+        """Step exactly one discrete real-world ZOOM_LEVELS_M entry per
+        wheel tick (README §10 "v17 -> v18", user's explicit request for
+        real-hardware-style fixed zoom steps instead of the previous
+        continuous `scale *= 1.15`). `nearest_zoom_level_index()` finds
+        which level the CURRENT scale is closest to, so this steps
+        correctly even right after a jump (which opens at
+        DEFAULT_ZOOM_SPAN_M) or after a test sets `self.scale` directly to
+        an arbitrary value."""
         if self.center_lon is None:
             return
         delta = event.delta if delta is None else delta
-        ratio = 1.15 if delta > 0 else (1 / 1.15)
-        new_scale = self.scale * ratio
-        new_scale = max(1.0, min(new_scale, 5_000_000.0))
-        ratio = new_scale / self.scale
-
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
+        idx = nearest_zoom_level_index(self.scale, w, h)
+        if delta > 0:
+            idx = min(idx + 1, len(ZOOM_LEVELS_M) - 1)  # zoom IN -> narrower span
+        else:
+            idx = max(idx - 1, 0)                       # zoom OUT -> wider span
+        new_scale = scale_for_zoom_span_m(ZOOM_LEVELS_M[idx], w, h)
+        ratio = new_scale / self.scale
+
         cx, cy = event.x - w / 2, event.y - h / 2
         # keep the point under the cursor fixed on screen: pan' =
         # pan*ratio + (mouse - canvas_center)*(1-ratio)
@@ -3479,13 +3733,33 @@ class App:
         removed rather than left as permanently-dead code. (b) and (c)
         above are detected by the SAME check: recomputing
         `data.available_layers()` restricted to `_get_allowed_layers()`,
-        and comparing it against `data.covered_layers` (the set the last
-        load actually used) -- mp0 newly appearing in `available_layers()`,
+        and comparing it against `self._covered_layers` (the set the last
+        SUCCESSFULLY-APPLIED load actually used) -- mp0 newly appearing in `available_layers()`,
         or the checked-layer set itself changing, can each make this
         differ; a scale-only change cannot any more. `force=True` skips the
         "already covered" short-circuit entirely (used right after a
         jump/search, right after mp0 finishes, and on every checkbox
-        toggle, to re-check even when the bbox itself hasn't changed)."""
+        toggle, to re-check even when the bbox itself hasn't changed).
+
+        **Staleness guard**: the "already covered"/"what area is loaded"
+        check below uses `self._covered_bbox`/`self._covered_layers` (this
+        App instance's own record of its last SUCCESSFULLY-APPLIED load),
+        NOT `self.data.covered_bbox`/`covered_layers` -- those live on
+        MapData and are simply overwritten, unconditionally, by whichever
+        `ensure_area_loaded()` call happens to finish running most
+        recently, with no ordering guarantee across overlapping calls (e.g.
+        a debounced `_schedule_viewport_check()` reload left pending from
+        an earlier pan/zoom, still sitting in Tk's `after()` queue, firing
+        only once some MUCH LATER `root` event-loop turn finally drains it
+        -- entirely possible if the app was busy with other work for a
+        while). Trusting MapData's raw fields here would let that kind of
+        late, superseded completion silently revert the CURRENT view's
+        "what's loaded" bookkeeping to a stale, unrelated area. Guarding
+        with `self._load_token` (bumped every time a NEW load actually
+        starts below) and having `done()` discard its own result entirely
+        if a newer load has since started closes this: only the most
+        recently STARTED load's completion is ever applied, regardless of
+        which BackgroundTask happens to finish first."""
         self._viewport_check_id = None
         if self.data is None or self.center_lon is None or self.busy or self._area_loading:
             return
@@ -3499,14 +3773,16 @@ class App:
             if l in self.data.available_layers() and l in allowed_layers
         ]
         already_covered = (
-            self.data.covered_bbox is not None and
-            bbox_contains(self.data.covered_bbox, vb) and
-            self.data.covered_layers == desired_layers
+            self._covered_bbox is not None and
+            bbox_contains(self._covered_bbox, vb) and
+            self._covered_layers == desired_layers
         )
         if already_covered and not force:
             return  # already fully covered by loaded tiles from the scale-appropriate layer set
 
         self._area_loading = True
+        self._load_token += 1
+        my_token = self._load_token
         self._set_status("Panning/zooming -- loading more map tiles for the new view...")
         self.progress.start(12)
 
@@ -3519,11 +3795,22 @@ class App:
                 allowed_layers=allowed_layers, want_adjacency=want_adjacency)
 
         def done(result, error):
+            if my_token != self._load_token:
+                # Superseded by a newer load that started after this one --
+                # discard: applying this would revert the view to a stale
+                # area/feature set the user (or a later test step) already
+                # moved past. `_area_loading` is intentionally left alone --
+                # it belongs to whichever load is CURRENT, and either it's
+                # already False (the newer one already finished) or the
+                # newer one's own done() will clear it when IT finishes.
+                return
             self._area_loading = False
             self.progress.stop()
             if error:
                 self._set_status("Background tile load failed: %s" % error)
                 return
+            self._covered_bbox = result["bbox"]
+            self._covered_layers = result["layers"]
             self.features = result["features"]
             self._redraw()
             n_tiles = sum(len(ids) for ids in result["tile_ids"].values())
