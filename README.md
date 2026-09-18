@@ -274,6 +274,41 @@ record format can get without an explicit spec.
   too. Full methodology and every validation number: `research/prd_reader.py`'s
   module docstring.
 
+**`eeuz.pct` — CRACKED this session: a phonetic pronunciation catalog for CITY
+names**, the same family as `.prd` above (record shape: name + phonetic
+transcription, same phonetic alphabet) but for major place names instead of
+roads, and covering many languages per place rather than one entry per road
+segment. Decompresses to 27,386,579 bytes. **Validated at full file scale**:
+parsing the entire decompressed body as `[uint8 name_len][name][uint8
+phon_len][phon][6-byte group]` consumes every byte with zero leftover,
+producing exactly 649,956 records.
+- **The 6-byte trailing "group" field reliably clusters every language's name
+  for the SAME real place — validated directly, not just plausible-looking**:
+  group `744f180bf414` (26 members) is `VENEDIG`/`VELENCE`/`VENETSIA`/
+  `VENICE`/`VENISE`/`BENÁTKY`/`VENETIA`/`VENEZA`/... — every member a genuine
+  real name/exonym for Venice, Italy; group `e4ac7f072c00` (26 members) is
+  Vatican City in 26 languages (`VATIKÁNVÁROS`, `CIUDAD DEL VATICANO`, `CITTÀ
+  DEL VATICANO`, `VATICAN CITY`, ...); Munich and Frankfurt am Main groups (22
+  members each) show the identical pattern. 314,645 distinct group values
+  across 649,956 records; median group size 2. The single largest "group"
+  (`000000000000`, 73,396 members) is a **sentinel for "no cross-language
+  grouping"** (consistent with this project's established `0`
+  = unset/padding-sentinel convention elsewhere, e.g. the false-edge topology
+  bug, §3.6/§10 "v16 → v17") — its members are small, single-language-looking
+  local place names, not a real 73,396-way collision.
+- **The group VALUE's own derivation is NOT cracked** — three hypotheses
+  tested and refuted: sequential index into `eeu.cty` (values are tens-to-
+  hundreds of millions, far outside `eeu.cty`'s 939,351-record range); byte
+  offset into `eeu.cty` (doesn't land on a valid 79-byte record for any tested
+  example); byte offset into `eeuz.fea` (the most structurally plausible
+  candidate — `.fea` is itself a multi-language gazetteer with the exact same
+  "many names, one real place" shape, §3.10 — but no tested offset lands on a
+  recognizable zlib stream header). A hash of the displayed name text is ruled
+  out by construction (wildly different spellings share one group value); a
+  hash of some other, not-yet-identified per-place database key remains an
+  untested possibility. Full methodology: `research/pct_reader.py`'s module
+  docstring.
+
 ### 3.6 MAP_COMPRESSED (`eeuz.mp0`, `.mg1`-`.mg4`) — MOSTLY CRACKED; `eeuz.fea` DIFFERENT, UNCRACKED
 These are the actual map-rendering tile layers (`mp0` = most detailed/primary,
 `mg1`→`mg4` = progressively generalized for lower zoom levels — plausible, not proven).
