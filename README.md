@@ -152,16 +152,49 @@ compressed. All are for the East Europe (`eeu`) dataset on this specific disc.
 - Remaining 7 prefix bytes unresolved (best-effort: copied from a nearby similar entry
   when appending).
 
-### 3.3 `eeu.iof` — parallel array to `.rd` (52.8MB, NOT_COMPRESSED) — PARTIALLY CRACKED
+### 3.3 `eeu.iof` — parallel array to `.rd` (52.8MB, NOT_COMPRESSED) — PARTIALLY CRACKED; a real "nearby street names" pointer mechanism found and validated this session for a ~0.36% subset
 - Same 94-byte header, then fixed **6-byte records**, exactly the same count as
-  `eeu.rd` (`(filesize - 94) / 6` matches). One entry per road record.
-- Structure only partially understood: `[00 00 00 00][1 byte, varies 0–~18][0x80 constant]`
-  (corrected byte layout — a later session re-verified against 15 real records that the
-  varying byte sits at byte OFFSET 4 and the 4 leading zero bytes are contiguous, not
-  `[00 00]...[00 00]` bookending a byte at offset 2 as originally sketched).
-  Semantics of the varying byte unknown — a cross-check against topology-table tag
-  complexity (see §3.6/§8 #5) found no clean correlation, but on only 15 samples from
-  one tile.
+  `eeu.rd` (`(filesize - 94) / 6` matches). One entry per road record, same order.
+- Layout: `[uint32 LE "zero4"][uint8 "vb"][uint8 "c80"]`. The earlier
+  `[00 00 00 00][varying byte][0x80 constant]` sketch (from only 15 hand-checked
+  records) is an approximation of the COMMON case only — at full-file scale
+  (8,809,081 records) neither `zero4` nor `c80` is a true constant: `zero4` is
+  nonzero for 31,318 records (0.3555%), and `c80` is something other than `0x80`
+  for a comparable-sized minority.
+- **CRACKED this session, for the 31,318 records with nonzero `zero4`**: `zero4`
+  is an **absolute byte offset into `eeu.il`**, and `vb` is a **count of
+  consecutive `.il` entries** to read starting there — together, one road
+  record's own list of OTHER nearby street names. Validated at scale against the
+  real ISO: 858/1000 randomly sampled `zero4` values land byte-exact on a real,
+  parseable `.il` entry (`[11-byte prefix][name][0x00]`, §3.2's already-cracked
+  format), and of those, 100% resolve (via the entry's own embedded `eeu.rd`
+  index) to a real road whose name matches the entry's own string. Chaining
+  exactly `vb` such entries from `zero4` and validating every one the same way
+  succeeds end-to-end on the large majority of a 500-record sample. **Geographic
+  clustering, 30 random anchors, every one**: every entry in an anchor's own
+  list resolves to a real `eeu.rd` record within a few km of the anchor's own
+  coordinates (`eeu.rd` is NOT spatially sorted, so this clustering cannot be
+  chance). The anchor's own name is essentially never inside its own list
+  (1/300 sampled) — a list of OTHER nearby roads, not self-inclusive. Anchor
+  names are frequently bare route/highway codes (`R102`, `T0803`, `B32`, `L73`,
+  `SS1`, `D-400`) rather than full street names. **Practical reading**: looks
+  like a real "pick an area, browse its street names" catalog — independent
+  evidence for the same kind of destination-entry UI need §3.7's `.rt`/`.rl`/
+  `.prl` hypothesis addresses, from a completely different file. Which (if
+  either) the real unit's own address-entry screen actually uses is
+  unconfirmed on hardware.
+- **Still open**: (1) the common-case `vb` byte (~99.6% of records, `zero4==0`)
+  remains completely unresolved — its real range is 0-255 (not 0-18, the old
+  15-sample finding), heavily skewed toward small values (2/1/3/0/4 are the 5
+  most common, >70% of records combined); the old weak tag-complexity
+  cross-check (§3.6/§8 #5) was never re-run at scale. (2) which ~31,318 of
+  8.8M records become anchors isn't recovered — not a clean 1:1 with `eeu.cty`'s
+  79,738 top-level settlements either. (3) `c80`'s exact bit-level meaning
+  (0x80 common case; 0 or 1 on confirmed anchors; rare 129-255 outliers) isn't
+  pinned down. (4) whether an anchor's own list is ordered by anything checked
+  (alphabetical: no, only 16/100 sampled; distance/on-disk-order: not tested).
+  Full methodology, every validation number, and concrete next-step
+  suggestions: `research/iof_reader.py`'s module docstring.
 
 ### 3.4 `eeu.typ` — street-type word dictionary (105KB, NOT_COMPRESSED) — CRACKED
 - 94-byte header + exactly 2,574 fixed **41-byte records**:
