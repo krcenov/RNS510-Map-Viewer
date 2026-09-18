@@ -1787,6 +1787,37 @@ lang_index][40-byte NUL-padded name][4 bytes constant 0xFFFFFFFF]`.
 
 Full methodology: `research/cal_reader.py`'s module docstring.
 
+### 3.14 `eeu.cat` — country/continent bounding-box table (759 bytes, NOT_COMPRESSED) — CRACKED
+94-byte header (record count 35 read straight off its own header field,
+§3.12), then exactly **35 fixed 19-byte records**: `[uint24 LE country_id][int32
+LE lon_min][int32 LE lat_min][int32 LE lon_max][int32 LE lat_max]`, same
+`/100000` degree convention used everywhere else on this disc. `country_id`
+is the **same numbering §3.13 cracked for `eeu.cal`** (0=Europe, 1-34=the
+34 real countries in alphabetical ISO alpha-3 order).
+- **Validated directly against real-world geography** — most of the 35
+  boxes match closely enough to be unambiguous: Germany (id 8) is (5.87,
+  47.28)-(15.04, 55.05), essentially exact; Austria (2) is (9.53,
+  46.39)-(17.16, 49.02), correct down to its real western/eastern borders;
+  Switzerland and Italy are similarly exact. Three real microstates get
+  correspondingly tiny boxes — San Marino (27): (12.40, 43.89)-(12.52,
+  43.99); Liechtenstein (17): (9.48, 47.05)-(9.62, 47.26); Vatican City
+  (34), the smallest of the three as expected: (12.45, 41.73)-(12.66,
+  41.91). Norway (23) correctly reaches its real eastern border with
+  Russia via Finnmark: (4.51, 57.75)-(31.13, 71.18). Russia (26) and
+  "Europe" (0) both reach a max longitude of 179.38°E — consistent with
+  this dataset's already-documented coverage of Russia's far east (§3.10's
+  `eeuz.fea` findings: Chita, Birobidzhan) and with "Europe"'s own box
+  being a genuine bounding union over every member country's box, not a
+  separately-surveyed continent shape.
+- **One honest anomaly, not resolved this session**: Denmark (id 9) shows
+  `lon_min` = 1.69°E — identical, bit-for-bit, to "Europe"'s own overall
+  `lon_min`. Real mainland Denmark's westernmost point is much further
+  east (~8°E). Every other country's own values look geographically
+  plausible in isolation, so this is flagged as a real, narrow open
+  question, not swept into "probably fine."
+
+Full methodology: `research/cat_reader.py`'s module docstring.
+
 ---
 
 ## 4. ISO container handling
