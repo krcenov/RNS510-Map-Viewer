@@ -67,9 +67,11 @@ What changed vs. the v1 raw-lines viewer (see README §10 for full details)
    cities intersecting the visible viewport above a zoom-dependent
    bounding-box-area threshold (see city_min_area_for_scale()).
 4. Unified search: MapData.search_combined() merges rns510_core.MapProject's
-   road search with city_reader's city search into one result list, tagged
-   "[Road]"/"[City]"; picking a city result centers and zooms to roughly
-   fit its bounding box, picking a road result behaves like the old jump.
+   road search with city_reader's city search and (README §10 "v22 -> v23")
+   poi_db_reader.search_pois() into one result list, tagged
+   "[Road]"/"[City]"/"[POI]"; picking a city result centers and zooms to
+   roughly fit its bounding box, picking a road/POI result behaves like the
+   old jump.
 5. Light "Google Maps but 2D" theme: white/light-gray background, gray
    road lines (thicker/darker for longer matched-name runs, a crude
    importance proxy -- see the module docstring caveat that no reliable
@@ -1039,20 +1041,23 @@ def nice_scale_step(value_m):
 
 
 class SearchHit:
-    """One row of a unified road+city search result."""
+    """One row of a unified road+city+POI search result."""
 
     __slots__ = ("kind", "name", "lon", "lat", "extra")
 
     def __init__(self, kind, name, lon, lat, extra=None):
-        self.kind = kind  # "road" or "city"
+        self.kind = kind  # "road", "city", or "poi" (README §10 "v22 -> v23")
         self.name = name
         self.lon = lon
         self.lat = lat
-        self.extra = extra  # core.RoadRecord or city_reader.CityRecord
+        self.extra = extra  # core.RoadRecord, city_reader.CityRecord, or a poi_db_reader.search_pois() dict
 
     def label(self):
-        tag = "[City]" if self.kind == "city" else "[Road]"
-        return "%s  %s  (%.5f, %.5f)" % (tag, self.name, self.lon, self.lat)
+        tag = {"city": "[City]", "poi": "[POI]"}.get(self.kind, "[Road]")
+        suffix = ""
+        if self.kind == "poi" and self.extra and self.extra.get("category_name"):
+            suffix = "  (%s)" % self.extra["category_name"]
+        return "%s  %s%s  (%.5f, %.5f)" % (tag, self.name, suffix, self.lon, self.lat)
 
     def jump_span_deg(self, default_span):
         """Suggested half-span (degrees) to load/zoom to when jumping to
@@ -1526,10 +1531,11 @@ class MapData:
     # --------------------------------------------------------------- search
 
     def search_combined(self, query, limit=40):
-        """Unified road+city search. Returns (hits: list[SearchHit],
-        road_total: int, city_total: int)."""
+        """Unified road+city+POI search (README §10 "v22 -> v23" added
+        POIs). Returns (hits: list[SearchHit], road_total: int,
+        city_total: int, poi_total: int)."""
         hits = []
-        road_total = city_total = 0
+        road_total = city_total = poi_total = 0
         if self.search_project is not None:
             road_results, road_total = self.search_project.search(query, limit=limit)
             for r in road_results:
@@ -1538,7 +1544,11 @@ class MapData:
             city_results, city_total = self.cty_cache.search(query, limit=limit)
             for c in city_results:
                 hits.append(SearchHit("city", c.name, c.repr_point[0], c.repr_point[1], c))
-        return hits, road_total, city_total
+        if self.poi_ready and self.poi_cache is not None:
+            poi_results, poi_total = poidb.search_pois(self.poi_cache, query, limit=limit)
+            for p in poi_results:
+                hits.append(SearchHit("poi", p["name"], p["lon"], p["lat"], p))
+        return hits, road_total, city_total, poi_total
 
     # ------------------------------------------------------------- tiles
 
@@ -2975,6 +2985,11 @@ class App:
             self.crumb_var1.set("")
             self.crumb_var2.set("CITY")
             self.crumb_var3.set(hit.name.upper())
+        elif hit.kind == "poi":
+            category = hit.extra.get("category_name") if hit.extra else None
+            self.crumb_var1.set((category or "").upper())
+            self.crumb_var2.set("POI")
+            self.crumb_var3.set((hit.name or "").upper())
         else:
             self.crumb_var1.set(getattr(self, "_last_query", "").upper())
             self.crumb_var2.set("ROAD")
@@ -3195,16 +3210,17 @@ class App:
             if error:
                 messagebox.showerror("Search failed", str(error))
                 return
-            hits, road_total, city_total = result
+            hits, road_total, city_total, poi_total = result
             self.search_results = hits
             self.results_list.delete(0, "end")
             for h in hits:
                 self.results_list.insert("end", h.label())
             self._set_status(
-                "Search: %d result(s) shown (%d road match(es) of %d total, %d city match(es) of %d total). "
-                "Double-click a result to jump there." % (
+                "Search: %d result(s) shown (%d road match(es) of %d total, %d city match(es) of %d total, "
+                "%d POI match(es) of %d total). Double-click a result to jump there." % (
                     len(hits), sum(1 for h in hits if h.kind == "road"), road_total,
-                    sum(1 for h in hits if h.kind == "city"), city_total))
+                    sum(1 for h in hits if h.kind == "city"), city_total,
+                    sum(1 for h in hits if h.kind == "poi"), poi_total))
 
         BackgroundTask(self.root, do_search, self._set_status, done).start()
 

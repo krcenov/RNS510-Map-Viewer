@@ -430,7 +430,7 @@ def main():
     log("available_layers() before mp0 ready: %s" % data.available_layers())
 
     # --- 3. unified search: a real road AND a real city -------------------
-    hits, road_total, city_total = data.search_combined("TIMISOARA", limit=20)
+    hits, road_total, city_total, _poi_total = data.search_combined("TIMISOARA", limit=20)
     road_hits = [h for h in hits if h.kind == "road"]
     city_hits = [h for h in hits if h.kind == "city"]
     log("search('TIMISOARA') -> %d road hit(s)/%d total, %d city hit(s)/%d total" % (
@@ -448,7 +448,7 @@ def main():
     # string-match order -- this is what a real "did search find the right
     # place" check should do, not a coincidence-prone name filter.
     REAL_TIRANA = (19.8189, 41.3275)
-    hits2, road_total2, city_total2 = data.search_combined("TIRAN", limit=100)
+    hits2, road_total2, city_total2, _poi_total2 = data.search_combined("TIRAN", limit=100)
     city_hits2 = [h for h in hits2 if h.kind == "city"]
     log("search('TIRAN') -> %d city hit(s)/%d total" % (len(city_hits2), city_total2))
     assert city_total2 > 0, "expected at least one Albanian 'Tiran*' city match"
@@ -513,7 +513,7 @@ def main():
     #        while Timisoara's tiles remain cached (not re-decoded/evicted)
     #        -- checked per-LAYER, since each fast layer keeps its own cache
     cached_tile_ids_before = {layer: set(data.tile_caches[layer].keys()) for layer in viewer.FAST_LAYERS}
-    hits3, _, _ = data.search_combined("PRAHA", limit=10)
+    hits3, _, _, _ = data.search_combined("PRAHA", limit=10)
     city_hits3 = [h for h in hits3 if h.kind == "city"]
     if city_hits3:
         target2 = city_hits3[0]

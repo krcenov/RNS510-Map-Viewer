@@ -5851,6 +5851,37 @@ empty space (no POI, no road point, no edge nearby) correctly falls
 through to the existing "no rendered point or road segment" message,
 confirming no false-positive POI hits.
 
+### v22 → v23: POI search (this session)
+
+**Completes the POI feature arc**: crack → display → icons →
+click-to-identify → now search — the same unified search box (already
+merging road + city results, §10 "v13 → v14"/earlier) now also searches
+real POI names.
+
+`poi_db_reader.search_pois(cache, query, limit)` is a plain, case-
+insensitive linear substring scan over `load_poi_cache()`'s own
+`name_upper` list (a new precomputed field, uppercased once at load
+time so a repeated search never re-uppercases 4.7M strings). **Measured
+on the reference disc**: ~0.20s per search (e.g. `"MCDONALD"` → 4,781
+real matches) — acceptable for an explicit "press Enter" interaction
+this app already runs inside a `BackgroundTask` (never blocks the UI
+thread), not attempted as live per-keystroke filtering.
+`MapData.search_combined()` now returns a 4-tuple (`hits, road_total,
+city_total, poi_total`) — every existing call site (the App itself,
+3 in `test_map_viewer.py`) updated to match. `SearchHit` gained a
+`"poi"` kind (tagged `[POI]`, showing its real category alongside the
+name) and a proper breadcrumb branch (previously any non-city hit fell
+through to a hardcoded `"ROAD"` label, which would have mislabeled a
+POI hit).
+
+**Verified with a real, running-`App`-level end-to-end test**: typing
+`"MCDONALD"` and running the real search returns 20 shown POI hits (of
+4,781 total) alongside genuine road/city results; selecting a POI
+result and jumping to it lands `center_lon`/`center_lat` exactly on
+that POI's own real coordinates, and the breadcrumb correctly reads
+`RESTAURANTS | POI | MCDONALD'S` — not the old hardcoded `"ROAD"` label
+a POI hit would previously have gotten.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can
