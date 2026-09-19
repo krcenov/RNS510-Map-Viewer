@@ -1818,6 +1818,50 @@ is the **same numbering §3.13 cracked for `eeu.cal`** (0=Europe, 1-34=the
 
 Full methodology: `research/cat_reader.py`'s module docstring.
 
+### 3.15 `eeu.cny` — county catalog (400KB, NOT_COMPRESSED) — CRACKED (structure + content identity); 2 numeric fields not fully explained
+94-byte header (record count 2,326 read straight off its own header
+field), then exactly **2,326 fixed 176-byte records**, **validated at full
+scale (every record parses cleanly, zero exceptions)**:
+`[uint16 LE index][uint16 LE region_id][26 zero bytes][36-byte NUL-padded
+name][uint8 level][109 zero bytes]`. A real sub-national administrative
+catalog — one level below `eeu.cal`'s countries, one level above
+`eeu.cty`'s cities/localities.
+- **`name` — CRACKED**: real administrative divisions, confirmed directly.
+  The first 5 records alone are `CHANIA`/`RETHYMNO`/`IRAKLEIO`/`LASITHI`
+  — the 4 real prefectures of Crete, Greece, in their real west-to-east
+  geographic order — followed by `IMPERIA`, a real Italian Liguria
+  province. Further records include all 8 real provinces of Piedmont,
+  Italy (`TORINO`/`CUNEO`/`ASTI`/`ALESSANDRIA`/`BIELLA`/`VERCELLI`/
+  `NOVARA`/`VERBANO-CUSIO-OSSOLA`) and real districts of the Swiss cantons
+  Valais, Vaud, and Fribourg.
+- **`region_id` — CRACKED (identity)**: groups counties into their real
+  sub-national region/canton/province — not a country reference (`eeu.cal`/
+  `eeu.cat`'s own `country_id` tops out at 34; this reaches 690). Validated
+  directly: every county with `region_id=4` is a real Valais district;
+  `region_id=6` is Vaud; `region_id=8` is Fribourg; `region_id=3` groups
+  Piedmont's 8 provinces; `region_id=39` groups Liguria's. 691 distinct
+  values total — plausible for ~34 countries' real regional subdivisions.
+  Not allocated in file order (first-seen sequence is `0, 39, 3, 1, 4, 2,
+  5, 6, ...`, not `0, 1, 2, 3, ...`) and records sharing one `region_id`
+  aren't necessarily contiguous — an opaque id assigned elsewhere in the
+  source database, referenced here in whatever order the file's own real
+  geographic clustering happens to produce.
+- **`level` (byte 66) — NOT fully cracked**: range 1–13, heavily skewed
+  (`1` alone covers 72% of records, `3` is next at 17%). Constant within
+  98.6% of `region_id` groups (681/691) — clearly tied to the same
+  region/hierarchy concept `region_id` encodes, not an independent
+  per-county property, but its own semantic meaning isn't pinned down.
+  Two hypotheses tested and refuted: a direct country reference (doesn't
+  match `eeu.cal`/`eeu.cat`'s numbering, and the same value recurs across
+  clearly different countries); a count of that county's own child
+  localities in `eeu.cty` (real sub-locality counts for 5 sample counties
+  — 15/6/35/8/31 — don't relate to their `level` values of 3/3/3/1/1).
+  A plausible, untested idea: some kind of real administrative-depth
+  indicator, since European countries genuinely differ in how many admin
+  levels sit between "country" and "county."
+
+Full methodology: `research/cny_reader.py`'s module docstring.
+
 ---
 
 ## 4. ISO container handling
