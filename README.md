@@ -2357,6 +2357,55 @@ fields this session, and the `timezone` field's own values (1300, 1400,
 1400, 1500, ..., 2400 — stepping by ~100 per group rather than
 resembling a real UTC offset) weren't explained.
 
+### 3.23 `eeuz.pca` — country/continent phoneme catalog (7.5KB decompressed, FLAT_COMPRESSED) — CRACKED (record framing, full file scale); 2 of 4 trailer fields decoded
+Standard FLAT_COMPRESSED container (§3 intro). Same self-delimiting
+record family as `eeuz.pct`/`eeuz.prd` (§3.5, §3.6):
+```
+uint8    name_len
+bytes    name           -- name_len bytes, e.g. "EUROPE", "AUSTRIA"
+uint8    phon_len
+bytes    phon           -- phon_len bytes, same phonetic alphabet as eeuz.prd
+bytes[16] trailer        -- see below
+```
+**Validated at FULL scale**: parsing the entire 7,451-byte body this way
+consumes every byte with zero leftover at EOF, producing exactly **188**
+well-formed records — previously only "decompresses to a clean phoneme/
+name catalog" was known; content was never actually parsed.
+
+`eeu.mod` (§3.16) names this table `phCatalog`, with 4 real per-record
+fields after `graphem`(=name)/`phonem`(=phon): `clusterOffset`,
+`clusterCount`, `cityOffset`, `cityCount` — read as 4 consecutive
+uint32 LE values (16 bytes, matching the trailer width exactly).
+
+**`clusterOffset`/`clusterCount` (first 8 bytes) — CRACKED (identity):
+always zero on every one of the 188 records**, checked exhaustively.
+Fully consistent with — and cross-validates — `eeu.pcl` ("phoneme
+cluster list", §3.17) being confirmed genuinely empty on this disc:
+there is no real phoneme-cluster data for this catalog to point into.
+
+**`cityOffset`/`cityCount` (last 8 bytes) — position cracked, meaning
+NOT cracked (target file not identified)**: a real, non-trivial value
+pair, constant across every name-variant of one country (all 11
+`AUSTRIA`/`AUTRICHE`/`OOSTENRIJK`/`RAKOUSKO`/... variants share
+`cityOffset=14379305`/`cityCount=10712`), monotonically increasing in
+file order as new countries appear — 20 distinct (offset, count) groups
+across the 188 records, one per real country/continent entry. **Tested
+against `eeu.cty`** (the obvious candidate given the field name):
+neither a raw byte offset (lands on unrelated Hungarian content for
+Austria) nor the reversed field assignment (lands on unrelated Greek
+content) produces Austrian place names at the expected position — and
+the "contiguous per-country block" model this would require doesn't fit
+`eeu.cty`'s own real layout either: a full-file scan of `eeu.cty`'s own
+`bytes[57:59]` country tag (§3.8) finds **441,325** tag-change
+transitions across 939,351 records — the tag interleaves at fine
+granularity (consistent with a spatial/tile ordering), not one
+contiguous block per country as previously summarized. A direct byte-
+offset test into `eeuz.pct` (city phonetics) — the next most plausible
+candidate, by analogy with that file's own `phonemeRoadOffset` pointer
+into `eeuz.prd` — also failed (lands on unrelated Turkish content).
+`eeuz.cl`/`eeuz.ct` and `eeuz.fea` were not tested. Left open for a
+future session.
+
 ---
 
 ## 4. ISO container handling
