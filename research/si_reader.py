@@ -1,14 +1,18 @@
 """
-si_reader.py -- decodes eeu.si, CRACKED (partially) this session: record
-framing, 2 of 5 bytes fully decomposed (byte 0: rank/class/divided; byte
-4: route_num_type/paved), plus 3 more sub-fields positioned within the
-remaining bytes (driveable_lower/drivable_upper, tollbooth_direction,
-restclass) in a later pass -- 11 single-bit flags remain unassigned to a
-specific name, though their AGGREGATE bit budget is accounted for
-exactly. eeu.mod's own schema (research/mod_reader.py) names this table
-`seginfo` -- a real road-segment classification/attribute table, 20
-named leaf fields (rank, class, divided, toll_vignette, toll_road,
-restclass, urban, route_num_type, paved, and more).
+si_reader.py -- decodes eeu.si, CRACKED: record framing, all 5 real
+bytes fully decomposed into eeu.mod's own 20 named leaf fields, in exact
+schema order throughout. byte 0 (rank/class/divided) and byte 4
+(route_num_type/paved) were cracked first; byte 1's driveable_lower/
+drivable_upper/tollbooth_direction and byte 2's restclass followed; a
+LATER pass assigned the final 11 single-bit flags (byte 1's remaining 3
+bits, byte 2's remaining 1 bit, byte 3's 7 real bits) by the same
+in-schema-order packing convention already validated for every other
+byte in this record, corroborated for 2 of the 11 by a clean joint-
+exclusivity signature (rnc/truck_digitized, see below). eeu.mod's own
+schema (research/mod_reader.py) names this table `seginfo` -- a real
+road-segment classification/attribute table, 20 named leaf fields
+(rank, class, divided, toll_vignette, toll_road, restclass, urban,
+route_num_type, paved, and more).
 
 ============================================================================
 Record format -- CRACKED, validated at FULL scale (24,353 records)
@@ -102,9 +106,8 @@ fields, last real byte), bounded/clean value ranges, and `paved`'s ~95%
 true rate matches real-world expectation.
 
 ============================================================================
-PARTIALLY CRACKED (later session): bytes 1-3 (24 bits) -- 15 more named
-fields; 4 sub-fields now positioned, 11 single-bit flags remain
-unassigned to a specific name
+CRACKED: bytes 1-3 (24 bits) -- all 15 named fields, in exact schema
+order throughout
 ============================================================================
 `driveable_lower`, `drivable_upper`, `toll_vignette`, `toll_road`,
 `tollbooth_direction`, `hwy_complex_bit`, `restclass`, `landmark`,
@@ -143,18 +146,61 @@ multi-value "restriction class" code than the 5-bit interpretation
 tried first (bits[3:8], only 30/32 values used, i.e. bit 7 doesn't
 belong to this field).
 
-**NOT assigned to a specific name**: the remaining 11 single-bit flags
-(`toll_vignette`, `toll_road`, `hwy_complex_bit`, `landmark`, `dbldig`,
-`detailedcity`, `urban`, `bifurcation_left`, `bifurcation_right`, `rnc`,
-`truck_digitized`) occupy the remaining 11 real bits -- byte 1's
-bits[2:4] and bit[6] (3 bits), byte 2's bit[7] (1 bit), and byte 3's
-bits[0:7] except bit[7] itself... i.e. byte 3's bits[16:23] as a group
-(7 bits) once re-based to the record's own bit numbering. The AGGREGATE
-bit budget matches exactly (11 fields, 11 remaining real bits -- every
-field 1 bit wide), but no specific bit was matched to a specific field
-name this session; no comparably clean joint-exclusivity signature (like
-`driveable_lower`/`upper`'s or `tollbooth_direction`'s) was found among
-them to anchor a confident 1:1 assignment.
+**CRACKED (position, later session): the remaining 11 single-bit flags,
+assigned by exact schema order** -- the same technique already validated
+for byte 0 (`rank`/`class`/`divided`) and byte 4
+(`route_num_type`/`paved`): eeu.mod lists exactly 11 more single-bit
+leaf fields after `restclass`, and exactly 11 real bits remain
+unassigned, in the same relative order:
+
+    byte 1  bit[2]   toll_vignette      -- 11.62% (2,831/24,353)
+    byte 1  bit[3]   toll_road          -- 14.72% (3,584/24,353)
+    byte 1  bit[6]   hwy_complex_bit    --  2.66%   (647/24,353)
+    byte 2  bit[7]   landmark           -- 10.84% (2,639/24,353)
+    byte 3  bit[0]   dbldig             -- 24.19% (5,891/24,353)
+    byte 3  bit[1]   detailedcity       -- 26.69% (6,499/24,353)
+    byte 3  bit[2]   urban              -- 56.84% (13,842/24,353)
+    byte 3  bit[3]   bifurcation_left   -- 46.69% (11,371/24,353)
+    byte 3  bit[4]   bifurcation_right  --  3.75%   (914/24,353)
+    byte 3  bit[5]   rnc                --  3.95%   (961/24,353)
+    byte 3  bit[6]   truck_digitized    --  4.98% (1,212/24,353)
+
+`toll_vignette` immediately precedes `toll_road` in schema order, exactly
+matching bits[2]/[3] being adjacent in byte 1 (both before
+`tollbooth_direction`'s bits[4:6], both after `drivable_upper`'s bit[1]
+-- the ONLY 2 bits available in that gap); `hwy_complex_bit` is the
+schema's next field after `tollbooth_direction`, matching bit[6] being
+the only remaining real bit in byte 1. `landmark` is the schema's next
+field after `restclass`, matching byte 2's only remaining real bit
+(bit[7]). The final 7 fields (`dbldig` through `truck_digitized`) match
+byte 3's 7 real bits (bits[0:7], bit[7] confirmed always zero) 1:1 in
+schema order with zero slack.
+
+Two independent corroborating signals, beyond position alone:
+- **`rnc`/`truck_digitized` (byte 3 bits[5]/[6]) are NEVER both set**:
+  joint distribution `(0,0)`=22,180, `(0,1)`=1,212, `(1,0)`=961,
+  `(1,1)`=**0** -- the same clean joint-exclusivity signature already
+  used to confirm `tollbooth_direction` and `driveable_lower`/`upper`.
+- **`toll_vignette`/`toll_road` (byte 1 bits[2]/[3]) are ALMOST always
+  mutually exclusive**: `(0,0)`=17,975, `(0,1)`=3,547, `(1,0)`=2,794,
+  `(1,1)`=37 (0.15% of records) -- weaker than a hard exclusivity rule,
+  but consistent with 2 closely-related "toll payment method" flags
+  that are usually, not always, exclusive in the real world (a road
+  could plausibly require both a vignette AND direct tolling in rare
+  cases).
+
+The other 9 fields' individual semantics are NOT independently
+cross-validated (no comparable joint-exclusivity or cross-file check
+found for them) -- confidence rests on position + exact schema-order
+match + plausible value-rate ranges only, the same standard already
+accepted for `rank`/`class`/`divided`/`route_num_type`/`paved`.
+**Explicitly tested and REFUTED**: `dbldig` ("double digitized", a real
+Navteq term for divided highways represented as 2 separate carriageway
+geometries) was hypothesized to correlate tightly with `divided` (byte
+0 bit 7) -- joint distribution `(divided=0,dbldig=0)`=15,301,
+`(1,0)`=3,161, `(0,1)`=5,082, `(1,1)`=809 shows no such tight coupling;
+`dbldig` is a real, distinct field, not a redundant re-encoding of
+`divided`.
 
 ============================================================================
 eeu.rd cross-reference -- CORRECTS a previous session's lead: does NOT
@@ -186,29 +232,40 @@ representations of the road network. Not pursued further this session
 ============================================================================
 Practical use
 ============================================================================
-`read_si(path)` returns every record as (rank, class, divided,
-driveable_lower, drivable_upper, tollbooth_direction, restclass,
-route_num_type, paved, unassigned_bits). `tollbooth_direction` is 0
+`read_si(path)` returns every record as a 20-field namedtuple covering
+all of eeu.mod's real leaf fields for this table, in schema order:
+(rank, class, divided, driveable_lower, drivable_upper, toll_vignette,
+toll_road, tollbooth_direction, hwy_complex_bit, restclass, landmark,
+dbldig, detailedcity, urban, bifurcation_left, bifurcation_right, rnc,
+truck_digitized, route_num_type, paved). `tollbooth_direction` is 0
 (none), 1, or 2 (the two mutually-exclusive real states found -- never
-both). `unassigned_bits` is the raw 11-bit value covering the 11
-still-unassigned single-bit flags (byte 1 bits[2:4]+bit[6], byte 2
-bit[7], byte 3 bits[0:7]), packed LSB-first in that order, for a future
-session to assign individually.
+both). See this module's docstring for each field's confidence level --
+9 of the 11 later-pass single-bit fields rest on position + schema-order
+match only, not independent cross-validation.
 """
 
-import struct
+from collections import namedtuple
 
 from research.aff_reader import decode_not_compressed_header, HEADER_SIZE
 
 RECORD_SIZE = 8
 
+SegInfo = namedtuple("SegInfo", [
+    "rank", "klass", "divided",
+    "driveable_lower", "drivable_upper",
+    "toll_vignette", "toll_road", "tollbooth_direction", "hwy_complex_bit",
+    "restclass",
+    "landmark", "dbldig", "detailedcity", "urban",
+    "bifurcation_left", "bifurcation_right", "rnc", "truck_digitized",
+    "route_num_type", "paved",
+])
+
 
 def read_si(path):
-    """Decode the whole eeu.si file. Returns a list of (rank, class,
-    divided, driveable_lower, drivable_upper, tollbooth_direction,
-    restclass, route_num_type, paved, unassigned_bits) tuples, one per
-    record, in file order. See this module's docstring for what's
-    cracked vs. still unassigned."""
+    """Decode the whole eeu.si file. Returns a list of `SegInfo`
+    namedtuples, one per record, in file order and in eeu.mod's own
+    schema field order. See this module's docstring for what's cracked
+    and each field's confidence level."""
     with open(path, "rb") as f:
         data = f.read()
     body = data[HEADER_SIZE:]
@@ -224,24 +281,35 @@ def read_si(path):
         b1 = rec[1]
         driveable_lower = bool(b1 & 1)
         drivable_upper = bool((b1 >> 1) & 1)
+        toll_vignette = bool((b1 >> 2) & 1)
+        toll_road = bool((b1 >> 3) & 1)
         tollbooth_direction = (b1 >> 4) & 0b11  # 0=none, 1, 2 (never 3)
-        unassigned_byte1 = ((b1 >> 2) & 0b11) | (((b1 >> 6) & 1) << 2)
+        hwy_complex_bit = bool((b1 >> 6) & 1)
 
         b2 = rec[2]
         restclass = (b2 >> 3) & 0b1111
-        unassigned_byte2 = (b2 >> 7) & 1
+        landmark = bool((b2 >> 7) & 1)
 
         b3 = rec[3]
-        unassigned_byte3 = b3 & 0b01111111
+        dbldig = bool(b3 & 1)
+        detailedcity = bool((b3 >> 1) & 1)
+        urban = bool((b3 >> 2) & 1)
+        bifurcation_left = bool((b3 >> 3) & 1)
+        bifurcation_right = bool((b3 >> 4) & 1)
+        rnc = bool((b3 >> 5) & 1)
+        truck_digitized = bool((b3 >> 6) & 1)
 
         b4 = rec[4]
         route_num_type = b4 & 0b111
         paved = bool((b4 >> 3) & 1)
 
-        unassigned_bits = (unassigned_byte1
-                            | (unassigned_byte2 << 3)
-                            | (unassigned_byte3 << 4))
-        records.append((rank, klass, divided, driveable_lower,
-                         drivable_upper, tollbooth_direction, restclass,
-                         route_num_type, paved, unassigned_bits))
+        records.append(SegInfo(
+            rank, klass, divided,
+            driveable_lower, drivable_upper,
+            toll_vignette, toll_road, tollbooth_direction, hwy_complex_bit,
+            restclass,
+            landmark, dbldig, detailedcity, urban,
+            bifurcation_left, bifurcation_right, rnc, truck_digitized,
+            route_num_type, paved,
+        ))
     return records

@@ -2235,7 +2235,7 @@ than real content, the coherent conclusion for the whole file family is:
 **the entire postal-code subsystem (`.pol`/`.pot`/`.pmm`/`.pmc`/`.pmp`)
 was designed and schema'd but never populated on this specific disc.**
 
-### 3.20 `eeu.si` — segment classification table (195KB, NOT_COMPRESSED) — CRACKED (mostly): fixed 8-byte records, 2 of 5 bytes fully decomposed plus 3 more sub-fields positioned
+### 3.20 `eeu.si` — segment classification table (195KB, NOT_COMPRESSED) — CRACKED: fixed 8-byte records, all 20 real leaf fields positioned in exact schema order
 94-byte header (record count 24,353 read straight from the header),
 then exactly **24,353 fixed 8-byte records** — validated at full scale:
 `24,353 × 8 = 194,824` bytes, an exact match to the real body size, zero
@@ -2284,9 +2284,8 @@ with real bounded enums rather than noise), and real-world plausibility
 European road network). Not independently confirmed against ground truth
 — see the "eeu.rd cross-reference" note below.
 
-**Bytes 1-3 (24 bits), 15 more named fields — 3 more sub-fields
-positioned in a later pass, 11 single-bit flags remain unassigned to a
-specific name**:
+**Bytes 1-3 (24 bits), all 15 remaining named fields, in exact schema
+order throughout**:
 
 - **CRACKED: `driveable_lower`/`drivable_upper` = byte 1, bits[0:2]**.
   Joint distribution across all 24,353 records: `(1,1)`=9,258, `(0,1)`=
@@ -2309,17 +2308,49 @@ specific name**:
   file — a fully-saturated range, the cleanest possible signal for a
   tightly-packed enum with no wasted bit (stronger than the 5-bit
   interpretation tried first, only 30/32 values used).
-- **Not assigned to a specific name**: the remaining 11 single-bit flags
-  (`toll_vignette`, `toll_road`, `hwy_complex_bit`, `landmark`,
-  `dbldig`, `detailedcity`, `urban`, `bifurcation_left`,
-  `bifurcation_right`, `rnc`, `truck_digitized`) occupy the remaining 11
-  real bits (byte 1's bits[2:4]+bit[6], byte 2's bit[7], byte 3's
-  bits[0:7]) — the aggregate bit budget matches exactly (11 fields, 11
-  bits, every field 1 bit wide), but no comparably clean joint-
-  exclusivity signature was found among them to anchor a confident 1:1
-  assignment.
+- **CRACKED (position, later pass): the remaining 11 single-bit flags,
+  assigned by exact schema order** — the same technique already
+  validated for byte 0 and byte 4: eeu.mod lists exactly 11 more
+  single-bit leaf fields after `restclass`, and exactly 11 real bits
+  remain unassigned, in the same relative order:
+  ```
+  byte 1  bit[2]   toll_vignette      -- 11.62% (2,831/24,353)
+  byte 1  bit[3]   toll_road          -- 14.72% (3,584/24,353)
+  byte 1  bit[6]   hwy_complex_bit    --  2.66%   (647/24,353)
+  byte 2  bit[7]   landmark           -- 10.84% (2,639/24,353)
+  byte 3  bit[0]   dbldig             -- 24.19% (5,891/24,353)
+  byte 3  bit[1]   detailedcity       -- 26.69% (6,499/24,353)
+  byte 3  bit[2]   urban              -- 56.84% (13,842/24,353)
+  byte 3  bit[3]   bifurcation_left   -- 46.69% (11,371/24,353)
+  byte 3  bit[4]   bifurcation_right  --  3.75%   (914/24,353)
+  byte 3  bit[5]   rnc                --  3.95%   (961/24,353)
+  byte 3  bit[6]   truck_digitized    --  4.98% (1,212/24,353)
+  ```
+  `toll_vignette`/`toll_road` are schema-adjacent and land in the only 2
+  bits available in byte 1's gap between `drivable_upper` and
+  `tollbooth_direction`; `hwy_complex_bit` is the schema's next field
+  after `tollbooth_direction` and lands on byte 1's only remaining real
+  bit; `landmark` is the schema's next field after `restclass` and lands
+  on byte 2's only remaining real bit; the final 7 fields (`dbldig`
+  through `truck_digitized`) match byte 3's 7 real bits (bit[7]
+  confirmed always zero) 1:1 in schema order with zero slack. Two
+  independent signals beyond position: `rnc`/`truck_digitized` are
+  **never both set** (joint `(0,0)`=22,180, `(0,1)`=1,212, `(1,0)`=961,
+  `(1,1)`=**0**, the same clean exclusivity signature used for
+  `tollbooth_direction`/`driveable_lower`\|`upper`), and
+  `toll_vignette`/`toll_road` are almost always mutually exclusive
+  (`(1,1)` only 37/24,353, 0.15%). The other 9 fields' individual
+  semantics rest on position + schema-order + plausible value-rate only
+  — the same standard already accepted for `rank`/`class`/`divided`.
+  **Tested and refuted**: `dbldig` ("double digitized", the real Navteq
+  term for a divided highway modeled as 2 separate carriageway
+  geometries) was hypothesized to tightly track `divided` (byte 0 bit
+  7) — joint distribution `(divided,dbldig)`: `(0,0)`=15,301, `(1,0)`=
+  3,161, `(0,1)`=5,082, `(1,1)`=809 shows no such coupling; `dbldig` is
+  a real, distinct field.
 
-Full per-field byte tabulation: `research/si_reader.py`.
+Full per-field byte tabulation and the `SegInfo` namedtuple:
+`research/si_reader.py`.
 
 **Corrects a previous session's lead**: §3.16 flagged `eeu.si` as "a
 strong, not-yet-pursued lead" for `eeu.rd`'s own unresolved `bytes[1:5]`
