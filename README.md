@@ -2829,8 +2829,23 @@ extensively-investigated `db/`):
   `TABLES/0/<NNNN>.IDX` + `.URL`, whose own header is plain,
   self-documenting text (`compr-type=Z`, a real named+typed schema
   `ID:A:6|POS:P:8|NAME:V:84|LKI:B:1|PHONE:V:19|IMPORTANCE:B` — the same
-  ID+position+name+phone shape as `POI.DB3`'s own `Poi_BaseAttributes`)
-  — the compressed table body itself not decoded. `<LAN>.LSC` files are
+  ID+position+name+phone shape as `POI.DB3`'s own `Poi_BaseAttributes`).
+  **A later session cracked the structure right after that header,
+  previously assumed to just be part of "the compressed body"**: a real
+  per-block `(offset, lambda_hash)` index table — repeating 9-byte
+  records (`[4-byte BE uint32][4-byte BE uint32]['|' delimiter]`), BOTH
+  fields strictly monotonically increasing across every record, on both
+  a small per-form `.IDX` (30 records) and the much larger merged
+  `TABLES/GENERIC.IDX` (136.9MB, 92,006 records, same shape at a larger
+  scale) — exactly the structure `order-type=lambda` implies: a sorted
+  hash-boundary table enabling binary search for which single compressed
+  block a query's own lambda hash falls into, without decompressing
+  every block. **Tested and REFUTED**: the compressed block BODIES
+  themselves are not standard zlib (RFC1950), raw DEFLATE (RFC1951),
+  gzip, or bz2 — exhaustively scanned at every byte position in a small,
+  fully-scanned `.IDX` file, zero real hits in any of these formats
+  despite the file's own `compr-type=Z` label — a real but still
+  unidentified proprietary encoding. `<LAN>.LSC` files are
   plain, self-documenting text naming a real category-group hierarchy
   (`TPD-GRP <group-id> <child ids>`) feeding the category picker;
   `ICONS`/`ICONS810` (381 real PNG files, self-explanatory POI-category

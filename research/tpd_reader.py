@@ -4,9 +4,13 @@ the largest never-examined area on the disc: 1,443 files. CRACKED at
 the "what is this system and how does it work" level -- every distinct
 FILE ROLE identified and confirmed with real content, including a LATER
 session opening `TPD3.DIC` (previously assumed a binary dictionary,
-actually a tiny plain-text 3rd product manifest); the per-country
-`.IDX`/`.URL` search-table BODIES (compressed, self-describing headers
-decoded) were not decompressed/decoded further.
+actually a tiny plain-text 3rd product manifest). The per-country `.IDX`
+search tables' self-describing headers were already decoded; a LATER
+session additionally cracked the per-block `(offset, lambda_hash)` index
+table sitting between the header and the data (previously assumed to
+just be part of "the compressed body") -- the compressed block BODIES
+themselves remain unidentified (tested and refuted as standard zlib/
+deflate/gzip/bz2, despite the file's own `compr-type=Z` label).
 
 Found via `config/create_cd` (research/create_cd_reader.py).
 
@@ -140,8 +144,59 @@ record schema as `EDB/POI/POI.DB3`'s own `Poi_BaseAttributes`/
 `Poi_AddressAttributes` tables (ID + position + name + phone,
 research/poi_db_reader.py) -- plausibly a lighter-weight, embedded-
 search-optimized parallel representation of similar underlying data.
-The compressed table BODY (past the header) was not decompressed or
-decoded this session.
+
+**A LATER SESSION: the region right after the 2-line header, previously
+assumed to just be "the compressed body", is actually a real per-block
+`(offset, lambda_hash)` index table -- CRACKED (structurally). The
+actual compressed block BODIES remain an unidentified format -- TESTED
+and REFUTED as standard zlib/deflate/gzip/bz2, despite the `compr-type=Z`
+label.**
+
+Right after the 2 header lines (ending `\r\n`), both a small per-form
+table (`TABLES/0/0001.IDX`, 37,504 bytes, 30 entries) and the much
+larger merged `TABLES/GENERIC.IDX` (136,913,204 bytes, 92,006 entries)
+show the SAME repeating 9-byte record shape: `[4-byte big-endian
+uint32][4-byte big-endian uint32]['|' (0x7C) delimiter]`, running for
+exactly as many records as the table needs, then a `___\r\n` terminator
+(3 underscores) before whatever follows.
+
+**Both fields are monotonically non-decreasing across every record,
+confirmed on real data**: field A (`0001.IDX`: 0, 896, 2584, 3580,
+5204, ..., 35984 -- 30 values, strictly increasing) is consistent with
+a cumulative byte offset of some kind (its final value, 35,984, is close
+to this small file's own remaining body size past the header/table,
+37,504-434=37,070, not close to the much larger fully-uncompressed size
+30 blocks at `uncompr-max-size` would imply -- suggesting these are
+COMPRESSED byte offsets, not uncompressed ones). Field B (`0001.IDX`:
+59946290, 84824411, 102162240, ..., 1547972188 -- also strictly
+increasing, spanning a large fraction of the full uint32 range) is
+consistent with the header's own `order-type=lambda`: a per-block
+lambda/hash boundary value, sorted ascending, letting a real client
+BINARY-SEARCH this table for a query's own hash to find which single
+block might contain it, without decompressing every block in order --
+exactly the kind of structure a real "browse an area's street/POI
+names" search index needs. `GENERIC.IDX`'s own much larger version of
+this same table (92,006 records) shows the identical shape and the same
+monotonic-in-both-fields property, and field A's own final value
+(~136M) is in the right ballpark for that file's own much larger total
+size (136.9MB) -- the same pattern at a different scale, not a
+coincidence specific to the small file.
+
+**Tested and REFUTED: the block bodies are NOT standard zlib (RFC1950),
+NOT raw DEFLATE (RFC1951), NOT gzip, NOT bz2.** On the small, fully
+scanned `0001.IDX` file: every byte position past the offset table
+(every possible starting byte, not just the position the table's own
+field-A offsets point to) was tested for a valid zlib header-and-stream,
+a valid raw-deflate stream (no header), a gzip magic (`1F 8B`), and a
+bz2 magic (`BZh`) -- zero real hits in any of these (one coincidental
+2-byte gzip-magic-shaped match exists in the file by chance, but does
+not lead to a real gzip stream). The declared `compr-type=Z` therefore
+names a real but still UNIDENTIFIED proprietary compression or encoding
+scheme, not any of the standard library formats already used elsewhere
+on this disc (FLAT_COMPRESSED/MAP_COMPRESSED both use plain zlib) --
+left open for a future session (candidates not yet tried: LZO, a custom
+Siemens/Continental scheme, or a non-byte-aligned/bit-packed encoding
+that wouldn't present a recognizable byte-aligned magic at all).
 
 ============================================================================
 Root-level `tpd/` files -- `TPD3.DIC` opened and CRACKED (a LATER
@@ -182,9 +237,48 @@ confirmed to be exactly `2019060000`, matching `INFO25.PSC`'s own
 ============================================================================
 Practical use
 ============================================================================
-This module has no parsing functions -- every file format documented
-here is either plain text (`.PSC`/`.LSC`/`.HTM`/`.TXT`, read directly)
-or a standard image format (`.png`/`.gif`, use any image library). The
-`.IDX` compressed table bodies were not decoded; no reader is provided
-for them.
+Most file formats documented here are either plain text (`.PSC`/`.LSC`/
+`.HTM`/`.TXT`, read directly) or a standard image format (`.png`/`.gif`,
+use any image library) -- no parsing function needed. `read_idx_header()`
+below parses an `.IDX` file's 2-line text header plus its per-block
+`(offset, lambda_hash)` index table (CRACKED, see above) -- the
+compressed block BODIES themselves are NOT decoded (unidentified
+compression scheme, see above), so this only gets you the table of
+`(block_offset, lambda_hash)` pairs, not the actual POI records inside
+each block.
 """
+
+import struct
+
+
+def read_idx_header(path):
+    """Parse one `.IDX` file's 2-line text header (the `block-offset=...`
+    config line and the `ID:A:6|POS:P:8|...` field-schema line) plus its
+    per-block `(offset, lambda_hash)` index table -- see this module's
+    docstring, "the region right after the 2-line header... is actually a
+    real per-block (offset, lambda_hash) index table". Returns a dict:
+    {"config": {...}, "schema": [(field_name, type_code, size_str), ...],
+    "blocks": [(offset, lambda_hash), ...], "table_end": int}. Does NOT
+    decode the compressed block bodies themselves (unidentified format,
+    tested and refuted as zlib/deflate/gzip/bz2 -- see docstring)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    line1_end = data.find(b"\r\n")
+    line2_end = data.find(b"\r\n", line1_end + 2)
+    config = {}
+    for kv in data[:line1_end].split(b"?"):
+        k, _, v = kv.partition(b"=")
+        config[k.decode("ascii")] = v.decode("ascii")
+    schema = []
+    for field in data[line1_end + 2:line2_end].split(b"|"):
+        parts = field.split(b":")
+        schema.append(tuple(p.decode("ascii", errors="replace") for p in parts))
+    pos = line2_end + 2
+    blocks = []
+    while pos + 9 <= len(data):
+        a, b = struct.unpack_from(">II", data, pos)
+        if data[pos + 8] != 0x7C:
+            break
+        blocks.append((a, b))
+        pos += 9
+    return {"config": config, "schema": schema, "blocks": blocks, "table_end": pos}
