@@ -5820,6 +5820,37 @@ reference disc, so it carries no usable signal for this. A future
 session could weight by real-world rarity/importance instead of query
 order if this matters more.
 
+### v21 → v22: POI click-to-identify (this session)
+
+**Natural completion of the POI feature arc**: with real icons now on
+the map ("v20 → v21"), the obvious next gap was that clicking one did
+nothing — road points/edges were already click-to-identify-able
+("v6 → v7"/"v16 → v17"), but POIs weren't.
+
+`find_nearest_poi()` (module-level, same pixel-distance-metric contract
+as `find_nearest_point()`) is checked FIRST in `App._on_point_pick()`,
+before road points/edges — a real icon is the visually obvious "target"
+at its own screen position, and its own pick radius
+(`POI_PICK_RADIUS_PX`, 18px) is deliberately wider than a road dot's
+10px, matching a 34×39 icon's real on-screen size rather than a 1-2px
+dot. **Correctness detail**: it searches `App._rendered_pois` — the
+EXACT set the last `_redraw()` actually drew AFTER the "v20 → v21"
+declutter pass — never the full, undecluttered `pois_for_bbox()` result,
+so a click can only ever hit something the user could actually see. A
+hit shows the POI's real name and category in the status bar (no
+picked-points panel row — that panel's columns, `tile_id`/
+`feature_index`/etc., are road-specific debugging fields a POI simply
+doesn't have).
+
+**Verified with real, running-`App`-level tests**: right-clicking
+exactly at a real rendered POI's own screen position correctly reports
+`"POI identified: GO -- gas station (23.276820, 42.683760)"` for a
+named one and `"POI identified: (unnamed) (...)"` for an unnamed one
+(real data — most POIs simply don't have a `Name`); a click in genuinely
+empty space (no POI, no road point, no edge nearby) correctly falls
+through to the existing "no rendered point or road segment" message,
+confirming no false-positive POI hits.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

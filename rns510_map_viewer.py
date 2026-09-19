@@ -591,6 +591,12 @@ MAX_FEATURE_DRIFT_DEG = 3.0
 # dense mp0-level view.
 POINT_PICK_RADIUS_PX = 10.0
 
+# Click-to-identify a real POI icon (README §10 "v21 -> v22"): bigger than
+# POINT_PICK_RADIUS_PX since a real icon is a 34x39px image, not a 1-2px dot
+# -- half its own width/height comfortably covers a click anywhere on the
+# visible icon, not just its exact hotspot pixel.
+POI_PICK_RADIUS_PX = 18.0
+
 # Click-to-identify a rendered connected-road EDGE (README §10 "v16 -> v17"):
 # a right-click that misses every point (see POINT_PICK_RADIUS_PX above)
 # falls back to checking whether it landed within this many SCREEN PIXELS of
@@ -840,6 +846,30 @@ def find_nearest_point(features, click_lon, click_lat, center_lat, scale, max_px
         "lat": lat,
         "name": name,
     }
+
+
+def find_nearest_poi(pois, click_lon, click_lat, center_lat, scale, max_px=POI_PICK_RADIUS_PX):
+    """Click-to-identify for real POIs (README §10 "v21 -> v22") -- same
+    pixel-distance metric and "nearest within max_px, else None" contract
+    as find_nearest_point() above, just over `pois` (a list of dicts with
+    "lon"/"lat"/"name"/"category_name"/"partition_id" -- see
+    App._rendered_pois, the exact set the last _redraw() actually drew
+    after decluttering, NOT the full pois_for_bbox() result, so a click
+    can only ever hit an icon the user could actually see). Returns the
+    matching POI dict, or None."""
+    cos_lat = math.cos(math.radians(center_lat))
+    if abs(cos_lat) < 1e-9:
+        cos_lat = 1e-9 if cos_lat >= 0 else -1e-9
+    best = None
+    best_d2 = max_px * max_px
+    for poi in pois:
+        dx = (poi["lon"] - click_lon) * cos_lat * scale
+        dy = (poi["lat"] - click_lat) * scale
+        d2 = dx * dx + dy * dy
+        if d2 <= best_d2:
+            best_d2 = d2
+            best = poi
+    return best
 
 
 def _iter_high_confidence_edges(features, topo_caches):
@@ -2413,6 +2443,11 @@ class App:
         # this costs nothing to keep around, and decoding a PNG once instead
         # of on every redraw matters at real POI counts.
         self._poi_icon_images = {}
+        # POIs the LAST _redraw() actually drew, after decluttering (README
+        # §10 "v21 -> v22") -- what click-to-identify searches, so a click
+        # can only ever hit something the user could actually see. Kept
+        # fresh by _redraw() itself; empty until the first one runs.
+        self._rendered_pois = []
         self._drag_start = None
         self.busy = False
         self._area_loading = False
@@ -3644,6 +3679,13 @@ class App:
         # (added below, like road/city labels) but capped at MAX_POI_LABELS
         # regardless of how many markers were drawn.
         poi_label_candidates = []
+        # Click-to-identify for POIs (README §10 "v21 -> v22") reads THIS
+        # list, not a fresh pois_for_bbox() query -- so a click can only
+        # ever hit an icon the user could actually SEE (i.e. one that
+        # survived the declutter pass below), never one that was suppressed
+        # this redraw. Reset at the top of every redraw; only ever grows
+        # again from the loop right below.
+        rendered_pois = []
         if self.show_pois_var.get() and self.data is not None and self.data.poi_ready:
             vb = self._visible_bbox()
             if vb is not None:
@@ -3680,6 +3722,8 @@ class App:
                                      fill=POI_DOT_COLOR, outline=BG_COLOR)
                     if poi["name"]:
                         poi_label_candidates.append((poi["name"], px, py))
+                    rendered_pois.append(poi)
+        self._rendered_pois = rendered_pois
 
         # Hand the finished rasterization off to Tk as ONE canvas item
         # (README §10 "v17 -> v18") -- everything drawn above (every dot,
@@ -3917,7 +3961,13 @@ class App:
         to report back whether that connection is right or wrong. Only a
         click that misses BOTH a point and a rendered edge is a true miss
         (plain status message, not an error -- clicking empty map space is
-        an ordinary, expected outcome)."""
+        an ordinary, expected outcome).
+
+        README §10 "v21 -> v22": a real POI icon is checked FIRST, before
+        road points/edges (see find_nearest_poi()) -- a POI hit just shows
+        its name/category in the status bar (no picked-points panel row --
+        that panel's columns are road-specific debugging fields a POI
+        doesn't have)."""
         if self.data is None or self.center_lon is None:
             self._set_status("No map loaded -- nothing to identify yet.")
             return
@@ -3925,6 +3975,24 @@ class App:
         h = self.canvas.winfo_height()
         click_lon, click_lat = canvas_to_lonlat(
             event.x, event.y, self.center_lon, self.center_lat, self.scale, self.pan_x, self.pan_y, w, h)
+
+        # POI click-to-identify (README §10 "v21 -> v22") -- checked FIRST,
+        # not as a road-point fallback: a real icon is the visually obvious
+        # "target" at its own screen position, and POI_PICK_RADIUS_PX (18px)
+        # is deliberately wider than a road dot's own pick radius, so a
+        # click meant for an icon should never accidentally fall through to
+        # road-point/edge picking instead. find_nearest_poi() searches
+        # self._rendered_pois -- exactly what the LAST redraw actually drew
+        # after decluttering, so this can only ever hit something visible.
+        poi = find_nearest_poi(self._rendered_pois, click_lon, click_lat, self.center_lat, self.scale)
+        if poi is not None:
+            self._set_status(
+                "POI identified: %s%s (%.6f, %.6f)." % (
+                    poi["name"] or "(unnamed)",
+                    " -- %s" % poi["category_name"] if poi["category_name"] else "",
+                    poi["lon"], poi["lat"]))
+            return
+
         info = find_nearest_point(self.features, click_lon, click_lat, self.center_lat, self.scale)
         if info is not None:
             self._point_pick_counter += 1
