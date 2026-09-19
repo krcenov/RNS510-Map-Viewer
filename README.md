@@ -2957,19 +2957,42 @@ tables' own arrays point into. Given any `(table_code, location_index)`,
 that location's exact byte range in BOTH ALERT-C directions is now
 directly computable, with zero guessing.
 
-**NOT YET cracked**: the bulk region's own CONTENT — what's actually
-INSIDE each now-exactly-known byte range. Individual locations are small
-(single digits to a few dozen bytes) and `eeu.mod`'s own nested schema
-for them (`segment_chains_for_one_location: chain_count, total_no_of_
-chains, no_of_internal_chains, segment_chains[] → segment_chain:
-{start, vseg_id, side, no_of_segments, exception{...},
-exploration_points[]}`) is considerably deeper than the flat offset
-index just cracked — variable-length nested arrays, not another
-fixed-shape table. Plausible small structure was spotted (a recurring
-leading byte consistent with a small `chain_count`) but not confirmed.
-Full methodology and reusable functions (`read_location_offset_arrays()`,
-`location_byte_range()`, `read_location_chain_bytes()`):
-`research/tmc_reader.py`.
+**CRACKED (further, same later session): `chain_count` = byte 0's low
+nibble, and each `segment_chain` has a fixed 7-byte MINIMUM footprint —
+confirmed by an EXACT integer formula.** Grouping every non-empty
+location record by byte 0's low nibble and looking at each group's own
+minimum record size: `min_size == 1 + low_nibble × 7` holds EXACTLY for
+low_nibble 1 (n=724,059, min=8), 2 (n=493,817, min=15), 3 (n=691,
+min=22), 4 (n=83, min=29), and 6 (n=8, min=43) — the one exception
+tested, low_nibble=5 (n=29, min=37 vs. predicted 36), is plausibly just
+a sampling gap in a 29-record group, not a contradiction. This confirms
+byte 0's low nibble really is `chain_count` (matching `eeu.mod`'s field
+name and position exactly), a fixed 1-byte record header, and a 7-byte
+minimum per `segment_chain` (reached at 0 `exploration_points`) — mean
+record size also grows roughly linearly with `chain_count` (10.4, 19.5,
+28.8, 39.4, 50.8, 57.5 bytes for low_nibble 1-6).
+
+**Byte-level characterization (statistical, not bit-pinned) of the
+minimal 7-byte `segment_chain`**, from 26,220 real `chain_count=1`,
+exactly-8-byte-total records: byte 0 has only 2 distinct values (1, 17 —
+low nibble=`chain_count`, bit 4 a 2nd flag set on 12.4% of records);
+bytes 1-3 are high-entropy (candidate: `start`/`vseg_id`); byte 4 is
+heavily bimodal (18 or 146=18|0x80, >96% combined — bit 7 a real flag,
+candidate `side`); byte 5 is power-law distributed, 81% == 1 (matches
+real-world `no_of_segments` — most chains cover exactly 1 segment);
+byte 6 is ALWAYS 0 in every one of the 26,220 samples. **Tested and
+REFUTED**: byte 6 as a literal `exploration_points` count varying with
+a record's own extra length past the 8-byte minimum — checked across
+59,942 real `chain_count=1` records with extra length 0-47 bytes, byte
+6 is constant 0 regardless — whatever encodes exploration-point count
+isn't a simple fixed-position byte there.
+
+None of this reaches the same standard as this disc's fully bit-pinned
+fields elsewhere (e.g. `eeu.si`'s `rank`/`class`/`divided`) — it's a
+real, statistically strong characterization of the outer shape, not an
+individually-confirmed bit-level layout. Full methodology and reusable
+functions (`read_location_offset_arrays()`, `location_byte_range()`,
+`read_location_chain_bytes()`, `chain_count()`): `research/tmc_reader.py`.
 
 ### 3.26 `db/zone.cfg` (81 bytes, plain text) — IDENTIFIED: the very last file on the disc this project had never actually opened
 The whole file is one line: `eeu = 10.1/DB 01234 18408555
