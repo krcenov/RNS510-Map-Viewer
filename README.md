@@ -2723,14 +2723,35 @@ extensively-investigated `db/`):
   a.Poi_ID ... where b.Poi_ID = ?1;`) — directly confirms, from the
   database's own side, this project's firmware-only finding (§2.5) that
   the real client only ever calls a fixed catalog of precompiled,
-  parameterized statements, never arbitrary SQL. **Not cracked**:
-  `Poi_BaseAttributes.Coordinate` is a single 64-bit integer, not this
-  disc's usual `/100000`-scaled int32 lon/lat pair. Tested and refuted:
-  splitting it into two int32 halves (either byte order) produces no
-  plausible degree values, including against the 8-byte `POS` field
-  hint from `tpd/`'s own index tables below — likely a Hilbert/Morton
-  space-filling-curve index or other proprietary encoding, not
-  reverse-engineered. Full details: `research/poi_db_reader.py`.
+  parameterized statements, never arbitrary SQL. **`Coordinate` — CRACKED
+  (a LATER session)**: a 64-bit integer, not this disc's usual
+  `/100000`-scaled int32 lon/lat pair (splitting it into two int32
+  halves, tested earlier, produces no plausible degree values) — but the
+  originally-flagged leading candidate, "a Hilbert/Morton space-filling-
+  curve index", turned out to be exactly right: reinterpret as unsigned
+  64-bit, DEINTERLEAVE into two 32-bit values (even bits → longitude,
+  odd bits → latitude), each scaled linearly from the full unsigned
+  32-bit range to `[-180, 180)` degrees (latitude uses the SAME
+  360-based scale as longitude, not the intuitive ±90 — it just never
+  uses the top/bottom quarter of its own 32-bit range on a real disc).
+  Found by joining `Poi_BaseAttributes` → `Poi_AddressAttributes` →
+  `String_BaseAttributes` on a real city name (e.g. `'SOFIA'`) and
+  noticing every one of that city's own `Coordinate` values shares an
+  unmistakable high-bit prefix when printed unsigned — exactly a Morton
+  code's spatial-locality signature. **Validated at 2 precision levels**:
+  a broad 18-city sweep (Stockholm to Athens, Moscow to Zagreb) lands
+  every city within a fraction of a degree of its real center; 2
+  individually-known real landmarks found by NAME (Fiumicino/Rome's
+  airport town, and a POI literally named `"R7 DOLGOSROCHNAYA PARKOVKA
+  DOMODEDOVO"` — Domodedovo/Moscow airport's own long-term parking) both
+  decode within **~0.01-0.03° (1-3km)** of their real published
+  coordinates. **Confirmed at bulk scale**: 10,000 real POIs (2,000 each
+  from 5 spread-out cities) decoded and checked against each city's own
+  real, padded metro bbox — **9,988/10,000 (99.9%) land inside the
+  correct real bbox**. `decode_coordinate()` in `research/poi_db_reader.py`
+  implements this; not yet bit-exact to this disc's usual precision
+  standard, but correct in shape, sign, and bulk placement. Full
+  validation writeup: `research/poi_db_reader.py`.
 - **`telemat/tmc2/`** — CRACKED (the config file, and the `.et` files'
   real content); the `.lt`/`.et` binary PACKING NOT fully decoded. Real,
   standard ALERT-C (ISO 14819) TMC traffic location tables for 14
