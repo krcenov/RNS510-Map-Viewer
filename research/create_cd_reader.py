@@ -112,10 +112,21 @@ The script also builds 5 top-level folders alongside the already-heavily
                opened this session (binary format, no obvious text
                structure from a quick look).
 
-Also two disc-root files this session did not open: `cdrom.toc` (disc
-mastering table-of-contents) and `DBINFO.TXT` (likely a human-readable
-manifest -- worth checking first in a future session, plain text is
-likely given the name).
+Also 2 disc-root manifest files, opened and CRACKED (plain text) in a
+later pass of this same session -- tying every subsystem's own version
+stamp together: `cdrom.toc` (543 bytes) is a real, human-readable
+manifest -- `Version: 505.30.910.1.84` (an EXACT match to `create_cd`'s
+own source path, closing that loop completely), `TPD: 2019060000`
+(matches `tpd/nscWeu_eue_20190607/LPOI.TXT` and `INFO25.PSC`'s own
+`TPD-PRODID` exactly), `SVD: EDB_20190607` (matches `EDB/POI/POI.DB3`'s
+own `database.id` exactly), `TMC: 20190610` (matches `telemat/`'s own
+source path date exactly), `DBAL: V006.047 V007.038 V008.704 V009.038
+V010.015` (matches `dbal/`'s own 5 folder names exactly), `Customer
+Info: VW`, `Customer: 1627386654`. `DBINFO.TXT` is a real per-brand
+manifest: VW part number `1T0051859AR`, system name `"EU East V17"`,
+and placeholder (`"tbd"`) Seat/Skoda/Bentley part numbers -- confirms
+this disc build serves the whole VW Group brand family, matching
+`POI.DB3`'s own category split (see the POI.DB3 section above).
 
 ============================================================================
 telemat/tmc2 -- CRACKED (the human-readable config); a strong, validated
