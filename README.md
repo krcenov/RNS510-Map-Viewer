@@ -120,11 +120,13 @@ roads, only custom POIs ("Personal POI" is an explicit, supported list type).
 
 ## 3. Map database findings
 
-The map disc's `files.cfg` documents 30-odd logical file types (road, city, county,
-intersection list/offset, POI index, map layers, etc.) and 4 compression types:
-`0`=NOT_COMPRESSED, `1`=FLAT_COMPRESSED, `2`=MAP_COMPRESSED, `3`=FEATURE_COMPRESSED.
-Filenames follow `eeu.<ext>` when uncompressed and **`eeuz.<ext>`** (note the `z`) when
-compressed. All are for the East Europe (`eeu`) dataset on this specific disc.
+The map disc's `files.cfg` (plain text, disc root) documents **39** logical file types
+(`numFileIds = 39` — road, city, county, intersection list/offset, POI index, map
+layers, etc., each with its own one-line comment — not all 39 are actually populated
+on this specific disc, see §3.17) and 4 compression types: `0`=NOT_COMPRESSED,
+`1`=FLAT_COMPRESSED, `2`=MAP_COMPRESSED, `3`=FEATURE_COMPRESSED. Filenames follow
+`eeu.<ext>` when uncompressed and **`eeuz.<ext>`** (note the `z`) when compressed. All
+are for the East Europe (`eeu`) dataset on this specific disc.
 
 ### 3.1 `eeu.rd` — road/routing graph (590MB, NOT_COMPRESSED) — CRACKED
 - 94-byte header: ASCII `SIEMENS`, `(C) SIEMENS AG`, version strings. **3 more
@@ -1906,7 +1908,8 @@ is correct, not coincidental: `abc`, `ctr`, `stt`, `cny`, `cty`, `rd`,
 `ct`, `cl`, `rt`, `rl`, `prl`, `pot`, `pol`, `pmm`, `pmc`, `pmp`, `ti`,
 `iof`, `il`, `tmc`, `cat`, `pca`, `pct`, `prd`. `eeu.pcl` has no
 corresponding block at all (not just an empty one, like `.pmp`/`.pol`/
-`.pot` get) — its real purpose is still unexplained.
+`.pot` get) — **its real purpose was tracked down in a later session, not
+through this file but through the disc's own `files.cfg`, see §3.17.**
 
 **Confirmed corrections and extensions to already-cracked files, found by
 directly cross-referencing this schema**:
@@ -1959,6 +1962,72 @@ per-field descriptor — e.g. `stamp`/`copyright`/`db_release`/`db_version`/
 `comp_version` all share an identical trailing byte pattern, consistent
 with 5 identically-shaped fixed 16-byte string fields — but a complete,
 general parser for arbitrary fields wasn't built this session).
+
+### 3.17 `eeu.pcl` — phoneme cluster list (94 bytes, NOT_COMPRESSED) — IDENTIFIED: genuinely empty on this disc, real name confirmed via the disc's own `files.cfg`
+94-byte header only — **zero body bytes**, confirmed directly: file size
+is exactly 94, and `bytes[90:94]` (`total_size`, §3.1) reads 94 too, an
+exact match (this is *not* one of the 2 files where that field stores the
+would-be body size instead of the header-inclusive total, e.g. `eeu.iof`/
+`eeu.mod`). `bytes[86:88]` (`record_count_lo16`) reads `0`, consistent.
+`bytes[84:86]` (`file_type`) reads `48` — a code private to this per-file
+header field, confirmed **not** the same numbering as `files.cfg`'s own
+`fileId` below (e.g. `eeu.rd`'s header `file_type` is `4`, but `files.cfg`
+assigns it `fileId 0`).
+
+§3.16's `eeu.mod` schema dictionary has no table block for `eeu.pcl` at
+all (re-confirmed: the only `pcl` occurrences anywhere in `eeu.mod`'s
+1,605-string dump are as a *prefix* inside compound field names —
+`pcl_cnt`, `maxPclId`, `pcl_dir`, `pcl_hndl_list`, `pcl_hndl`, `pcl_offs`,
+`max_pcl_id`, `pcl_handle` — all belonging to the unrelated "Ordinary Map
+File" MAP_COMPRESSED tile schema, where "parcel" is an internal spatial-
+subdivision/index concept for locating shapes inside a tile; no standalone
+`\x00pcl\x00`-delimited token exists anywhere in the file). That dead end
+is what this session's `eeu.mod` write-up meant by "its real purpose is
+still unexplained."
+
+The real answer was hiding in plain sight in a file this project had
+already partially used (for its top-level 4-compression-type legend, §3
+intro) but never fully read line-by-line: the disc's own **`files.cfg`**
+(plain text, disc root, not part of the `db/` compressed-data model) is a
+literal file-id → extension → compression-type → one-line-comment table
+for **all 39** logical file types the database *format* supports
+(`numFileIds = 39`) — not just the ~30-odd this specific EU-East disc
+actually populates. Its entry for id 27:
+
+```
+27 = pcl, 0, cached		# phoneme cluster list
+```
+
+`compressionType 0` = NOT_COMPRESSED, matching the real file exactly (no
+`eeuz.pcl` exists). The comment places it squarely in the same
+phonetic/TTS-support family as [`eeu.abc`](#311-euabc--alphabet--supported-language-table-897-bytes-not_compressed--cracked)
+(character repertoire), `eeuz.pca` (phoneme catalog — id 26, right before
+`pcl` in the table), `eeuz.pct` (phoneme *city* list — id 28, right
+after), and `eeuz.prd` (phoneme *road* list — id 29): a "phoneme cluster"
+is a standard TTS/phonetics term for a grouped sequence of phonemes (e.g.
+a syllable onset/coda consonant cluster), so this file's role was almost
+certainly a lookup table of valid/known phoneme clusters for the TTS
+engine's own pronunciation or syllabification rules — conceptually
+adjacent to, but distinct from, `eeuz.pca`'s catalog of individual
+phonemes.
+
+**Cross-checking `files.cfg` further also surfaced 3 file-id entries this
+project had never encountered on disc at all**: `7 = ptp` ("point types"),
+`15 = pdx` ("poi index file"), `16 = pti` ("point types international") —
+none of `eeu.ptp`/`eeu.pdx`/`eeu.pti`/`eeuz.ptp`/`eeuz.pdx`/`eeuz.pti`
+exist anywhere under `db/` on this disc, not even as empty 94-byte
+placeholders like `eeu.pcl`/`.pmp`/`.pol`/`.pot` — a real disc/build-time
+distinction between "declared by the format, file not even created this
+release" (`ptp`/`pdx`/`pti`) and "declared, file created but left empty"
+(`pcl`/`pmp`/`pol`/`pot`). Not pursued further this session; noted for
+completeness since it came directly from the same `files.cfg` read.
+
+**Bottom line**: `eeu.pcl`'s identity is now fully established straight
+from the disc's own authoring metadata (not inference) — a real, named,
+NOT_COMPRESSED "phoneme cluster list" table that the map-authoring tool
+simply never populated for this specific EU East V17 release. There is no
+byte-level format left to reverse-engineer (zero body bytes exist to
+examine); this is as cracked as an empty file can get.
 
 Full methodology, the complete table→file mapping, and every
 cross-reference: `research/mod_reader.py`'s module docstring.
