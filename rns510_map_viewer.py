@@ -337,6 +337,7 @@ import city_reader as cty
 import road_index_reader as rir
 import ctr_reader as ctrr
 import flat_compressed_reader as fcr
+import iof_reader as iofr
 from rns510_gui import BackgroundTask
 
 APP_TITLE = "RNS510 Map Viewer (read-only)"
@@ -1208,6 +1209,15 @@ class MapData:
         self._rd_index = None       # road_naming.RdSpatialIndex, current area
         self._rd_index_bbox = None  # bbox that index was built for (padded)
 
+        # Nearby-streets lookup (eeu.iof/.il, see nearby_streets_for_point()
+        # and _ensure_iof_anchor_index()) -- all lazily built on first use,
+        # not at load() time, since not every session needs it.
+        self._iof_records = None            # numpy structured array, whole eeu.iof
+        self._iof_anchor_rd_indices = None  # eeu.rd/eeu.iof indices of real anchors
+        self._iof_anchor_lon = None         # anchor longitudes (rd_cache-aligned)
+        self._iof_anchor_lat = None         # anchor latitudes
+        self._il_data = None                # whole eeu.il file bytes, read once
+
         # Address-entry keyboard feature (README §10 "v11 -> v12") -- loaded
         # lazily (see load_address_entry_data()) on first use of the "NAV"
         # bezel button, not at "Open Map ISO" time, since decompressing the
@@ -1580,6 +1590,99 @@ class MapData:
         self._rd_index = self.rd_cache.index_for_bbox(*ebox)
         self._rd_index_bbox = ebox
         return self._rd_index
+
+    # ------------------------------------------------- nearby streets (eeu.iof)
+
+    def _ensure_iof_anchor_index(self):
+        """Lazily build the small in-memory index of eeu.iof "anchor"
+        records (research/iof_reader.py -- CRACKED: an anchor's `zero4`
+        field is an absolute byte offset into eeu.il, `vb` a count of
+        consecutive eeu.il entries to read from there, together one road's
+        own "nearby street names" list; only ~0.36% of eeu.rd's 8.8M
+        records are anchors). Cheap and one-time: `read_iof_records()`
+        vectorizes the whole 52.8MB eeu.iof file with numpy (a few hundred
+        ms), `anchor_indices()` filters it down to ~31,318 positions, and
+        each anchor's own (lon, lat) is read straight out of `rd_cache`'s
+        already-resident eeu.rd coordinate arrays (index-aligned 1:1 with
+        eeu.iof by construction, README S3.3/S3.1) -- no extra file I/O
+        beyond the one eeu.iof read. No-op if already built."""
+        if self._iof_records is not None:
+            return
+        self._iof_records = iofr.read_iof_records(self.search_project.iof_path)
+        self._iof_anchor_rd_indices = iofr.anchor_indices(self._iof_records)
+        self._iof_anchor_lon = self.rd_cache.lon[self._iof_anchor_rd_indices]
+        self._iof_anchor_lat = self.rd_cache.lat[self._iof_anchor_rd_indices]
+
+    def nearby_streets_for_point(self, lon, lat, max_radius_deg=0.03):
+        """"Nearby street names" for whatever real eeu.iof anchor is
+        closest to (lon, lat), within `max_radius_deg` (default ~3.3km at
+        this dataset's latitudes) -- the map-viewer-facing use of this
+        session's eeu.iof/eeu.il crack (research/iof_reader.py). Anchors
+        are sparse (~0.36% of roads), so this deliberately looks for the
+        NEAREST one rather than requiring an exact hit on the clicked
+        road itself -- "what streets are named near here" is the useful
+        question for a map viewer, not "is this exact point an anchor".
+
+        Returns None if no data is loaded yet, or no anchor exists within
+        `max_radius_deg`. Otherwise a dict: {"anchor_name": str, "anchor_
+        lon"/"anchor_lat": float, "distance_m": float, "names": [str,
+        ...]} -- `names` is the de-duplicated, order-preserved list of
+        real road names from the anchor's own eeu.il entries (the anchor
+        road's own name is excluded, matching this session's own finding
+        that an anchor's name is essentially never inside its own list --
+        research/iof_reader.py's module docstring)."""
+        if self.rd_cache is None or self.search_project is None:
+            return None
+        self._ensure_iof_anchor_index()
+        if len(self._iof_anchor_rd_indices) == 0:
+            return None
+        cos_lat = math.cos(math.radians(lat)) or 1e-9
+        dx = (self._iof_anchor_lon - lon) * cos_lat
+        dy = self._iof_anchor_lat - lat
+        d2 = dx * dx + dy * dy
+        best_pos = int(np.argmin(d2))
+        if d2[best_pos] > max_radius_deg * max_radius_deg:
+            return None
+        rd_index = int(self._iof_anchor_rd_indices[best_pos])
+        anchor_lon = float(self._iof_anchor_lon[best_pos])
+        anchor_lat = float(self._iof_anchor_lat[best_pos])
+        distance_m = math.sqrt(float(d2[best_pos])) * rdn.METERS_PER_DEG_LAT
+
+        rec = self._iof_records[rd_index]
+        offset, count = int(rec["zero4"]), int(rec["vb"])
+        if offset == 0 or count == 0:
+            return None  # defensive -- should not happen for a real anchor
+
+        if self._il_data is None:
+            with open(self.search_project.il_path, "rb") as f:
+                self._il_data = f.read()
+        entries = iofr.nearby_street_entries(self._il_data, offset, count)
+        if not entries:
+            return None
+
+        # Anchor's own name: read directly from the already-resident
+        # eeu.rd body via rd_cache (avoids importing iof_reader's own
+        # rd_record() helper, which expects a separately-opened file).
+        name_off = rd_index * 67 + 24
+        anchor_name_bytes = self.rd_cache.body[name_off:name_off + 43].split(b"\x00", 1)[0]
+        anchor_name = anchor_name_bytes.decode("latin-1", errors="replace") or None
+
+        seen = set()
+        names = []
+        for _, name_bytes in entries:
+            name = name_bytes.decode("latin-1", errors="replace")
+            if not name or name == anchor_name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+
+        return {
+            "anchor_name": anchor_name,
+            "anchor_lon": anchor_lon,
+            "anchor_lat": anchor_lat,
+            "distance_m": distance_m,
+            "names": names,
+        }
 
     # ----------------------------------------------------- area / viewport
 
@@ -3564,12 +3667,14 @@ class App:
             info["number"] = self._point_pick_counter
             self.picked_points.append(info)
             self._append_picked_point_row(info)
+            nearby_summary = self._append_nearby_streets_row(info["lon"], info["lat"])
             self._redraw()
             self._set_status(
                 "Point #%d identified: layer=%s tile_id=%s feature=%s point=%s (%.6f, %.6f)%s -- "
-                "see the picked-points panel below to copy its full info." % (
+                "see the picked-points panel below to copy its full info.%s" % (
                     info["number"], info["layer"], info["tile_id"], info["feature_index"], info["point_index"],
-                    info["lon"], info["lat"], (" name=%s" % info["name"]) if info["name"] else ""))
+                    info["lon"], info["lat"], (" name=%s" % info["name"]) if info["name"] else "",
+                    (" " + nearby_summary) if nearby_summary else ""))
             return
 
         if self.connected_roads_var.get():
@@ -3650,6 +3755,34 @@ class App:
         picked-points panel and scroll to show it."""
         self.points_text.insert("end", self._format_picked_point_row(info))
         self.points_text.see("end")
+
+    def _append_nearby_streets_row(self, lon, lat):
+        """"Nearby streets" feature (eeu.iof/.il, see MapData.
+        nearby_streets_for_point()): after a normal point pick, look up
+        the nearest real eeu.iof anchor to the picked point and, if one
+        exists within range, append a summary line to the picked-points
+        panel listing the real street names from that anchor's own
+        "nearby street names" list. Silent no-op (no panel line) if no
+        data is loaded or no anchor is within range -- this is a bonus
+        enrichment on top of an ordinary pick, never a required part of
+        it. Returns a short one-line summary string for the status bar
+        (empty string if nothing was found/added)."""
+        if self.data is None:
+            return ""
+        try:
+            result = self.data.nearby_streets_for_point(lon, lat)
+        except Exception:
+            return ""  # best-effort enrichment -- never blocks an ordinary pick
+        if not result or not result["names"]:
+            return ""
+        names = result["names"]
+        shown = names[:12]
+        more = "" if len(names) <= 12 else " (+%d more)" % (len(names) - 12)
+        self.points_text.insert(
+            "end", "      nearby streets (via eeu.iof anchor %r, %.0fm away): %s%s\n" % (
+                result["anchor_name"] or "?", result["distance_m"], ", ".join(shown), more))
+        self.points_text.see("end")
+        return "Nearby streets: %s%s." % (", ".join(shown), more)
 
     def _rebuild_points_panel(self):
         """Fully redraw the picked-points text panel from self.picked_points

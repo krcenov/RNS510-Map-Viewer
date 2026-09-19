@@ -5575,6 +5575,99 @@ large places show when zoomed out.
 - Confirms `mp0` gets its own separate `tile_caches["mp0"]` entry, distinct
   from `tile_caches["mg1"]` (no shared/colliding `tile_id` numbering).
 
+### v18 → v19: 2 real performance fixes (repeated re-naming, per-vertex Tk calls), plus a "nearby streets" click-to-identify feature (this session)
+
+**The user's request (verbatim):** *"now with all this knowledge implement
+it into the map viewer everything you can, and optimize the viewer please,
+its really slow.... and laggy."* "This knowledge" refers to this session's
+`eeu.si`/`eeu.iof`/`eeu.tmc`/`tpd/` cracks (§3.20/§3.3/§3.25/§3.24) — most
+of it (TMC's internal chain format, the `.IDX` lambda-hash index, `TPD3.DIC`)
+isn't map-viewer material at all, just internal file-format trivia, so
+rather than guess which of the remaining pieces to wire in, the user was
+asked directly and chose the `eeu.iof`/`eeu.il` "nearby street names"
+lookup (§3.3) as the one concrete feature to build.
+
+**Performance fix 1: redundant road-name re-matching on every reload.**
+`MapData.ensure_area_loaded()` used to call `road_naming.name_features()`
+(a real per-vertex spatial-index lookup, `match_feature()`) over the
+**entire pooled feature list** on every single call — including tiles a
+previous, overlapping call had already decoded AND already matched
+identically (a tile's own geometry never changes, and the `rd_index`
+covering it only ever grows, never shrinks or changes what it returns
+for an already-covered area, so a tile's own match result is stable
+forever once computed). At a wide, long-panned-around viewport with
+hundreds of thousands of already-cached points, this meant every
+incremental pan/zoom repaid the FULL re-naming cost again, on top of
+whatever was genuinely new — the real remaining "still laggy after every
+pan" cost once the "v17 → v18" bitmap-rasterization fix already made
+RENDERING itself fast (0.086s for 48,302 points, §10 "v16 → v17"). Fixed
+with a new `MapData.name_caches` dict, the exact same per-`(layer,
+tile_id)` caching pattern `topo_caches` already uses for connected-roads
+adjacency (§10 "v9 → v10"): a tile is only ever matched once (keyed by
+`(tile_id, tol_m)` in case a future caller ever varies the tolerance),
+reused on every later reload that revisits it; reset alongside
+`tile_caches` on `set_trim_oscillation()`, since that toggle changes the
+underlying geometry a cached match would otherwise misdescribe.
+**Measured directly on a real Sofia-area viewport** (0.08° half-width,
+all 5 layers, 365 pooled features): an identical-repeat reload dropped
+from 0.353s to 0.001s (**293x faster**), and a simulated ~30%-panned,
+mostly-overlapping reload cost only 0.016s for the 7 genuinely new tiles
+— scaling with what's actually new, not the whole visible set. Verified
+byte-for-byte identical `named_ranges` results against a fresh, uncached
+`rdn.name_features()` ground truth (0 mismatches across all pooled
+features, both on an identical repeat and against independent
+recomputation).
+
+**Performance fix 2: `App._to_canvas()` re-querying Tk on every vertex.**
+`_to_canvas()` called `self.canvas.winfo_width()`/`winfo_height()` — a
+real Tcl round-trip through the interpreter, not a cheap Python attribute
+read — on **every single point/vertex it projects**, i.e. potentially
+hundreds of thousands of times per `_redraw()` at a dense pooled
+viewport, even though `_redraw()` itself already computes the canvas
+size exactly once at its own top. Fixed by caching that size on
+`self._canvas_w`/`self._canvas_h` (set at the top of every `_redraw()`,
+kept fresh by the canvas's own `<Configure>` binding which already calls
+`_redraw()` on any resize) and having `_to_canvas()` read those instead,
+falling back to a live query only if called before the first redraw has
+ever run. Verified the cached path produces byte-identical output to an
+independent `project_point()` computation, both immediately after
+`_redraw()` and across 20 repeated calls.
+
+Both fixes verified with real, running-`App`-level smoke tests against
+the actual `CD_8555.ISO` (not just unit-level function calls) — loading
+real data, driving the real `MapData`/`App` methods, and cross-checking
+results against independent ground truth.
+
+**New feature: "nearby streets" via `eeu.iof`/`eeu.il` (§3.3).** A normal
+left-click-then-right-click point pick (the existing click-to-identify
+flow, §10 "v6 → v7") now ALSO looks up the nearest real `eeu.iof`
+"anchor" record to the picked point (`MapData.nearby_streets_for_point()`)
+and, if one exists within ~3.3km, appends its own real "nearby street
+names" list (decoded via `research/iof_reader.py`'s already-cracked
+`offset`/`count` → `eeu.il` chain, this session's §3.3 crack) to both the
+status bar and the picked-points panel — e.g. clicking near a real German
+route `L162` surfaces 88 real nearby street names (`ACKERSTRASSE`,
+`AHREMER LICHWEG`, `ALTER BURGWEG`, ...). Anchors are sparse (~0.36% of
+`eeu.rd`'s 8.8M records), so this deliberately searches for the NEAREST
+one rather than requiring an exact hit on the anchor itself — "what
+streets are named near here" is the useful question for a map viewer,
+not "is this exact point an anchor". Implementation notes: the small
+(~31,318-record) anchor index is built lazily on first use, straight from
+`MapData`'s already-resident `RdCache` coordinate arrays (no extra
+`eeu.rd` read); `eeu.il`'s 39MB body is read once and cached
+(`self._il_data`) on first lookup. A silent no-op (no panel line, no
+status addition) if no anchor is within range — this is a bonus
+enrichment on an ordinary pick, never a blocking part of it (wrapped in a
+`try`/`except` in `App._append_nearby_streets_row()` for exactly that
+reason). **Verified directly against `research/iof_reader.py`'s own
+functions as ground truth**: for 5 real anchors spread across the whole
+file (queried at their own exact coordinates, so the nearest-anchor
+search must land on themselves), `nearby_streets_for_point()`'s anchor
+name, distance (< 1m), and full de-duplicated street-name list matched
+the independently-computed ground truth exactly, 5/5 — and a point far
+from any real anchor (0°, 0°) correctly returned `None` rather than a
+false hit.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can
