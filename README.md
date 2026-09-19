@@ -1744,6 +1744,46 @@ shields) has no counterpart in anything decoded so far.
     `verify_index_triple()`, `find_index_record_for_offset()`,
     `KNOWN_DIRECTORY_TABLES` in `research/feature_reader.py`.
 
+**A LATER SESSION's new lead: `eeu.mod`'s own schema for this table** —
+never checked against `eeuz.fea` specifically before. `eeu.mod`'s
+`feature` block (§3.16) is the single largest in the whole schema (~77
+real fields), describing a `MapHeader{db_cover bbox, parcel_width/
+height/cnt_x/cnt_y/norm_x/norm_y grid, feaType, scaleCnt, scales[]}` →
+`ParcelHeader{offset, byteCnt, byteCntZip}` → `FeatureDataHeader{
+category, type, flags, feaPointCnt, ...}` structure, with type-specific
+geometry variants (`line`/`poly`/`point`/`road`) each carrying
+`delta_long`/`delta_lat` fields. **`ParcelHeader{offset, byteCnt,
+byteCntZip}` is a striking independent confirmation-and-naming of the
+already-cracked 12-byte directory triple above** (3 uint32 = 12 bytes
+exactly: `offset`=the already-found `offset`, `byteCnt`=`declen`,
+`byteCntZip`=`complen`) — found two different ways in the same session.
+**Tested and refuted**: the schema's `parcel_cnt_x`×`parcel_cnt_y`
+grid-dimension product, on the natural guess it should equal the
+directory's own 977,308-record count — `977,308 = 929 × 1,052` — neither
+value appears anywhere as a uint32 (either endianness) in the first
+12MB of the file. **The single most actionable new lead, not yet
+tested**: the schema explicitly names `delta_long`/`delta_lat` as
+per-geometry-point fields — i.e. coordinates in this format are
+RELATIVE deltas, not absolute values, directly explaining why the
+exhaustive absolute-coordinate search above found nothing; a future
+session should search for a small delta pair near an anchor (a parcel's
+own coordinate, or `eeu.cty`'s already-known real position for that
+place) rather than a standalone absolute value. **This is a genuine,
+unresolved TENSION, not a resolved contradiction**: the schema's own
+parcel-grid/delta-coordinate design sits uneasily next to the
+independently well-evidenced "hash table, no locatable coordinate"
+conclusion above. Possible reconciliations, none tested: this disc's
+build may use only a subset of the schema's full generality (matching
+the pattern already seen elsewhere, e.g. `eeuz.pca`'s always-zero
+`clusterOffset`/`clusterCount`, §3.23); the schema's grid/coordinate
+fields may belong to the still-unlocated 3rd+ directory-table region
+covering Turku/Trondheim/Oslo; or the entries tested so far (Mediterranean
+Sea, Iasi, ...) may be a `type`/`category` that doesn't carry the
+`point`/`road` geometry sub-structure at all. Full details and the
+complete field list: `research/feature_reader.py`'s module docstring
+("A LATER SESSION's new lead" section) and `research/mod_reader.py`'s
+`extract_blocks()` with token `['fea']`.
+
 ### 3.11 `eeu.abc` — alphabet / supported-language table (897 bytes, NOT_COMPRESSED) — CRACKED
 The smallest file examined this session, and its name describes its content
 exactly. **Validated at full scale — zero leftover bytes across the entire

@@ -504,6 +504,89 @@ OPEN PROBLEMS (honest, not swept under the rug)
    what they actually are.
 
 ============================================================================
+A LATER SESSION's new lead: eeu.mod's own schema for this table -- a
+real, previously-unchecked source, but in tension with the hash-table
+conclusion above, not yet reconciled
+============================================================================
+`eeu.mod` (the disc's own schema dictionary, research/mod_reader.py --
+README S3.16) was never checked against `eeuz.fea` specifically before
+this pass. Its `feature` block is the single largest and most detailed
+in the whole schema (90 raw strings, ~77 real fields once boilerplate is
+excluded), and describes a MUCH richer nested structure than anything
+tested above:
+
+    FeatureFileHeader -> fileCnt, Zip_Statistic{dummy1ForZip,
+    dummy2ForZip}, MapHeaderDirectory -> MapHeader{
+        db_cover{min_long, min_lat, max_long, max_lat},      -- a real bbox
+        parcel_width, parcel_height, parcel_cnt_x, parcel_cnt_y,
+        parcel_norm_x, parcel_norm_y,                         -- a tile/parcel GRID
+        feaType, scaleCnt, scales[]{scale, offset},           -- multiple zoom scales
+    } -> SubFiles -> ParcelHeaderX, ParcelHeaderY,
+    ParcelHeader{offset, byteCnt, byteCntZip}                 -- 12 bytes/record!
+    -> ParcelFeatureData -> feaCnt -> FeatureDataList ->
+    FeatureDataHeader{category, type, flags, scaleFlag, feaPointCnt,
+        trans_1, trans_2, lenAtt, lenName_1, lenName_2, attribute,
+        [geometry variant: line | poly | point | road], ...}
+
+**`ParcelHeader{offset, byteCnt, byteCntZip}` is a striking, independent
+confirmation-and-naming of the already-cracked 12-byte directory index
+triple above** (3 uint32 fields = 12 bytes, exactly): `offset`=the
+already-found `offset`, `byteCnt`=`declen`, `byteCntZip`=`complen` --
+the schema gives real names to a structure a prior pass in this same
+session found empirically (big-endian, hash-table-like). This is a
+genuine cross-validation, found independently two different ways.
+
+**Tested and REFUTED this session**: the schema's own `parcel_cnt_x`/
+`parcel_cnt_y` grid-dimension fields, on the natural guess that their
+product should equal the directory's own exact 977,308-record count
+(one `ParcelHeader` per parcel) -- `977,308 = 929 x 1,052` (and no other
+close/round factor pair) -- neither `929` nor `1052`, nor any of
+977,308's other factor pairs, appears anywhere as a little-endian OR
+big-endian uint32 in the first 12MB of the file (which fully covers the
+already-located directory region). Either the grid model doesn't apply
+this simply to the already-found directory, `parcel_cnt_x`/`_y` aren't
+adjacent to the directory's own physical start, or the schema's parcel
+concept doesn't correspond 1:1 with the already-found hash-table index
+at all.
+
+**The single most actionable new lead, not yet tested**: the schema
+names `delta_long`/`delta_lat` as real per-geometry-point fields (once
+for `point` records, once for `pointList` entries under `road`) --
+i.e. coordinates in this format are explicitly DELTAS relative to some
+anchor, not absolute values. This gives open problem #1 above (zero
+absolute-coordinate hits found anywhere) a concrete, specific
+explanation and a concrete next test: search for a SMALL int16/int32
+delta pair near a real named entry's own bytes that, when ADDED to a
+plausible anchor (the entry's own `MapHeader.db_cover` corner, a
+per-parcel anchor, or `eeu.cty`'s own already-known real coordinate for
+that same place), lands close to the place's real-world position --
+rather than continuing to search for a standalone absolute value.
+
+**This is a genuine, unresolved TENSION, not a resolved contradiction**:
+the already-established empirical finding (the located directory tables
+behave as a hash/keyed index -- high collision rate, entries indexed far
+outside a table's own physical range, no coordinate-like regularity) sits
+uneasily next to the schema's own explicit parcel-GRID and delta-
+COORDINATE design. Both are independently well-supported by their own
+evidence. Possible reconciliations, none tested: (a) this disc's build
+uses only a subset of the schema's full generality, and the "real"
+grid/coordinate machinery the schema describes is simply unpopulated or
+superseded by the simpler hash-index this session already found
+(matching the pattern already seen elsewhere on this disc, e.g.
+`eeuz.pca`'s always-zero `clusterOffset`/`clusterCount`, §3.23); (b) the
+schema's grid/coordinate fields belong to a DIFFERENT, not-yet-located
+region of the file (recall open problem #2's own note that a 3rd+
+directory-table-shaped region, covering Turku/Trondheim/Oslo, was never
+located); or (c) the named entries tested so far (Mediterranean Sea,
+Iasi, ...) are a `type`/`category` of record that doesn't carry the
+`point`/`road` geometry sub-structure the schema's `delta_long`/
+`delta_lat` fields belong to, and a genuinely geometry-bearing entry
+(rather than a name-only "label" entry) would look different. Left for a
+future session -- see `research/mod_reader.py`'s `extract_blocks()` with
+token `['fea']` for the complete, ordered field list to work from
+directly.
+
+============================================================================
 Usage
 ============================================================================
     import feature_reader as fr
