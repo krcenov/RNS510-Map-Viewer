@@ -1189,6 +1189,18 @@ class MapData:
         # kept alongside the already-kept decoded feature dicts), a
         # deliberate, disclosed memory-for-speed tradeoff.
         self._predecode_caches = {layer: {} for layer in ALL_LAYERS}
+        # Per-layer road-name-match cache (README §10 "v18 -> v19" perf
+        # fix): {layer: {(tile_id, tol_m): [named_ranges per kept feature,
+        # ...]}}, index-aligned with decode_tile()'s own "feature_index"
+        # tag, same lifetime/invalidation policy as topo_caches (never
+        # evicted; reset alongside tile_caches on set_trim_oscillation()
+        # since a trim_oscillation toggle changes the underlying feature
+        # geometry a cached tile_id's named_ranges would otherwise still
+        # refer to). See ensure_area_loaded()'s own docstring for why this
+        # exists: avoids re-running match_feature() (a real per-vertex
+        # spatial lookup) over the WHOLE pooled feature set on every single
+        # pan/zoom reload, only tiles genuinely new to `self` pay that cost.
+        self.name_caches = {layer: {} for layer in ALL_LAYERS}
         self.covered_bbox = None    # (lon_min, lon_max, lat_min, lat_max)
         self.covered_layers = None  # list of layers covered_bbox's tiles were pooled from
         self.active_tile_ids = {}   # {layer: [tile_id, ...]} currently pooled for drawing
@@ -1552,6 +1564,7 @@ class MapData:
         self.tile_caches = {layer: {} for layer in ALL_LAYERS}
         self.topo_caches = {layer: {} for layer in ALL_LAYERS}
         self._predecode_caches = {layer: {} for layer in ALL_LAYERS}
+        self.name_caches = {layer: {} for layer in ALL_LAYERS}
 
     # --------------------------------------------------------- road names
 
@@ -1644,7 +1657,28 @@ class MapData:
         extra work entirely, so it costs nothing when connected-roads mode
         is off. Either way this method always runs inside a background
         `BackgroundTask` (see App._jump_to()/_maybe_reload_viewport()), so
-        the extra per-tile cost never blocks the Tk main thread."""
+        the extra per-tile cost never blocks the Tk main thread.
+
+        **README §10 "v18 -> v19" performance fix**: road-name matching
+        (`road_naming.match_feature()`, a real per-vertex spatial-index
+        lookup) used to re-run over the FULL pooled feature list on every
+        single call -- including tiles a PREVIOUS call had already decoded
+        AND already named identically, since neither the tile's own
+        geometry nor the (monotonically growing) `rd_index` covering it
+        ever changes once computed. At a wide, long-panned-around viewport
+        with hundreds of thousands of already-cached points, this meant
+        every incremental pan/zoom paid full re-naming cost again, on top
+        of whatever was genuinely new -- a real, measured source of the
+        "still laggy after every pan" complaint once the "v17 -> v18"
+        rasterization fix already made RENDERING itself fast. Fixed the
+        same way `topo_caches` already handles adjacency: `name_caches`
+        (see `__init__`) caches each tile's own `match_feature()` results
+        by `(tile_id, tol_m)`, index-aligned with `feature_index`, computed
+        once and reused forever after (reset only by
+        `set_trim_oscillation()`, alongside `tile_caches`, since that
+        toggle changes the underlying geometry). A tile revisited by a
+        later overlapping call now costs one dict lookup instead of a full
+        re-match."""
         # README §10 "v16 -> v17": no more layers_for_scale(scale, ...) gate
         # here -- the pooled set is purely `available_layers()` (what's
         # actually geo-indexed/ready) restricted by `allowed_layers` (the
@@ -1663,7 +1697,7 @@ class MapData:
             progress("Finding tiles covering the visible area...")
 
         per_layer_tile_ids = {}
-        features = []
+        any_tiles_with_features = False
         new_count = 0
         for layer in layers:
             tile_ids = self.tile_ids_in_bbox(layer, *ebox)
@@ -1685,28 +1719,52 @@ class MapData:
                         self.get_tile_adjacency(layer, tid)
                     except Exception:
                         pass
-
-            # Flat per-layer decode + pool -- NOT a cross product of layers.
-            # Each layer contributes exactly its own tiles' own decoded
-            # features once; summing 5 layers' worth of independent tile
-            # decodes is additive (roughly mp0's own count plus a modest
-            # top-up from the coarser layers, since mp0 dominates by design
-            # -- see README §10 "v4 -> v5" for real measured numbers), never
-            # combinatorial.
-            for tid in tile_ids:
-                features.extend(cache.get(tid, ()))
+                if cache.get(tid):
+                    any_tiles_with_features = True
 
         self.covered_bbox = ebox
         self.covered_layers = layers
         self.active_tile_ids = per_layer_tile_ids
 
-        if features:
+        # Name matching (README §10 "v18 -> v19" perf fix): CACHED per
+        # (layer, tile_id, tol_m) in `self.name_caches`, the same pattern
+        # already used for `topo_caches`/`_predecode_caches` -- previously
+        # this ran rdn.name_features() over the FULL pooled feature list on
+        # EVERY call (every pan/zoom/checkbox reload), including features
+        # from tiles that had already been named identically by an earlier,
+        # overlapping call. A wide viewport accumulates hundreds of
+        # thousands of already-cached, already-named points; re-running
+        # match_feature() (a real per-vertex spatial-index lookup) over all
+        # of them on every single incremental reload was pure, avoidable,
+        # repeated work -- the actual "still laggy after every pan" cost
+        # once the v17->v18 rasterization fix made RENDERING itself fast.
+        # Now only a NEWLY-decoded tile (or a tile whose want_adjacency
+        # fallback just ran, which doesn't affect naming) ever pays
+        # match_feature() again; a tile revisited by a later overlapping
+        # reload reuses its cached named_ranges list, aligned by
+        # feature_index exactly like topo_caches.
+        named = []
+        if any_tiles_with_features:
             if progress:
-                progress("Matching %d decoded features against real road names..." % len(features))
+                progress("Matching decoded features against real road names...")
             rd_index = self.rd_index_for_bbox(*ebox)
-            named = rdn.name_features(features, rd_index, tol_m=name_tol_m)
-        else:
-            named = []
+            for layer in layers:
+                cache = self.tile_caches[layer]
+                ncache = self.name_caches[layer]
+                for tid in per_layer_tile_ids[layer]:
+                    feats = cache.get(tid)
+                    if not feats:
+                        continue
+                    key = (tid, name_tol_m)
+                    ranges_list = ncache.get(key)
+                    if ranges_list is None:
+                        ranges_list = [rdn.match_feature(feat["points"], rd_index, tol_m=name_tol_m)
+                                        for feat in feats]
+                        ncache[key] = ranges_list
+                    for feat, named_ranges in zip(feats, ranges_list):
+                        new_feat = dict(feat)
+                        new_feat["named_ranges"] = named_ranges
+                        named.append(new_feat)
 
         return {
             "bbox": ebox,
@@ -2114,6 +2172,20 @@ class App:
         self.scale = 4000.0       # pixels per degree, adjusted on load
         self.pan_x = 0.0
         self.pan_y = 0.0
+        # Cached canvas size (README §10 "v18 -> v19" perf fix): _to_canvas()
+        # used to call self.canvas.winfo_width()/winfo_height() -- a real
+        # Tcl round-trip, not a cheap Python attribute read -- on EVERY
+        # single point/vertex it projects, i.e. hundreds of thousands of
+        # times per _redraw() at a dense pooled viewport. _redraw() itself
+        # already computes the canvas size exactly once at its own top for
+        # its own use; it now also stores it here so _to_canvas() (and any
+        # other per-point-frequency caller) reads a plain attribute instead.
+        # Kept fresh by _redraw() itself and by the canvas <Configure>
+        # binding (already wired to call _redraw() on every resize) -- None
+        # here just means "no redraw has happened yet", handled by
+        # _to_canvas()'s own live-query fallback.
+        self._canvas_w = None
+        self._canvas_h = None
         self._drag_start = None
         self.busy = False
         self._area_loading = False
@@ -2979,8 +3051,16 @@ class App:
     # ------------------------------------------------------------- canvas
 
     def _to_canvas(self, lon, lat):
-        w = self.canvas.winfo_width()
-        h = self.canvas.winfo_height()
+        # Perf (README §10 "v18 -> v19"): use the canvas size _redraw()
+        # already cached on self (see __init__'s own comment) instead of
+        # querying Tk live -- this function runs per-vertex, potentially
+        # hundreds of thousands of times per redraw. Falls back to a live
+        # query only if called before the first redraw has ever run.
+        w = self._canvas_w
+        h = self._canvas_h
+        if w is None or h is None:
+            w = self.canvas.winfo_width()
+            h = self.canvas.winfo_height()
         x, y = project_point(lon, lat, self.center_lon, self.center_lat, self.scale)
         return w / 2 + x + self.pan_x, h / 2 + y + self.pan_y
 
@@ -3095,6 +3175,10 @@ class App:
             return
         w = max(self.canvas.winfo_width(), 1)
         h = max(self.canvas.winfo_height(), 1)
+        # Cache for _to_canvas() (see __init__'s own comment, README §10
+        # "v18 -> v19") -- every per-vertex/per-edge _to_canvas() call below
+        # reads these instead of re-querying Tk.
+        self._canvas_w, self._canvas_h = w, h
 
         # Single rasterization target for this redraw -- every dot/edge
         # below is drawn into this PIL image, never as its own canvas item.
