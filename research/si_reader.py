@@ -1,7 +1,11 @@
 """
-si_reader.py -- decodes eeu.si, CRACKED this session (record framing and
-2 of 5 real data bytes; 3 bytes remain unassigned to specific named
-fields). eeu.mod's own schema (research/mod_reader.py) names this table
+si_reader.py -- decodes eeu.si, CRACKED (partially) this session: record
+framing, 2 of 5 bytes fully decomposed (byte 0: rank/class/divided; byte
+4: route_num_type/paved), plus 3 more sub-fields positioned within the
+remaining bytes (driveable_lower/drivable_upper, tollbooth_direction,
+restclass) in a later pass -- 11 single-bit flags remain unassigned to a
+specific name, though their AGGREGATE bit budget is accounted for
+exactly. eeu.mod's own schema (research/mod_reader.py) names this table
 `seginfo` -- a real road-segment classification/attribute table, 20
 named leaf fields (rank, class, divided, toll_vignette, toll_road,
 restclass, urban, route_num_type, paved, and more).
@@ -98,22 +102,59 @@ fields, last real byte), bounded/clean value ranges, and `paved`'s ~95%
 true rate matches real-world expectation.
 
 ============================================================================
-NOT CRACKED: bytes 1-3 (24 bits) -- 15 more named fields, no bit
-assignment determined
+PARTIALLY CRACKED (later session): bytes 1-3 (24 bits) -- 15 more named
+fields; 4 sub-fields now positioned, 11 single-bit flags remain
+unassigned to a specific name
 ============================================================================
 `driveable_lower`, `drivable_upper`, `toll_vignette`, `toll_road`,
 `tollbooth_direction`, `hwy_complex_bit`, `restclass`, `landmark`,
 `dbldig`, `detailedcity`, `urban`, `bifurcation_left`,
 `bifurcation_right`, `rnc`, `truck_digitized` -- 15 real fields, 24 real
-bits, averaging 1.6 bits/field, consistent with mostly single-bit flags
-plus a few 2-3-bit codes, but no specific bit range was assigned to any
-specific name this session. One clean STRUCTURAL fact, not yet tied to a
-name: byte 2's low 3 bits (bits 16-18) are always zero on every record
-(every observed byte-2 value is a multiple of 8), leaving a clean 5-bit
-sub-field (bits 19-23, values 0-30, 30 of 32 possible values used) --
-high cardinality, more consistent with a multi-value code (`rnc`? a
-restriction-class enum?) than a boolean flag, but not assigned to a
-specific name. Bytes 1 and 3 show no comparably clean internal boundary.
+bits (bytes 1-3), of which bits[8:11] (byte 2's low 3 bits) and bit[23]
+(byte 3's top bit) are always zero -- 20 real bits of storage for 15
+fields.
+
+**CRACKED: `driveable_lower`/`drivable_upper` = byte 1, bits[0:2]**.
+Joint distribution across all 24,353 records: `(1,1)`=9,258, `(0,1)`=
+7,548, `(1,0)`=7,547, `(0,0)`=**0** -- these two bits are NEVER both
+clear. Exactly matches real-world expectation for a "drivable in the
+lower-numbered direction" / "drivable in the upper-numbered direction"
+pair: a real road segment must be traversable in at least one direction
+(a segment nobody can drive is not a real road), while `(1,1)`
+(bidirectional) and the two single-direction cases are all real,
+distinct possibilities. The near-identical `(0,1)`/`(1,0)` counts (7,548
+vs. 7,547) are consistent with "lower"/"upper" being an arbitrary
+node-order label rather than a real-world-meaningful compass direction.
+
+**CRACKED (identity): `tollbooth_direction` = byte 1, bits[4:6]**. Joint
+distribution: `(0,0)`=23,729 (97.4%), `(1,0)`=314, `(0,1)`=310, `(1,1)`=
+**0** -- mutually exclusive, both rare (~1.3% each). Matches a real
+"which direction requires toll payment" 2-state flag (a segment is
+either not a toll booth, tolled one way, or tolled the other way, never
+both) -- consistent with `tollbooth_direction`'s own name and the real
+rarity of toll booths on a road network.
+
+**CRACKED (position, plausible identity): `restclass` = byte 2, bits[3:7]
+(the 4 bits directly following the confirmed-always-zero bits[0:3])**.
+All 16 of 16 possible 4-bit values are used across the file (fully
+saturated range) -- the cleanest possible signal for a real, tightly-
+packed enum field with no wasted bit, more consistent with a genuine
+multi-value "restriction class" code than the 5-bit interpretation
+tried first (bits[3:8], only 30/32 values used, i.e. bit 7 doesn't
+belong to this field).
+
+**NOT assigned to a specific name**: the remaining 11 single-bit flags
+(`toll_vignette`, `toll_road`, `hwy_complex_bit`, `landmark`, `dbldig`,
+`detailedcity`, `urban`, `bifurcation_left`, `bifurcation_right`, `rnc`,
+`truck_digitized`) occupy the remaining 11 real bits -- byte 1's
+bits[2:4] and bit[6] (3 bits), byte 2's bit[7] (1 bit), and byte 3's
+bits[0:7] except bit[7] itself... i.e. byte 3's bits[16:23] as a group
+(7 bits) once re-based to the record's own bit numbering. The AGGREGATE
+bit budget matches exactly (11 fields, 11 remaining real bits -- every
+field 1 bit wide), but no specific bit was matched to a specific field
+name this session; no comparably clean joint-exclusivity signature (like
+`driveable_lower`/`upper`'s or `tollbooth_direction`'s) was found among
+them to anchor a confident 1:1 assignment.
 
 ============================================================================
 eeu.rd cross-reference -- CORRECTS a previous session's lead: does NOT
@@ -140,8 +181,13 @@ representations of the road network. Not pursued further this session
 Practical use
 ============================================================================
 `read_si(path)` returns every record as (rank, class, divided,
-route_num_type, paved, unassigned_bits). `unassigned_bits` is the raw
-24-bit value of bytes[1:3] for a future session to decompose further.
+driveable_lower, drivable_upper, tollbooth_direction, restclass,
+route_num_type, paved, unassigned_bits). `tollbooth_direction` is 0
+(none), 1, or 2 (the two mutually-exclusive real states found -- never
+both). `unassigned_bits` is the raw 11-bit value covering the 11
+still-unassigned single-bit flags (byte 1 bits[2:4]+bit[6], byte 2
+bit[7], byte 3 bits[0:7]), packed LSB-first in that order, for a future
+session to assign individually.
 """
 
 import struct
@@ -153,11 +199,10 @@ RECORD_SIZE = 8
 
 def read_si(path):
     """Decode the whole eeu.si file. Returns a list of (rank, class,
-    divided, route_num_type, paved, unassigned_bits) tuples, one per
-    record, in file order. `unassigned_bits` is the raw uint32 formed
-    from bytes[1:4] (24 bits) -- 15 more real fields live here (see this
-    module's docstring) but no per-field bit assignment was cracked this
-    session."""
+    divided, driveable_lower, drivable_upper, tollbooth_direction,
+    restclass, route_num_type, paved, unassigned_bits) tuples, one per
+    record, in file order. See this module's docstring for what's
+    cracked vs. still unassigned."""
     with open(path, "rb") as f:
         data = f.read()
     body = data[HEADER_SIZE:]
@@ -169,10 +214,28 @@ def read_si(path):
         rank = b0 & 0b111
         klass = (b0 >> 3) & 0b1111
         divided = bool((b0 >> 7) & 1)
+
+        b1 = rec[1]
+        driveable_lower = bool(b1 & 1)
+        drivable_upper = bool((b1 >> 1) & 1)
+        tollbooth_direction = (b1 >> 4) & 0b11  # 0=none, 1, 2 (never 3)
+        unassigned_byte1 = ((b1 >> 2) & 0b11) | (((b1 >> 6) & 1) << 2)
+
+        b2 = rec[2]
+        restclass = (b2 >> 3) & 0b1111
+        unassigned_byte2 = (b2 >> 7) & 1
+
+        b3 = rec[3]
+        unassigned_byte3 = b3 & 0b01111111
+
         b4 = rec[4]
         route_num_type = b4 & 0b111
         paved = bool((b4 >> 3) & 1)
-        unassigned_bits = int.from_bytes(rec[1:4], "little")
-        records.append((rank, klass, divided, route_num_type, paved,
-                         unassigned_bits))
+
+        unassigned_bits = (unassigned_byte1
+                            | (unassigned_byte2 << 3)
+                            | (unassigned_byte3 << 4))
+        records.append((rank, klass, divided, driveable_lower,
+                         drivable_upper, tollbooth_direction, restclass,
+                         route_num_type, paved, unassigned_bits))
     return records

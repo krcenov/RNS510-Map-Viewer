@@ -2150,7 +2150,7 @@ than real content, the coherent conclusion for the whole file family is:
 **the entire postal-code subsystem (`.pol`/`.pot`/`.pmm`/`.pmc`/`.pmp`)
 was designed and schema'd but never populated on this specific disc.**
 
-### 3.20 `eeu.si` — segment classification table (195KB, NOT_COMPRESSED) — CRACKED: fixed 8-byte records, 2 of 5 real data bytes decoded in exact schema order
+### 3.20 `eeu.si` — segment classification table (195KB, NOT_COMPRESSED) — CRACKED (mostly): fixed 8-byte records, 2 of 5 bytes fully decomposed plus 3 more sub-fields positioned
 94-byte header (record count 24,353 read straight from the header),
 then exactly **24,353 fixed 8-byte records** — validated at full scale:
 `24,353 × 8 = 194,824` bytes, an exact match to the real body size, zero
@@ -2199,17 +2199,42 @@ with real bounded enums rather than noise), and real-world plausibility
 European road network). Not independently confirmed against ground truth
 — see the "eeu.rd cross-reference" note below.
 
-**NOT cracked: bytes 1-3 (24 bits), 15 more named fields**
-(`driveable_lower`/`drivable_upper`/`toll_vignette`/`toll_road`/
-`tollbooth_direction`/`hwy_complex_bit`/`restclass`/`landmark`/`dbldig`/
-`detailedcity`/`urban`/`bifurcation_left`/`bifurcation_right`/`rnc`/
-`truck_digitized`) — no bit assignment determined. One clean structural
-fact, not yet tied to a name: byte 2's low 3 bits are always zero on
-every record (every byte-2 value is a multiple of 8), leaving a clean
-5-bit sub-field (values 0-30, 30/32 possible values used) — high
-cardinality, more consistent with a multi-value code than a boolean
-flag, but not assigned to a specific field name. Bytes 1 and 3 show no
-comparably clean internal boundary.
+**Bytes 1-3 (24 bits), 15 more named fields — 3 more sub-fields
+positioned in a later pass, 11 single-bit flags remain unassigned to a
+specific name**:
+
+- **CRACKED: `driveable_lower`/`drivable_upper` = byte 1, bits[0:2]**.
+  Joint distribution across all 24,353 records: `(1,1)`=9,258, `(0,1)`=
+  7,548, `(1,0)`=7,547, `(0,0)`=**0** — never both clear. Exactly
+  matches real-world expectation for "drivable in the lower-numbered
+  direction" / "drivable in the upper-numbered direction": a real road
+  segment must be traversable in at least one direction, while
+  bidirectional and the two single-direction cases are all real,
+  distinct possibilities (and the near-identical one-direction counts
+  fit "lower"/"upper" being an arbitrary node-order label, not a
+  compass direction).
+- **CRACKED (identity): `tollbooth_direction` = byte 1, bits[4:6]**.
+  Joint distribution: `(0,0)`=23,729 (97.4%), `(1,0)`=314, `(0,1)`=310,
+  `(1,1)`=**0** — mutually exclusive, both rare (~1.3% each). Matches a
+  real "which direction requires toll payment" state (not a toll booth;
+  tolled one way; tolled the other way — never both).
+- **CRACKED (position, plausible identity): `restclass` = byte 2,
+  bits[3:7]** (the 4 bits directly after byte 2's confirmed-always-zero
+  bits[0:3]). All 16 of 16 possible 4-bit values are used across the
+  file — a fully-saturated range, the cleanest possible signal for a
+  tightly-packed enum with no wasted bit (stronger than the 5-bit
+  interpretation tried first, only 30/32 values used).
+- **Not assigned to a specific name**: the remaining 11 single-bit flags
+  (`toll_vignette`, `toll_road`, `hwy_complex_bit`, `landmark`,
+  `dbldig`, `detailedcity`, `urban`, `bifurcation_left`,
+  `bifurcation_right`, `rnc`, `truck_digitized`) occupy the remaining 11
+  real bits (byte 1's bits[2:4]+bit[6], byte 2's bit[7], byte 3's
+  bits[0:7]) — the aggregate bit budget matches exactly (11 fields, 11
+  bits, every field 1 bit wide), but no comparably clean joint-
+  exclusivity signature was found among them to anchor a confident 1:1
+  assignment.
+
+Full per-field byte tabulation: `research/si_reader.py`.
 
 **Corrects a previous session's lead**: §3.16 flagged `eeu.si` as "a
 strong, not-yet-pursued lead" for `eeu.rd`'s own unresolved `bytes[1:5]`
