@@ -2549,6 +2549,93 @@ into `eeuz.prd` — also failed (lands on unrelated Turkish content).
 `eeuz.cl`/`eeuz.ct` and `eeuz.fea` were not tested. Left open for a
 future session.
 
+### 3.24 `config/create_cd` and 5 disc-root subsystems outside `db/` — CRACKED (the build script); one new subsystem (`EDB/POI/POI.DB3`) opened and confirmed; 4 more identified, not yet opened
+`config/create_cd` (5,105 bytes, plain text) is the disc's own
+build/mastering script — the literal, authoritative record of how
+`CD_8555.ISO` was assembled, not inferred or reverse-engineered.
+Shell-like syntax (`mkdir`/`cd`/`cp`/`cp -r`), dated 22.07.2019 (matching
+every file's real mtime on this disc), and self-referential — its own
+last lines copy itself into `config/create_cd`. Full details:
+`research/create_cd_reader.py`.
+
+**Confirms the origin of the `EEU50530910.84` version string** every
+NOT_COMPRESSED file's own 94-byte header carries (§3, §3.1): most `cp`
+lines source from `v:\db\PRODUCTION\NT\VW\EU2019Q1\eu910\eeu\eeu\
+505.30.910.1.84\...`, a real internal Navteq/Siemens production
+file-server path. The correspondence is strong but not a trivial
+dot-stripping match — see `create_cd_reader.py` for the exact digit-by-
+digit comparison.
+
+**Confirms `ZIP_3kb` is the source tree's own real folder name** for
+every `eeuz.*` file's compressed variant — `block_size=3072` (§3.5) was
+a deliberately named packaging choice at the source, not just an
+empirically observed constant.
+
+**5 disc-root subsystems, never examined before this session** (all
+present on the reference disc, alongside the already-extensively-
+investigated `db/`):
+
+- **`EDB/POI/POI.DB3`** — CRACKED: a real, standard SQLite database
+  (open directly, no proprietary container). Confirms this project's
+  own firmware investigation (§2.5), which had already predicted a
+  `.db3` POI file at exactly this path from `vdo.nav.api.edb.*` strings
+  but never had disc access to open one. **4,733,183 real POIs**, most
+  with a full address (house number/street/city/region/country, each
+  dedup'd through a shared 5,091,214-row string pool — the same pattern
+  `eeuz.prl` uses). Real, immediately-recognizable content: fuel-brand
+  POIs `Q8`/`ENI`/`TAMOIL`/`ESSO`/`IP` (all genuine European petroleum
+  retailers) under a real `"gas station"` category. **Confirms this POI
+  database is shared across the whole VW Group brand family**: real
+  category names include `"main seat"`/`"main skoda"`/`"main vw"`/
+  `"main bentley"`. One metadata row's own ClearCase config-spec text
+  names the real internal codebase `arriba2`/`arriba2_VW` directly —
+  independently corroborating `eeu.mod`'s own `Arriba`/`5.3` self-
+  identification (§3.16) from the OTHER side (the tool that built this
+  database, not just the firmware that reads it) — and a Java Swing
+  authoring tool under the same `vdo/nav/...` package namespace already
+  found in the firmware. **Not cracked**: `Poi_BaseAttributes.
+  Coordinate` is a single 64-bit integer, not this disc's usual
+  `/100000`-scaled int32 lon/lat pair — likely a space-filling-curve
+  index or other proprietary encoding, not reverse-engineered this
+  session. Full details: `research/poi_db_reader.py`.
+- **`telemat/tmc2/`** — CRACKED (the config file); the actual `.lt`/`.et`
+  binary tables NOT decoded. Real, standard ALERT-C (ISO 14819) TMC
+  traffic location tables for 14 European countries, plus 19
+  per-language event-text tables. `TMCCONFIG.ini` is plain,
+  self-documenting text — `PROD = "RNS_EU_38"`, and one line per country
+  giving its real ALERT-C Country Code + Location Table Number, ISO
+  3166-1 alpha-2 code, and a real bounding box in plain decimal degrees
+  (Germany: `5.877°E–15.0087°E, 47.387°N–55.017°N` — immediately
+  verifiable as correct, no scaling/validation needed). **A strong new
+  lead for `eeu.tmc`** (still "genuinely unexplored" as of the prior
+  session): scanning its first ~20KB for short ASCII-digit runs finds a
+  real sequence of small, mostly-ascending integers (117, 118, 225,
+  259, ..., up to 951) — consistent with real ALERT-C Location Code
+  (LCD) point numbers. Not cross-checked against any country's own
+  `.lt` content, and no surrounding field structure decoded — left as a
+  concrete starting point for a future, dedicated `eeu.tmc` session (out
+  of scope for this one).
+- **`tpd/`** — `TPD3.DIC` + per-language subfolders (`CZE`/`DUT`/`ENG`/
+  `FRE`/`GER`/`ITA`/`POR`/`SPA`) with `.HTM` template pages
+  (`CATTEMPLATE.HTM`, `SF_*.HTM`) plus icon/image/table resources.
+  Plausibly POI-category icons and per-language help/legal template
+  pages. Identified by name only, not opened.
+- **`speech/`** — `SpeechRes.xml` + 8 per-locale ZIPs
+  (`uvo_csCZ_01.zip`, etc.), sourced from a different, much OLDER
+  internal server path (dated 2006) than the map data itself — a
+  long-lived, slowly-updated shared speech-resource component. A real
+  lead for the actual TTS ENGINE, as opposed to the phoneme/
+  pronunciation DATA this project has already extensively cracked
+  (`eeu.abc`/`eeuz.pca`/`eeuz.prd`/`eeuz.pct`/`eeu.pcl`). Not opened.
+- **`dbal/`** — `VERSIONS.CFG` + 5 versioned `DBAL.OUT` binaries
+  ("Database Abstraction Layer", one per supported head-unit software
+  generation). Not opened (binary, no obvious text structure from a
+  quick look).
+
+Also 2 disc-root files not opened this session: `cdrom.toc` (disc
+mastering table-of-contents) and `DBINFO.TXT` (name suggests a
+human-readable manifest — a good first candidate for a future session).
+
 ---
 
 ## 4. ISO container handling
