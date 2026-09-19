@@ -2069,16 +2069,74 @@ particular release — not independently confirmed (no other region/market
 disc was available this session to compare against a populated
 postal-code subsystem).
 
-**Open question, not resolved**: why a 4-byte record when `eeu.mod`'s
-schema declares 13 (`postalcodeListMergeCity`)/15
-(`postalcodeListSeparate`) named fields? `eeu.mod`'s own exact per-field
-binary type/width encoding was never fully cracked (§3.16), so this isn't
-a contradiction so much as an unresolved gap — plausibly most of those
-logical fields are zero-width/flag-only in the compiled physical layout
-when unpopulated, and only the one physically-fixed field (this uint32)
-actually exists on disc; or the schema describes a richer
-pre-compaction data model than the final physical format. Not testable
-without a populated postal-code disc to compare against.
+**RESOLVED (§3.19): why a 4-byte record when `eeu.mod`'s schema counts 13
+(`postalcodeListMergeCity`)/15 (`postalcodeListSeparate`) strings per
+block?** Those counts include 11 shared boilerplate strings every
+`eeu.mod` table block carries (table name, `...Header` struct name, and
+the 9 `stamp`/`copyright`/.../`byte_cnt` header-struct fields, §3.16)
+plus 1 more struct-name wrapper — not 13/15 independent data fields. The
+REAL per-record payload is `mergedListIndex` (1 field) for `eeu.pmc` and
+`type`+`listIndex` (2 fields, packed under one wrapper struct name
+`type_and_listIndex` — strongly suggesting a single bit-packed physical
+word) for `eeu.pmm`. Both resolve cleanly to the single 4-byte field
+found by direct inspection. See §3.19 for the investigation that found
+this (`eeu.pmp`'s own schema independently confirms the pattern — same
+lone-`mergedListIndex` shape as `eeu.pmc`).
+
+### 3.19 `eeu.pmp`, `eeu.pol`, `eeu.pot` — postal-code merge/list/tree files (94 bytes each, NOT_COMPRESSED) — IDENTIFIED: genuinely empty on this disc, `eeu.mod`'s schema reconstructs the intended design
+All 3 share the exact same 94-byte empty template as `eeu.pcl` (§3.17,
+identical header bytes except the `file_type` byte): file size is exactly
+94, `total_size` (`bytes[90:94]`) also reads 94 — an exact match, not one
+of the 2 known "stores body size instead" exceptions — and
+`record_count_lo16` (`bytes[86:88]`) reads `0`. `file_type`
+(`bytes[84:86]`): `eeu.pmp`=65, `eeu.pol`=61, `eeu.pot`=62. `files.cfg`'s
+own comments: `34 = pol, 0, cached # postalcode list file`,
+`35 = pot, 0, cached # postalcode tree file`, `38 = pmp, 0, cached
+# postalcode merge postalcode file`.
+
+Pulling each file's real (non-boilerplate) field list straight from
+`eeu.mod`'s schema (`research/mod_reader.py`'s `extract_blocks()`) gives
+a coherent picture of a 3-stage postal-code lookup pipeline, none of it
+populated on this disc:
+- **`eeu.pot` (`postalcodeTree`)** — real fields: `key`,
+  `nextSelectableCharTreeIndex`, `nextSelectableCharTreeCount`,
+  `startDataListIndex`, `dataListCount`. **Byte-for-byte the same
+  field-name template already found for `roadTree` (`eeuz.rt`) and
+  `cityTree` (`eeuz.ct`)** (§3.7/§3.8) — i.e. `eeu.pot` was designed as a
+  character-trie search index over postal-code strings, using the exact
+  same data structure already used for road-name and city-name
+  autocomplete/search (container differs though: `eeuz.rt`/`.ct` are
+  FLAT_COMPRESSED, `eeu.pot` is plain NOT_COMPRESSED per `files.cfg`'s
+  own compressionType column). The exact byte-level trie-node encoding
+  itself is still not fully cracked even for the *populated*
+  `eeuz.rt`/`.ct` (`research/city_reader.py`'s own docstring calls it
+  "the same still-uncracked variable-node structure"), so `eeu.pot` being
+  empty loses nothing that was otherwise crackable this session either
+  way.
+- **`eeu.pol` (`postalcodeList`)** — real fields: `postalcode`,
+  `Latitude`, `Longitude`, `ListIdMain`. A real postal-code-to-coordinate
+  lookup record: the postal code string itself, a representative point
+  (the disc's usual `/100000` int32 convention elsewhere), and a
+  `ListIdMain` foreign key — plausibly into the same kind of city/merge-
+  list indices the `.pmc`/`.pmm`/`.pmp` trio manage, though this specific
+  link was **not independently confirmed** (no populated `eeu.pol` was
+  available this session to check against).
+- **`eeu.pmp` (`postalcodeListMergePostalcode`)** — real field: a single
+  `mergedListIndex`. Structurally the third sibling of the already-
+  cracked `eeu.pmc`/`eeu.pmm` pair (§3.18) — same "merge" naming
+  convention, same lone-index shape, and the cross-reference that
+  resolved §3.18's own open question above.
+
+Together the 3 "merge" files (`.pmc` city-side, `.pmm` type/list
+separator, `.pmp` postalcode-side) read as a set of redirect/
+consolidation tables for cases where postal codes and cities don't map
+1:1 (one postal code spanning multiple cities, or one city needing
+multiple postal-code entries) — a real, sensible design, just never
+populated on this East-Europe V17 release. Combined with §3.18's finding
+that `eeu.pmc`/`.pmm` carry a provable placeholder identity array rather
+than real content, the coherent conclusion for the whole file family is:
+**the entire postal-code subsystem (`.pol`/`.pot`/`.pmm`/`.pmc`/`.pmp`)
+was designed and schema'd but never populated on this specific disc.**
 
 ---
 

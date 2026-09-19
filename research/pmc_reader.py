@@ -63,22 +63,43 @@ region/market disc was available this session to compare against a
 populated postal-code subsystem).
 
 ============================================================================
-Open question: why a 4-byte record when eeu.mod's schema declares 13
-(`postalcodeListMergeCity`) / 15 (`postalcodeListSeparate`) fields?
+RESOLVED (later session, via investigating eeu.pmp/.pol/.pot,
+research/postal_reader.py): why a 4-byte record when eeu.mod's schema
+COUNTS 13 (`postalcodeListMergeCity`) / 15 (`postalcodeListSeparate`)
+strings in each block?
 ============================================================================
-Not resolved this session. eeu.mod's own docstring already notes the
-exact binary type/width encoding around each field name was never fully
-cracked -- plausible explanations, untested: (a) most of those 13/15
-logical fields are zero-width/flag-only in the compiled physical format
-and only manifest when real data populates them, so the "true" populated
-record would be wider than 4 bytes and this disc's placeholder simply
-uses the field list's FIRST (or only physically-fixed) field; (b) the
-schema's field list describes a richer pre-compaction data model than
-the final on-disc physical layout. Given the record boundary is exact at
-4 bytes/record (zero leftover bytes, header count matches exactly), this
-is not a byte-alignment guess -- just an open question about what the
-*other* declared fields would look like if this disc's data were
-populated.
+The "13"/"15" counts include 11 shared boilerplate strings every table
+block carries (the table name, its `...Header` struct name, and the
+`stamp`/`copyright`/`db_release`/`db_version`/`comp_version`/`dbID`/
+`fileID`/`rec_cnt`/`byte_cnt` header-struct fields, README S3.16) plus 1
+more struct-name wrapper (`cityListMerge`/`cityAndPostalcodeListSeparate`)
+-- NOT 13/15 independent per-record data fields. Pulling eeu.mod's exact
+per-block field list (mod_reader.extract_blocks()) shows the REAL
+per-record payload is:
+
+    eeu.pmc (postalcodeListMergeCity):    mergedListIndex        (1 field)
+    eeu.pmm (postalcodeListSeparate):     type, listIndex        (2 fields,
+                                            under wrapper struct name
+                                            `type_and_listIndex` -- strongly
+                                            suggesting they're bit-packed
+                                            into ONE physical word, not two
+                                            separate ones)
+
+Both resolve cleanly to a single 4-byte physical field, exactly matching
+what was found here by direct inspection. `eeu.pmp`
+(`postalcodeListMergePostalcode`) -- structurally the third sibling in
+this same file family -- independently confirms the pattern: its own
+real payload is a lone `mergedListIndex` field too (see
+research/postal_reader.py), and it's also a bare 94-byte empty header
+(zero records) on this disc, so its own physical record width couldn't
+be checked directly, but the schema match to eeu.pmc is exact.
+`type_and_listIndex`'s packed-bitfield naming also cleanly explains why
+`eeu.pmm`'s placeholder content is STILL a pure identity sequence despite
+nominally carrying 2 logical fields: a `type` field packed into unused
+high bits reads as 0 for every value in a 0..4,084,103 range (needs only
+22 of 32 bits), consistent with "type" defaulting to an unset/zero
+sentinel while "listIndex" fills the low bits with the placeholder
+sequence.
 
 ============================================================================
 Practical use
