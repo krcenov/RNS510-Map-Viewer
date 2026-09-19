@@ -180,7 +180,7 @@ are for the East Europe (`eeu`) dataset on this specific disc.
 - Remaining 7 prefix bytes unresolved (best-effort: copied from a nearby similar entry
   when appending).
 
-### 3.3 `eeu.iof` — parallel array to `.rd` (52.8MB, NOT_COMPRESSED) — PARTIALLY CRACKED; a real "nearby street names" pointer mechanism found and validated this session for a ~0.36% subset
+### 3.3 `eeu.iof` — parallel array to `.rd` (52.8MB, NOT_COMPRESSED) — PARTIALLY CRACKED; a real "nearby street names" pointer mechanism found and validated for a ~0.36% subset, and which records become anchors substantially narrowed
 - Same 94-byte header, then fixed **6-byte records**, exactly the same count as
   `eeu.rd` (`(filesize - 94) / 6` matches). One entry per road record, same order.
 - Layout: `[uint32 LE "zero4"][uint8 "vb"][uint8 "c80"]`. The earlier
@@ -236,14 +236,45 @@ are for the East Europe (`eeu`) dataset on this specific disc.
   distinct values at full scale — see §3.1); a coordinate-grid local-
   road-density proxy (a literal intersection-count hypothesis, given the
   file's own real name) shows only a weak correlation (`r ≈ 0.04-0.15`).
+- **A later session: which records become anchors, substantially
+  narrowed (route-numbered roads strongly, not exclusively, enriched)**.
+  Anchor names were tested against a simple "route-code-like" pattern
+  (short, mostly-numeric, optional 1-4 letter prefix — `B215`/`SP246`/
+  `L1`/`SS18`/`331`-shaped). At FULL FILE SCALE: 6.00% of all 8,809,081
+  `eeu.rd` records match (528,463), vs. **44.80%** of the 31,318 anchor
+  records (14,031) — anchors are **7.5x more likely** to have a
+  route-code-like name, a real, large, full-scale-confirmed enrichment,
+  visually obvious on inspection (`B215`, `SP246`, `L551`, `L1`, `T1810`,
+  `SS18`, `N23`, `B96`, `L675`, interleaved with genuine settlement/
+  street names). **Not a clean 1:1 rule though**: of the 528,463
+  route-like-named records in the whole file, only 2.66% become anchors
+  — combined with the already-confirmed geographic clustering and
+  "anchor's own name almost never in its own list" findings, the most
+  consistent picture is anchors being a curated, DEDUPLICATED subset —
+  roughly one anchor per distinct real-world route/road identity, not
+  one per `eeu.rd` segment (a single route like `B215` has many separate
+  segment records along its length). Which specific segment of a
+  multi-segment route gets picked, and what determines the remaining
+  ~55% of settlement-name anchors, is still open.
+- **A later session's 3rd `count` cross-reference, tested and REFUTED**:
+  `eeuz.rl`'s own per-`eeu.rd`-index reference count (§3.7's cracked
+  `.rl` `bytes[0:4]` "candidate index into `eeu.rd`" field, built the
+  same way as the `.il`-reference-count correlation, over all
+  46,432,934 `.rl` records) shows a slightly NEGATIVE correlation with
+  the common-case `count` (`r ≈ -0.08`) — weaker than even the weak
+  `.il` signal (`r ≈ 0.21`) and the wrong sign to be the same underlying
+  quantity, despite `.rl` covering a much larger fraction of `eeu.rd`
+  (95.0%, 8,372,058/8,809,081 records) than `.il` (8.4%, 739,211
+  records).
 - **Still open**: (1) the common-case `count`'s exact meaning beyond the
-  `eeu.il`-reference-count correlation above; its real range is 0-255,
-  heavily skewed toward small values (2/1/3/0/4 are the 5 most common,
-  >70% of records combined). (2) which ~31,318 of 8.8M records become
-  anchors isn't recovered — not a clean 1:1 with `eeu.cty`'s 79,738
-  top-level settlements either. (3) `type`'s exact bit-level meaning
-  beyond the 0x80-vs-{0,1} discriminator (rare 129-255 outliers on the
-  common-case side, and 2-7 on a few confirmed anchors, aren't
+  `eeu.il`-reference-count correlation above (now 3 hypotheses tested:
+  `eeu.il` reference count — weak positive; local road density — weak;
+  `eeuz.rl` reference count — weak negative, refuted); its real range is
+  0-255, heavily skewed toward small values (2/1/3/0/4 are the 5 most
+  common, >70% of records combined). (2) the exact anchor-selection rule
+  beyond the route-number enrichment above. (3) `type`'s exact bit-level
+  meaning beyond the 0x80-vs-{0,1} discriminator (rare 129-255 outliers
+  on the common-case side, and 2-7 on a few confirmed anchors, aren't
   individually explained). (4) whether an anchor's own list is ordered
   by anything checked (alphabetical: no, only 16/100 sampled; distance/
   on-disk-order: not tested).

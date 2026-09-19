@@ -6,10 +6,13 @@ records): an eeu.iof record is a pointer into eeu.il describing a
 COUNT of consecutive eeu.il entries to read from there -- and eeu.mod's
 own schema (a later session) confirms the real field names (`offset`,
 `type`, `count`) and gives `type`'s value shape a clean discriminator
-reading (see below). The much larger common case (~99.6% of records)
-still has an unexplained per-record `count` value -- one real, moderate
-correlation found (with `eeu.il`'s own per-road reference count), two
-other hypotheses tested and refuted -- see "What remains open" below.
+reading (see below). A LATER session substantially narrowed WHICH
+records become anchors (strongly, 7.5x, enriched for route-numbered
+roads at full-file scale -- not a clean 1:1 rule) -- see below. The much
+larger common case (~99.6% of records) still has an unexplained
+per-record `count` value -- one real, moderate correlation found (with
+`eeu.il`'s own per-road reference count), 3 other hypotheses tested and
+refuted -- see "What remains open" below.
 
 ============================================================================
 Record layout (6 bytes, same 94-byte SIEMENS header + fixed-record
@@ -166,26 +169,75 @@ bounded 0-4/0-12 ranges, and a `divided` rate of 46.5% vs. `eeu.si`'s
 that same encoding.
 
 ============================================================================
+A LATER session: which records become "anchors" -- SUBSTANTIALLY
+NARROWED (route-numbered roads strongly, not exclusively, enriched);
+one more `count` cross-reference tested and REFUTED
+============================================================================
+**Tested and CONFIRMED (a real, strong, full-scale enrichment -- not a
+clean 1:1 rule)**: anchor records' own `eeu.rd` names are matched against
+a simple "route-code-like" pattern (short, mostly-numeric, optional 1-4
+letter prefix, e.g. `B215`, `SP246`, `L1`, `SS18`, `331` -- the same
+shape as the German/Italian/Romanian/Ukrainian route codes spot-checked
+by hand in the original write-up above). At FULL FILE SCALE (not
+sampled):
+
+    All 8,809,081 eeu.rd records:  528,463 route-like (6.00%)
+    31,318 anchor records:          14,031 route-like (44.80%)
+    Non-anchor records:            514,432 route-like (5.86%)
+
+Anchors are **7.5x more likely** to have a route-code-like name than the
+general population -- a real, large, full-scale-confirmed signal, and
+visually obvious on inspection (a random 40-anchor sample: `B215`,
+`SP246`, `L551`, `L1`, `T1810`, `SS18`, `N23`, `B96`, `L675`, and more,
+interleaved with genuine settlement/street names like `POBEDY`,
+`CHERNOMORSKIY`, `ROMA`, `ALEXANDRU IOAN CUZA`).
+
+**But NOT a clean 1:1 rule**: of the 528,463 route-like-named records in
+the WHOLE file, only 2.66% (14,031) are anchors -- so "has a route-code
+name" is far from sufficient on its own. Combined with the already-
+confirmed geographic clustering and the "anchor's own name almost never
+appears inside its own list" finding above, the most consistent picture:
+anchors are a curated, DEDUPLICATED subset -- roughly one anchor per
+distinct real-world route/road identity, not one per `eeu.rd` SEGMENT
+(a single real route like `B215` gets many separate `eeu.rd` segment
+records along its length, only a small fraction of which become the
+anchor for that area). The exact selection rule (which segment of a
+multi-segment route gets picked, and what determines the ~55% of anchors
+that are settlement names rather than route codes) is still not
+recovered.
+
+**Tested and REFUTED: `eeuz.rl`'s own per-`eeu.rd`-index reference
+count** (research/road_index_reader.py's cracked `.rl` `bytes[0:4]`
+"candidate index into eeu.rd" field, built the same way as the
+`eeu.il`-reference-count correlation above -- `np.bincount` over all
+46,432,934 `.rl` records) shows, if anything, a slightly NEGATIVE
+correlation with the common-case `count` (`r ≈ -0.08` over all
+8,809,081 records) -- weaker than even the weak `eeu.il` signal (`r ≈
+0.21`), and the wrong sign to be the same underlying quantity. `.rl`
+covers a much larger fraction of `eeu.rd` (95.0%, 8,372,058/8,809,081
+records referenced at least once) than `.il` (8.4%, 739,211 records) --
+consistent with `.rl` being a broad name-search index unrelated to
+whatever `count` is actually counting, not a narrower, more targeted
+correlate of it.
+
+============================================================================
 What remains open
 ============================================================================
   - **The common-case `vb`/`count` value's own exact meaning** is still
-    not pinned down -- only the `eeu.il`-reference-count correlation
-    above (real but not exact) was found this session. Candidate next
-    steps: does `count` correlate with which MAP_COMPRESSED
-    generalization layers a road's own geometry appears in (see
-    map_compressed_reader.py's build_geo_index()/find_tile_for_coord()
-    plus road_naming.py's match_feature()); does it correlate with
-    `eeuz.rl`/`eeuz.prl`'s own per-road name-search entry count (a
-    different, not-yet-tried search-index cross-reference).
-  - **Which ~31,318 of 8,809,081 records become "anchors"** (nonzero
-    `zero4`) is not recovered. Not a simple "one per real eeu.cty
-    settlement" -- eeu.cty has 79,738 top-level (no-comma) entries on the
-    reference disc, over 2x the anchor count, so it's not a clean 1:1
-    correspondence with real named places either. Worth checking whether
-    anchors are more common on route-numbered roads specifically (several
-    anchor examples above ARE route codes), or tied to some other already-
-    decoded field (e.g. eeu.rd's own bytes[5:8] "candidate shared-geometry
-    pointer").
+    not pinned down -- the `eeu.il`-reference-count correlation (`r ≈
+    0.21`) remains the only real, non-refuted signal found so far (now 3
+    hypotheses tested: `eeu.il` reference count -- weak positive; local
+    road density -- weak; `eeuz.rl` reference count -- weak negative,
+    refuted). Candidate next step: does `count` correlate with which
+    MAP_COMPRESSED generalization layers a road's own geometry appears in
+    (see map_compressed_reader.py's build_geo_index()/
+    find_tile_for_coord() plus road_naming.py's match_feature()) -- not
+    yet tried.
+  - **The exact anchor-selection rule** is narrowed (route-numbered roads
+    strongly enriched, 7.5x, but far from sufficient alone -- see above)
+    but not fully recovered -- which specific segment of a multi-segment
+    route becomes the anchor, and what determines the remaining ~55% of
+    settlement-name anchors, is still open.
   - **`c80`'s exact bit-level meaning** is not pinned down -- 0x80 for the
     common case, 0 or 1 (never checked past that) for confirmed anchors,
     and a long tail of other values (129-255) on a very small number of
@@ -206,17 +258,34 @@ reads the actual list for one anchor (offset, count) against a real,
 already-open `eeu.il` byte string. `il_reference_counts()` parses the
 whole `eeu.il` file once and returns a `{rd_index: reference_count}`
 dict -- the basis for the `count`/`eeu.il`-reference-count correlation
-above, reusable for testing further hypotheses. Neither of the two
-already-cracked prerequisite files needs re-implementing here: `.il`'s
-own `[11-byte prefix][name][0x00]` format is read inline (see README
-S3.2), not imported from a separate module (there isn't a dedicated
-`.il` reader module yet either -- `rns510_core.py` handles `.il` for the
-editing tool directly).
+above, reusable for testing further hypotheses. `is_route_like_name()`
+is the route-code pattern test behind the anchor-enrichment finding
+above (short, mostly-numeric name with an optional 1-4 letter prefix --
+`B215`/`SP246`/`L1`/`331`-shaped). Neither of the two already-cracked
+prerequisite files needs re-implementing here: `.il`'s own `[11-byte
+prefix][name][0x00]` format is read inline (see README S3.2), not
+imported from a separate module (there isn't a dedicated `.il` reader
+module yet either -- `rns510_core.py` handles `.il` for the editing tool
+directly).
 """
 
+import re
 import struct
 
 import numpy as np
+
+_ROUTE_LIKE_RE = re.compile(rb"^[A-Za-z]{0,4}-?\d{1,5}[A-Za-z]?$")
+
+
+def is_route_like_name(name):
+    """True if `name` (raw eeu.rd name bytes) has the shape of a European
+    route code (short, mostly-numeric, optional 1-4 letter prefix --
+    B215/SP246/L1/SS18/331-shaped). The pattern test behind the anchor
+    route-enrichment finding in this module's docstring: 44.80% of
+    eeu.iof's 31,318 anchor records match, vs. 5.86% of non-anchors, at
+    full file scale."""
+    return bool(name) and bool(_ROUTE_LIKE_RE.match(name))
+
 
 IOF_HEADER_SIZE = 94
 IOF_RECORD_SIZE = 6
