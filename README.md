@@ -1733,18 +1733,17 @@ shields) has no counterpart in anything decoded so far.
     with a genuine hash table rather than one uniform flat array). Getting
     three independent 32-bit values to land adjacently, correctly grouped,
     is not a coincidence at this project's evidentiary standard.
-  - **Load-bearing negative finding**: Turku, Trondheim, and Oslo (`.fea`
-    entries all around file offset ~550MB) have **no record in either known
-    directory table**, in any encoding, phase, or field order — confirmed
-    absent, not just unfound. Since the embedded table was shown to index
-    an entry (Iasi, 363MB) far past its own physical location (306-311MB),
+  - **Load-bearing negative finding (RESOLVED by a later session — see
+    below)**: Turku, Trondheim, and Oslo (`.fea` entries all around file
+    offset ~550MB) had **no record in either of the 2 known directory
+    tables**, in any encoding, phase, or field order — confirmed absent,
+    not just unfound. Since the embedded table was shown to index an
+    entry (Iasi, 363MB) far past its own physical location (306-311MB),
     a directory table is not restricted to indexing the payload immediately
     following it — this is a keyed/hash index over (at least a large part
     of) the file, not a per-physical-section table. The natural explanation
-    for the 3 missing cities is at least a THIRD, unlocated directory-table-
-    shaped region further into the file (a good next step: an
-    escalating-window scan past file offset 311,300,723 watching for
-    another multi-MB non-zlib gap with the same stride-12 signature).
+    for the 3 missing cities was at least a THIRD, unlocated directory-table-
+    shaped region further into the file — found and confirmed below.
   - **Why this is a refutation, not just another "not found"**: (1) the
     boundary scan found no MapRect/MapPoint-shaped data at all, only
     sentinel repeats; (2) the "12-byte record = coordinate" reading is now
@@ -1774,6 +1773,51 @@ shields) has no counterpart in anything decoded so far.
     solve geolocation. Reusable code: `decode_directory_table()`,
     `verify_index_triple()`, `find_index_record_for_offset()`,
     `KNOWN_DIRECTORY_TABLES` in `research/feature_reader.py`.
+
+**A LATER SESSION: the missing 3rd directory table (T3) found, plus a
+4th (T4) — resolves the Turku/Trondheim/Oslo negative finding
+completely.** The concrete next step above (an escalating-window scan
+watching for another multi-MB non-zlib gap) was carried out, using a
+faster method: a whole-file stride-12 self-similarity scan
+(`arr[:-12] == arr[12:]`, blocked and averaged with numpy — a few
+seconds over the whole 553MB file, vs. a slow sequential entry-by-entry
+walk). This immediately located all previously-known directory-shaped
+regions in one pass PLUS 2 new ones:
+  ```
+  T1 (known):  byte 80          - 11,800,000    density ~0.865
+  T2 (known):  306,200,000      - 311,200,000   density ~0.838
+  T4 (NEW):    529,687,345      - 529,889,749    density ~0.75 (16,867 records)
+  T3 (NEW):    546,882,678      - 547,158,126    density ~0.63-0.79 (22,954 records)
+  ```
+  Both new tables share T1/T2's exact structure (real zlib-entry chain
+  walking confirms a genuine non-payload gap at each, with a real zlib
+  header starting immediately after) and a small twist: each begins with
+  an undecoded 6-byte prefix before its 12-byte-aligned records start
+  (`gap_len - 6` divides evenly by 12 in both cases — 275,454-6=275,448=
+  12×22,954 for T3; 202,410-6=202,404=12×16,867 for T4). Both verify at
+  HIGH rates with the existing `decode_directory_table()`/
+  `verify_index_triple()` machinery, no new code needed: **T3: 17,107/
+  22,954 (74.5%)**, **T4: 9,968/16,867 (59.1%)** — both well above T1's
+  own average (2.7%-73.5% per block), consistent with real tables, not
+  noise.
+  **Direct resolution of the exact open negative finding**: the payload
+  immediately following T3 contains Turku (offset 550,612,987), Trondheim
+  (550,725,854), and Oslo (550,550,064) — the SAME 3 cities confirmed
+  absent from T1/T2. `find_index_record_for_offset()` against T3 alone
+  finds all 3 immediately, and the found `(declen, complen)` fields match
+  a REAL decompression at each city's own offset EXACTLY, 3/3, both
+  fields: Turku (16,028/10,596), Trondheim (34,972/24,283), Oslo
+  (40,665/28,358) — no tolerance needed. This was never a hole in the
+  offset/declen/complen index-triple model, just an unlocated 3rd table.
+  Combined, `eeuz.fea` now has 4 confirmed directory tables (T1: 977,308
+  records, T2: 416,763, T3: 22,954, T4: 16,867), strongly suggesting the
+  file embeds a SERIES of these regions scattered throughout the payload,
+  not just 1 or 2. A 5th, weaker candidate at the very end of the file
+  (~551.16M-EOF, where real zlib chaining genuinely stops for good) was
+  also found by the same density scan but does NOT verify cleanly at any
+  byte phase tried (best: 3.4%) — left as an honest, low-confidence lead,
+  not a validated 5th table. Full writeup: `research/feature_reader.py`'s
+  "A LATER SESSION: the missing 3rd directory table (T3) FOUND" section.
 
 **A LATER SESSION's new lead: `eeu.mod`'s own schema for this table** —
 never checked against `eeuz.fea` specifically before. `eeu.mod`'s
@@ -1806,9 +1850,12 @@ independently well-evidenced "hash table, no locatable coordinate"
 conclusion above. Possible reconciliations, none tested: this disc's
 build may use only a subset of the schema's full generality (matching
 the pattern already seen elsewhere, e.g. `eeuz.pca`'s always-zero
-`clusterOffset`/`clusterCount`, §3.23); the schema's grid/coordinate
-fields may belong to the still-unlocated 3rd+ directory-table region
-covering Turku/Trondheim/Oslo; or the entries tested so far (Mediterranean
+`clusterOffset`/`clusterCount`, §3.23) — note that T3/T4 (found and
+confirmed above, including the Turku/Trondheim/Oslo table) are now
+located and were checked; they show the same offset/declen/complen
+index-triple shape as T1/T2, not a grid/delta-coordinate one, so this
+reconciliation option remains open rather than resolved; or the entries
+tested so far (Mediterranean
 Sea, Iasi, ...) may be a `type`/`category` that doesn't carry the
 `point`/`road` geometry sub-structure at all. Full details and the
 complete field list: `research/feature_reader.py`'s module docstring

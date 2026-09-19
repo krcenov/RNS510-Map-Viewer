@@ -396,21 +396,23 @@ rather than one uniform flat array -- the ~87.5% stride-12 self-similarity
 statistic documented earlier in this file is a real, dominant regularity,
 just not a perfectly rigid, phase-locked one throughout.
 
-**Practical, load-bearing negative finding: 3 of the 7 test cities (Turku,
-Trondheim, Oslo -- all with `.fea` entries around file offset ~550MB) have
-NO record in EITHER known directory table, in any encoding, any phase, any
-field order** (confirmed both via the literal-offset raw-byte-string search
-and the full same-record-triple search). Since `T2` was shown to index at
-least one entry (Iasi, at 363MB) far past its OWN physical location (it
-sits at 306-311MB), a directory table is not restricted to indexing only
-the payload immediately following it -- **this is a hash/keyed index across
-(at least a large part of) the file, not a per-physical-section table** --
-so the natural explanation for Turku/Trondheim/Oslo's absence is that at
-least a THIRD directory-table-shaped region exists further into the file
-(not located this session; a good next step would be an escalating-window
-`find_next_entry_escalating()`-style scan starting past file offset
-311,300,723, watching specifically for another multi-MB non-zlib gap with
-the same stride-12 signature).
+**Practical, load-bearing negative finding (RESOLVED by a later session,
+see the dedicated "T3 FOUND" section below): 3 of the 7 test cities
+(Turku, Trondheim, Oslo -- all with `.fea` entries around file offset
+~550MB) had NO record in EITHER of the 2 known directory tables**, in any
+encoding, any phase, any field order (confirmed both via the
+literal-offset raw-byte-string search and the full same-record-triple
+search). Since `T2` was shown to index at least one entry (Iasi, at
+363MB) far past its OWN physical location (it sits at 306-311MB), a
+directory table is not restricted to indexing only the payload
+immediately following it -- **this is a hash/keyed index across (at
+least a large part of) the file, not a per-physical-section table** --
+so the natural explanation for Turku/Trondheim/Oslo's absence was that
+at least a THIRD directory-table-shaped region existed further into the
+file. A later session located it (T3, file offset 546,882,678-547,158,126)
+and confirmed it indexes exactly these 3 cities with an exact
+declen/complen match -- see "A LATER SESSION: the missing 3rd directory
+table (T3) FOUND" below for the full writeup.
 
 **Why this refutes, rather than just fails to confirm, the
 per-section/per-parcel MapRect hypothesis this session set out to test**:
@@ -438,6 +440,96 @@ Reusable implementation (validated at the scale described above):
 `decode_directory_table()`, `verify_index_triple()`, `_index_triple_
 candidates()` below. `KNOWN_DIRECTORY_TABLES` records the two located
 tables' exact byte ranges for reuse.
+
+============================================================================
+A LATER SESSION: the missing 3rd directory table (T3) FOUND -- resolves
+the Turku/Trondheim/Oslo negative finding above completely
+============================================================================
+The previous session's own concrete next step ("a good next step would be
+an escalating-window scan... watching specifically for another multi-MB
+non-zlib gap with the same stride-12 signature") was carried out directly,
+using a faster method: a whole-file stride-12 self-similarity scan
+(`arr[:-12] == arr[12:]`, blocked and averaged with numpy -- much cheaper
+than a sequential entry-by-entry walk over 553MB). This immediately found
+all 3 known directory-shaped regions in one pass, including a previously
+unlocated 3rd one:
+
+    T1:  byte 80              - 11,800,000   (density ~0.865, the known main table)
+    T2:  306,200,000 - 311,200,000           (density ~0.838, the known embedded table)
+    T3:  546,882,672  - 547,158,126          (density ~0.63-0.79, NEW)
+
+**T3's exact boundaries, confirmed by real entry-chain walking (not just
+the coarse density scan)**: chaining real zlib entries forward from file
+offset 546,700,000 hits a genuine large non-payload gap from exactly
+546,882,672 to 547,158,126 (275,454 bytes) -- the byte immediately after
+547,158,126 is a real zlib header (`78 da ...`), confirmed by decompressing
+it successfully. `275,454 - 6 = 275,448 = 12 x 22,954` exactly -- i.e. T3
+is a 6-byte prefix (`00 00 00 01 02 7d`, meaning not decoded) followed by
+a clean 22,954-record, 12-byte-aligned table, structurally the same shape
+as T1/T2 (T1 has an 8-byte TRAILER after its own records instead of a
+6-byte prefix before them -- both tables have a few non-aligned bytes at
+one boundary, just on opposite ends).
+
+**Verified at HIGH scale with the existing `decode_directory_table()`/
+`verify_index_triple()` machinery, no new code needed**: 17,107 of 22,954
+candidate positions (74.5%) decode to a real, byte-exact-verified
+`(offset, declen, complen)` triple -- noticeably HIGHER than T1's overall
+average (2.7%-73.5% per 20,000-record block) and consistent with T1's own
+observation that density rises toward a table's end (T3, being much
+smaller, is effectively "all end").
+
+**Direct resolution of the exact open negative finding**: the payload
+immediately following T3 (`enumerate_entries()` from 547,158,126) contains
+Turku (550,612,987), Trondheim (550,725,854), and Oslo (550,550,064) --
+the SAME 3 cities the previous session confirmed were NOT indexed by
+either T1 or T2, in any encoding. `find_index_record_for_offset()` against
+T3 alone finds all 3 immediately, and cross-checking the found
+`(declen, complen)` fields against a REAL decompression at each city's
+own offset is an EXACT match, 3/3, both fields, no tolerance needed:
+
+    Turku:     declen=16,028  complen=10,596  -- both exact
+    Trondheim: declen=34,972  complen=24,283  -- both exact
+    Oslo:      declen=40,665  complen=28,358  -- both exact
+
+This closes the "3 of 7 test cities have NO record in EITHER known
+directory table" finding completely -- it was never a hole in the
+offset/declen/complen index-triple model, just an unlocated 3rd table.
+
+**A 4th table (T4) was also found, same session, same method, lower
+density threshold**: re-running the whole-file scan at a lower density
+cutoff (0.15 instead of 0.5, still ~40x above the ~0.4% baseline a
+random compressed-byte region would show) surfaces 2 more candidate
+regions. The first, at file offset ~529,700,000-529,900,000, resolves
+the same way as T3: real entry-chain walking finds a genuine gap from
+529,687,339 to 529,889,749 (202,410 bytes; `202,410 - 6 = 202,404 = 12 x
+16,867` exactly, the SAME 6-byte-prefix convention as T3), and
+`decode_directory_table()` verifies 9,968/16,867 candidate positions
+(59.1%) -- again well above T1's average, consistent with this being a
+real table, not noise.
+
+**A 5th, weaker, NOT independently confirmed candidate region sits at
+the very end of the file** (~551,156,330 to EOF, 553,149,233 -- the last
+~1.99MB of `eeuz.fea`, where real zlib-entry chaining genuinely stops
+for good, confirmed by `find_next_entry_escalating()` finding nothing
+further with windows up to 25MB). Unlike T1-T4, `decode_directory_table()`
+only verifies a low fraction here (best phase found: 5,710/166,074,
+3.4%) -- either the true byte phase within this region is still off (the
+clean "-6" adjustment that worked for T1/T3/T4 was tried across all 12
+phases and none matched as cleanly), or this final region is
+structurally different (e.g. mostly unused/degenerate hash slots with no
+payload to point at, plausible for a table at the very end of the file
+with nothing left for it to index forward into). Left as an honest, low-
+confidence lead, not a 5th validated table.
+
+Combined, T1 (977,308 records) + T2 (416,763) + T3 (22,954) + T4
+(16,867) confirm `eeuz.fea` embeds a SERIES of these directory-table
+regions scattered throughout the payload (plausibly one per some
+internal batch/section boundary the file's own writer chose), not just
+1 or 2 -- the whole-file stride-12 density scan (cheap, a few seconds
+with numpy) is now the fast, general way to locate any of them, superseding
+the old escalating-window sequential-walk approach as the discovery
+method (sequential walking remains useful for confirming exact
+boundaries once a candidate region is known).
 
 ============================================================================
 OPEN PROBLEMS (honest, not swept under the rug)
@@ -483,13 +575,18 @@ OPEN PROBLEMS (honest, not swept under the rug)
    Mediterranean Sea/Iasi/Bratislava/Nisyros) -- this is a keyed lookup
    structure (hash-table-like: high collision/duplicate-record rate, a
    directory can index entries far outside its own physical byte range),
-   NOT a spatial/geographic index or a per-section MapRect. `enumerate_
-   entries()` below remains the practical BRUTE-FORCE workaround for a
-   full sequential walk (still needed since the directory decode above is
-   not 100% recall and a 3rd+ directory table, needed to cover ~550MB-ish
-   content like Turku/Trondheim/Oslo, has not been located yet) --
-   validated across 11 sample windows spanning the full payload (0% to
-   99.5%) plus gap-recovery tested at each.
+   NOT a spatial/geographic index or a per-section MapRect. **UPDATE (a
+   later session)**: 2 more tables, T3 and T4, were found via a whole-file
+   stride-12 density scan (see the dedicated section above) -- T3
+   specifically resolves the Turku/Trondheim/Oslo gap this paragraph
+   originally flagged as open, with an exact declen/complen match, 3/3
+   cities. A 5th, weaker candidate region at the very end of the file was
+   found but NOT confirmed to the same standard (low verification rate at
+   every phase tried). `enumerate_entries()` below remains the practical
+   BRUTE-FORCE workaround for a full sequential walk (the directory decode
+   is still not 100% recall even within a confirmed table) — validated
+   across 11 sample windows spanning the full payload (0% to 99.5%) plus
+   gap-recovery tested at each.
 3. **Geolocation of an arbitrary entry is only possible via an embedded
    name string** (cross-referenced against real-world geography or
    `eeu.cty`), NOT via a decoded coordinate field -- unlike MAP_COMPRESSED's
@@ -908,18 +1005,21 @@ def scan_names(path, entries, min_names=3):
 # this is a keyed offset/length index, most likely hash-table-like).
 # ---------------------------------------------------------------------------
 
-# The two directory-table byte ranges located and validated so far (on the
-# reference disc's eeuz.fea). At least one more exists further into the
-# file (needed to explain why Turku/Trondheim/Oslo's real .fea entries,
-# all around file offset ~550MB, are NOT indexed by either table below --
-# confirmed absent, not just unfound, via full raw-byte-string search) but
-# has not been located -- a future session could find it with an
-# escalating-window scan (see find_next_entry_escalating()) starting past
-# T2's end, watching for another multi-MB non-zlib gap with the same
-# stride-12 self-similarity signature.
+# The 4 directory-table byte ranges located and validated so far (on the
+# reference disc's eeuz.fea) -- T1/T2 found by sequential entry-chain
+# walking, T3/T4 found by a later session's whole-file stride-12 density
+# scan (much faster) and confirmed the same way. T3's range explicitly
+# resolves the Turku/Trondheim/Oslo cities that neither T1 nor T2 indexed
+# (see module docstring, "A LATER SESSION: the missing 3rd directory
+# table"). A 5th, weaker, unconfirmed candidate sits at the very end of
+# the file (~551.16M-EOF) -- not included here, see module docstring.
+# T3/T4 both start 6 bytes past their own gap-start (a small, undecoded
+# prefix) -- the ranges below already have that +6 applied.
 KNOWN_DIRECTORY_TABLES = [
     (80, 11_727_784),                # "T1", the main byte-80 directory
     (306_299_567, 311_300_723),      # "T2", embedded mid-payload
+    (529_687_345, 529_889_749),      # "T4", resolves entries around ~530MB
+    (546_882_678, 547_158_126),      # "T3", resolves Turku/Trondheim/Oslo
 ]
 
 _MAX_PLAUSIBLE_COMPLEN = 200_000  # generous upper bound; real entries observed up to ~63KB declen
