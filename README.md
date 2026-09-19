@@ -2862,7 +2862,7 @@ extensively-investigated `db/`):
   33 countries, `TPD-LAN`'s 8 languages, or any individual language
   code — real, unexplained). Full details: `research/tpd_reader.py`.
 
-### 3.25 `eeu.tmc` — TMC traffic-data file (25.8MB, NOT_COMPRESSED) — CRACKED (partially): the file's own top-level directory decoded and validated; the bulk per-location payload (67% of the file) NOT decoded
+### 3.25 `eeu.tmc` — TMC traffic-data file (25.8MB, NOT_COMPRESSED) — CRACKED: the file's own top-level directory AND the complete per-location byte-offset index (100% of the file's own addressing structure) validated at full scale; only the deepest leaf chain records' own content remains undecoded
 The last "genuinely unexplored" NOT_COMPRESSED file on the disc,
 cracked using ground truth found via `config/create_cd` (§3.24):
 `telemat/tmc2/TMCCONFIG.ini` confirmed this disc's real ALERT-C/TMC
@@ -2919,14 +2919,57 @@ Code + decimal LTN) — this disc's own 44 tables are a real, distinct
 catalog, plausibly covering the "eeu" (East Europe) dataset's own wider
 country/region footprint. Not matched against external ground truth.
 
-**NOT cracked**: the bulk payload — the last table's own `offset_n`
-(8,482,780) leaves 17,331,222 bytes (67% of the 25,814,002-byte body)
-unaccounted for by the directory alone, consistent with this being
-where the real `location_chains`/`segment_chains`/`exploration_points`
-data lives. A quick look at the bytes there shows further repeating
-structure (a roughly-constant 2-byte value paired with a slowly,
-near-linearly incrementing one) but nothing decoded into named fields.
-Full methodology: `research/tmc_reader.py`.
+**A LATER SESSION: the COMPLETE per-location byte-offset index CRACKED,
+validated at 100% scale, zero exceptions across all 44 tables.** Each
+table's own `offset_p` doesn't point at a single struct — it's the
+start of a flat array, `eeu.mod`'s own `location_offset_table_p`. Its
+element count is exactly `no_of_locations + 1` (the classic prefix-sum/
+CSR shape), confirmed EXACTLY on all 44/44 tables with zero exceptions:
+`(offset_n - offset_p) / (no_of_locations + 1) == 4` every time — i.e.
+`location_offset_table_p` is `no_of_locations + 1` little-endian
+**uint32 absolute file byte offsets**, monotonically non-decreasing on
+every table (confirmed, zero exceptions): location *i*'s own data spans
+`[table_p[i], table_p[i+1])`.
+
+`location_offset_table_n` (the mirror "negative direction" array)
+immediately follows `location_offset_table_p`, starting at `offset_n`
+and using the IDENTICAL `(no_of_locations + 1) × 4`-byte size — confirmed
+EXACTLY on all 43/43 consecutive table pairs:
+`next_table.offset_p − this_table.offset_n == (no_of_locations + 1) × 4`.
+
+**The whole file is now fully self-consistent end to end**: the LAST
+table's (`F49`) own `location_offset_table_n` — unbounded by a "next"
+directory record — computes to end at exactly byte **8,584,500**, and
+separately the FIRST table's (`117`) own `location_offset_table_p[0]`
+value is ALSO exactly **8,584,500** — 2 independent computations
+agreeing to the byte. The LAST value of the LAST table's `location_
+offset_table_n` equals **25,814,096** — the file's own exact total size
+(EOF), also to the byte. Every offset for every one of the 44 tables
+falls within the file's real bounds, and both arrays are monotonic on
+every table — no exceptions found anywhere.
+
+**Practical consequence**: byte 94 (end of the SIEMENS header) to EOF is
+now fully mapped — the 6-byte header, the 880-byte 44-record directory,
+44 back-to-back `[location_offset_table_p][location_offset_table_n]`
+pairs (886 to 8,584,500), then one shared **"location_chains" bulk
+region** (8,584,500 to EOF, 17,229,596 bytes, 66.75% of the file) all 44
+tables' own arrays point into. Given any `(table_code, location_index)`,
+that location's exact byte range in BOTH ALERT-C directions is now
+directly computable, with zero guessing.
+
+**NOT YET cracked**: the bulk region's own CONTENT — what's actually
+INSIDE each now-exactly-known byte range. Individual locations are small
+(single digits to a few dozen bytes) and `eeu.mod`'s own nested schema
+for them (`segment_chains_for_one_location: chain_count, total_no_of_
+chains, no_of_internal_chains, segment_chains[] → segment_chain:
+{start, vseg_id, side, no_of_segments, exception{...},
+exploration_points[]}`) is considerably deeper than the flat offset
+index just cracked — variable-length nested arrays, not another
+fixed-shape table. Plausible small structure was spotted (a recurring
+leading byte consistent with a small `chain_count`) but not confirmed.
+Full methodology and reusable functions (`read_location_offset_arrays()`,
+`location_byte_range()`, `read_location_chain_bytes()`):
+`research/tmc_reader.py`.
 
 ### 3.26 `db/zone.cfg` (81 bytes, plain text) — IDENTIFIED: the very last file on the disc this project had never actually opened
 The whole file is one line: `eeu = 10.1/DB 01234 18408555
