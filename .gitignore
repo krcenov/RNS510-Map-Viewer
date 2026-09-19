@@ -1,3 +1,6 @@
 CD_8555
 CD_8555.ISO
 RNS510_5238_MOD_C3_C4.iso
+__pycache__/
+*.pyc
+.claude/
