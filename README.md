@@ -2644,16 +2644,9 @@ extensively-investigated `db/`):
   files (real per-country binary ALERT-C location tables) were
   identified by convention and structurally examined (no clean small
   fixed-record width found, consistent with the real format's own
-  variable-length record shapes) but not byte-level cracked. **A strong
-  new lead for `eeu.tmc`** (still unopened): scanning its first ~20KB
-  for short ASCII-digit runs finds a real sequence of small, mostly-
-  ascending integers (117, 118, 225, 259, ..., up to 951) — consistent
-  with real ALERT-C Location Code (LCD) point numbers, and `dbal/`'s own
-  embedded source list below names BOTH `db_tmc.cpp` AND
-  `db_tmc_deprecated.cpp` — suggesting the on-disc TMC format changed
-  between DBAL versions. Not cross-checked further — left as a concrete
-  starting point for a future, dedicated `eeu.tmc` session. Full
-  details: `research/telemat_reader.py`.
+  variable-length record shapes) but not byte-level cracked. **This
+  ground truth directly enabled cracking `eeu.tmc` itself in a later
+  pass — see §3.25.** Full details: `research/telemat_reader.py`.
 - **`speech/`** — CRACKED (identity + real embedded metadata); the
   actual voice-synthesis binary formats (proprietary, third-party) NOT
   decoded. `SpeechRes.xml` is a real, readable XML resource manifest
@@ -2735,6 +2728,72 @@ extensively-investigated `db/`):
   names like `AIRPORT`/`ALL_RESTAURANTS`/`ATM_EUR`) and `IMAGES` (22
   GIF UI-chrome files) round out the system. Full details:
   `research/tpd_reader.py`.
+
+### 3.25 `eeu.tmc` — TMC traffic-data file (25.8MB, NOT_COMPRESSED) — CRACKED (partially): the file's own top-level directory decoded and validated; the bulk per-location payload (67% of the file) NOT decoded
+The last "genuinely unexplored" NOT_COMPRESSED file on the disc,
+cracked using ground truth found via `config/create_cd` (§3.24):
+`telemat/tmc2/TMCCONFIG.ini` confirmed this disc's real ALERT-C/TMC
+conventions, and `dbal/`'s own embedded source-file list independently
+confirms the real handler is named `db_tmc.cpp` (plus a
+`db_tmc_deprecated.cpp` twin, suggesting the format changed between
+DBAL versions).
+
+`eeu.mod` names this table `"tmc file"` (74 raw strings, §3.16) — after
+the usual boilerplate, a `tmc_file_header` (`no_of_location_tables`,
+`max_segment_chain_len`, `max_location_size`, then an array of
+`location_table_header`s: `name`/`start_location`/`no_of_locations`/
+`offset_of_location_offset_table_p`/`offset_of_location_offset_table_n`)
+followed by a much deeper nested payload (`location_offset_tables` →
+`location_chains` → `segment_chains` → `exception`/`exploration_points`).
+
+**CRACKED, validated at full scale: the file header + 44-table
+directory**:
+```
+uint16 LE  no_of_location_tables  -- 44, exactly matching the number
+                                      of directory records that follow
+uint16 LE  ???                    -- 1716; position matches
+                                      max_segment_chain_len, value not
+                                      independently confirmed
+uint16 LE  ???                    -- 240; position matches
+                                      max_location_size, not confirmed
+44 x 20-byte location_table_header records:
+    bytes[4]   code         -- 3-char alphanumeric + NUL (e.g. "117",
+                                "225", "A01", "F49") -- confirmed
+                                exactly 3 characters + NUL on all
+                                44/44 records
+    uint32 LE  start_location?    -- position matches, not confirmed
+    uint32 LE  no_of_locations?   -- position matches, not confirmed
+    uint32 LE  offset_p           -- CRACKED (identity), see below
+    uint32 LE  offset_n           -- CRACKED (identity), see below
+```
+**Validated**: the 44-record count exactly matches the header's own
+`no_of_location_tables` field. `offset_p`/`offset_n` are monotonically
+increasing across all 44 records (980, 105460, 209940, 452364, 838444,
+..., up to 8,482,780) with `offset_n > offset_p` on every record, and
+each record's own `offset_p` at or past the previous record's
+`offset_n` — exactly the shape real, sequentially-allocated byte
+offsets into a shared payload would have, matching `eeu.mod`'s own
+field names by position exactly. Spot-checked: the bytes AT both
+`offset_p[0]`=980 and `offset_n[0]`=105460 are themselves further
+small, regular, non-random binary structure, not garbage/misalignment.
+A real, unexplained sub-pattern: 4 consecutive tables (codes `714`-
+`717`) share the exact same `start_location?` value (10001) — plausibly
+sub-divisions of one larger region.
+
+**The 44 codes are NOT the same identifier convention `telemat/tmc2/
+TMCCONFIG.ini`'s own 14 Western-European countries use** (hex Country
+Code + decimal LTN) — this disc's own 44 tables are a real, distinct
+catalog, plausibly covering the "eeu" (East Europe) dataset's own wider
+country/region footprint. Not matched against external ground truth.
+
+**NOT cracked**: the bulk payload — the last table's own `offset_n`
+(8,482,780) leaves 17,331,222 bytes (67% of the 25,814,002-byte body)
+unaccounted for by the directory alone, consistent with this being
+where the real `location_chains`/`segment_chains`/`exploration_points`
+data lives. A quick look at the bytes there shows further repeating
+structure (a roughly-constant 2-byte value paired with a slowly,
+near-linearly incrementing one) but nothing decoded into named fields.
+Full methodology: `research/tmc_reader.py`.
 
 ---
 
