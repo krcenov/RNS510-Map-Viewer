@@ -2973,19 +2973,23 @@ record size also grows roughly linearly with `chain_count` (10.4, 19.5,
 28.8, 39.4, 50.8, 57.5 bytes for low_nibble 1-6).
 
 **Byte-level characterization (statistical, not bit-pinned) of the
-minimal 7-byte `segment_chain`**, from 26,220 real `chain_count=1`,
-exactly-8-byte-total records: byte 0 has only 2 distinct values (1, 17 —
-low nibble=`chain_count`, bit 4 a 2nd flag set on 12.4% of records);
-bytes 1-3 are high-entropy (candidate: `start`/`vseg_id`); byte 4 is
-heavily bimodal (18 or 146=18|0x80, >96% combined — bit 7 a real flag,
-candidate `side`); byte 5 is power-law distributed, 81% == 1 (matches
-real-world `no_of_segments` — most chains cover exactly 1 segment);
-byte 6 is ALWAYS 0 in every one of the 26,220 samples. **Tested and
-REFUTED**: byte 6 as a literal `exploration_points` count varying with
-a record's own extra length past the 8-byte minimum — checked across
-59,942 real `chain_count=1` records with extra length 0-47 bytes, byte
-6 is constant 0 regardless — whatever encodes exploration-point count
-isn't a simple fixed-position byte there.
+minimal 7-byte `segment_chain`**, from the FULL, true-scale
+`chain_count=1`, exactly-8-byte-total subset (310,888 records, all 44
+tables, both directions — an earlier pass of this same analysis this
+session used an accidentally truncated ~26,220-record sample from only
+the first few tables and wrongly reported byte 4 as "mostly constant"
+and byte 6 as "always 0"; both corrected below at true full scale):
+byte 0 has only 2 distinct values (1, 17 — low nibble=`chain_count`,
+bit 4 a 2nd flag set on 72.1% of records); bytes 1-4 are all high-entropy
+(candidate: `start`/`vseg_id`, byte 4's own bit 7 a real ~50/50 flag,
+candidate `side`); byte 5 is power-law distributed, 78.6% == 1 (robust
+at full scale, matches real-world `no_of_segments` — most chains cover
+exactly 1 segment); byte 6 is 99.955% == 0 but has a real, rare
+(325/724,059) nonzero signal (values 1-4) that correlates STRONGLY and
+MONOTONICALLY with extra record length (mean extra bytes 2.41/41.88/
+75.00/75.00/225.00 for byte6=0/1/2/3/4) — consistent with a real
+internal-chain- or exploration-point-related count that's simply almost
+always 0, not refuted as originally thought.
 
 None of this reaches the same standard as this disc's fully bit-pinned
 fields elsewhere (e.g. `eeu.si`'s `rank`/`class`/`divided`) — it's a

@@ -211,44 +211,51 @@ size also grows roughly linearly with `chain_count` (10.4, 19.5, 28.8,
 39.4, 50.8, 57.5 bytes for low_nibble 1-6), consistent with "~7 bytes
 fixed + a variable amount of real content" per chain.
 
-**Byte-level characterization of the minimal 7-byte `segment_chain`**
-(from the 26,220-record `chain_count=1`, exactly-8-byte-total subset --
-i.e. records with 0 real extra content past the fixed minimum), by
-per-byte-position entropy across the WHOLE sample:
+**Byte-level characterization of the minimal 7-byte `segment_chain`**,
+from the FULL, TRUE-scale `chain_count=1`, exactly-8-byte-total subset
+(310,888 records, every one of the 44 tables, both p/n directions --
+NOTE: an earlier pass of this same analysis, this session, used an
+accidentally truncated ~26,220-record sample from only the first few
+tables scanned and reported byte 4 as "mostly constant" and byte 6 as
+"always 0" -- BOTH corrected below once re-run at the true full scale;
+left as a reminder to always verify a sample is representative before
+trusting a "mostly constant" finding on this disc):
 
     byte[0]  (header)      -- 2 distinct values only (1, 17=0x11) --
                                low nibble = chain_count (=1 here); bit 4
-                               a real 2nd flag, set on 12.4% of records
+                               a real 2nd flag, set on 72.1% of records
                                (candidate: total_no_of_chains, position-
                                matches eeu.mod's next field, not confirmed)
-    bytes[1:4] (3 bytes)   -- high entropy (up to 256/48/177 distinct
-                               values respectively) -- candidate: `start`
-                               and/or `vseg_id`, not individually split
-    byte[4]                -- ONLY 12 distinct values, heavily bimodal:
-                               18 (0x12) or 146 (0x12|0x80) dominate
-                               (>96% combined) -- bit 7 a real flag
-                               (candidate: `side`), low 7 bits almost
-                               always 18 with a rare 19-22 tail
-    byte[5]                -- 23 distinct values, POWER-LAW distributed:
-                               81% == 1, decaying sharply up to 38 --
-                               matches real-world `no_of_segments`
-                               (most chains cover exactly 1 road segment)
-                               both statistically and by schema position
-    byte[6]                -- ALWAYS 0 across all 26,220 minimal records
-                               -- reserved, or an exception-related field
-                               that's simply unset/cleared in this common
-                               "no real exception" case
-    byte[7]                -- medium entropy (34 distinct values, 0-217)
-                               -- not characterized further
-
-**Tested and REFUTED**: byte 6 (the "always 0 in the minimal case" byte)
-as a literal `exploration_points` COUNT that should vary with a
-`chain_count=1` record's own extra length past the 8-byte minimum --
-checked directly across 59,942 real `chain_count=1` records with extra
-length ranging 0-47 bytes: byte 6 is constant 0 in EVERY case,
-regardless of extra length. Whatever encodes "how many/which
-exploration points follow" is not a simple fixed-position count byte at
-that offset -- left open.
+    bytes[1:4] (3 bytes)   -- high entropy (256/48/256 distinct values
+                               respectively) -- candidate: `start` and/or
+                               `vseg_id`, not individually split
+    byte[4]                -- ALSO high entropy (96 distinct values, top
+                               value only 5.3% of records) -- CORRECTED:
+                               NOT mostly-constant (see note above). Bit 7
+                               is a real ~50/50 binary flag (candidate
+                               `side`), but the byte's low 7 bits are
+                               high-entropy too, more like a 3rd ID/value
+                               byte than a small enum
+    byte[5]                -- 58 distinct values, POWER-LAW distributed:
+                               78.6% == 1, decaying sharply up to 106 --
+                               ROBUST at full scale, matches real-world
+                               `no_of_segments` (most chains cover exactly
+                               1 road segment) both statistically and by
+                               schema position
+    byte[6]                -- 99.955% == 0, but CORRECTED (see note
+                               above): a real, rare (325/724,059 = 0.045%)
+                               nonzero signal exists, values 1-4, that
+                               correlates STRONGLY and MONOTONICALLY with
+                               how much extra content (past the 8-byte
+                               minimum) the record actually has: mean
+                               extra bytes 2.41 (byte6=0), 41.88 (=1),
+                               75.00 (=2 AND =3, tied), 225.00 (=4, single
+                               sample) -- consistent with (not yet proven
+                               as) a real internal-chain or exploration-
+                               point-related count that's simply almost
+                               always 0
+    byte[7]                -- 41 distinct values, moderate entropy (top
+                               value 24.1%) -- not characterized further
 
 None of this rises to the same standard as the fully bit-pinned,
 cross-validated fields elsewhere on this disc (e.g. `eeu.si`'s `rank`/
