@@ -2,7 +2,9 @@
 tpd_reader.py -- documents `tpd/` (disc root, not under `db/`), by far
 the largest never-examined area on the disc: 1,443 files. CRACKED at
 the "what is this system and how does it work" level -- every distinct
-FILE ROLE identified and confirmed with real content; the per-country
+FILE ROLE identified and confirmed with real content, including a LATER
+session opening `TPD3.DIC` (previously assumed a binary dictionary,
+actually a tiny plain-text 3rd product manifest); the per-country
 `.IDX`/`.URL` search-table BODIES (compressed, self-describing headers
 decoded) were not decompressed/decoded further.
 
@@ -142,10 +144,38 @@ The compressed table BODY (past the header) was not decompressed or
 decoded this session.
 
 ============================================================================
-Root-level `tpd/` files -- NOT decoded
+Root-level `tpd/` files -- `TPD3.DIC` opened and CRACKED (a LATER
+session; despite the name, NOT a word/phrase dictionary), `LPOI.TXT`'s
+version stamp already confirmed
 ============================================================================
-`TPD3.DIC` (a dictionary file, presumably word/phrase lookup for the
-search UI -- not opened) and `LPOI.TXT` (a version-stamp file, content
+`TPD3.DIC` (disc-root `tpd/TPD3.DIC`, not under a language/product
+folder) is tiny -- 60 bytes -- and turns out to be plain text, not a
+binary dictionary as its name/extension first suggested:
+
+    TPD-DBID	2019060000
+    TPD-UPI	eue_0	25	/nscWeu_eue_20190607 D
+
+A 3rd, disc-root-level product manifest, one directory level ABOVE
+`INFO25.PSC`/`LPOI.TXT` (which live inside `nscWeu_eue_20190607/`
+itself) -- this is the file that tells the search UI WHICH product
+subfolder(s) exist at all. `TPD-DBID 2019060000` is the SAME build
+stamp already confirmed 3 ways (`INFO25.PSC`'s `TPD-PRODID`, `LPOI.TXT`,
+`cdrom.toc`'s own `TPD:` line) -- now a 4th independent confirmation.
+`TPD-UPI` ("Update Package Info", by the obvious reading of the name,
+not independently confirmed) names the one real product instance on
+this disc: `eue_0` (a product code -- "eue" matches this dataset's own
+`nscWeu_EUE` naming, `_0` not otherwise explained), the real relative
+path `/nscWeu_eue_20190607` (byte-exact match to the real directory on
+disc), and a trailing `D` flag (plausibly "Directory"/"Data", not
+confirmed). The middle field, `25`, was tested against every other
+count already known for this disc and does NOT match: not
+`TPD-CNTRY`'s 33 countries, not `TPD-LAN`'s 8 languages, not any
+language code in `TPD-LAN`/`TPD-LSC` (`1 2 3 4 5 6 15 20`) -- real,
+unexplained. Since a disc could in principle ship more than one `TPD-UPI`
+line (one per product update package), `TPD3.DIC`'s own real ROLE is a
+short manifest of which packages exist -- this disc only has the one.
+
+`LPOI.TXT` (a version-stamp file under `nscWeu_eue_20190607/`, content
 confirmed to be exactly `2019060000`, matching `INFO25.PSC`'s own
 `TPD-PRODID` -- nothing more decoded).
 

@@ -2788,8 +2788,17 @@ extensively-investigated `db/`):
   (`TPD-GRP <group-id> <child ids>`) feeding the category picker;
   `ICONS`/`ICONS810` (381 real PNG files, self-explanatory POI-category
   names like `AIRPORT`/`ALL_RESTAURANTS`/`ATM_EUR`) and `IMAGES` (22
-  GIF UI-chrome files) round out the system. Full details:
-  `research/tpd_reader.py`.
+  GIF UI-chrome files) round out the system. **A later session opened
+  the one previously-unopened file, `tpd/TPD3.DIC`** — despite the
+  `.DIC` extension, NOT a binary word dictionary: 60 bytes of plain
+  text, a 3rd disc-root-level product manifest one directory above
+  `INFO25.PSC`/`LPOI.TXT` (`TPD-DBID 2019060000`, the same build stamp
+  now confirmed a 4th independent way; `TPD-UPI eue_0 25
+  /nscWeu_eue_20190607 D` names the one real product instance —
+  `eue_0`, the real path, and a trailing `D` flag, plausibly
+  "Directory"/"Data". The middle field `25` doesn't match `TPD-CNTRY`'s
+  33 countries, `TPD-LAN`'s 8 languages, or any individual language
+  code — real, unexplained). Full details: `research/tpd_reader.py`.
 
 ### 3.25 `eeu.tmc` — TMC traffic-data file (25.8MB, NOT_COMPRESSED) — CRACKED (partially): the file's own top-level directory decoded and validated; the bulk per-location payload (67% of the file) NOT decoded
 The last "genuinely unexplored" NOT_COMPRESSED file on the disc,
