@@ -5754,6 +5754,72 @@ finds exactly 0 such pixels — confirms both that POIs actually render
 and that the checkbox actually controls it, at the pixel level, not just
 "the code path didn't crash".
 
+### v20 → v21: real POI category icons, not plain dots (this session)
+
+**The user's request (verbatim):** *"lets do poi icons."*
+
+**`POI.DB3`'s icon schema — CRACKED, a clean, fully self-documenting
+chain, real standard PNG images throughout.**
+`PoiPartition_BaseAttributes.Icon_ID` → `Image_BaseAttributes.Image_ID`
+(validated directly: joining the two and comparing each partition's own
+real CATEGORY name against its linked image's own real NAME shows an
+exact or near-exact match for every partition checked — e.g. partition 3
+`"gas station"` → an image itself named `"gas station"`; partition 14
+`"atm"` → `"atm eur"`) → `Image_ImageBlob_Relation` (filtered to one
+`ImageSet_ID` — `ImageSet_BaseAttributes` names 4 real sets,
+`2D.34.39.PNG.Day`/`.Day.Shadow`, `3D.34.39.PNG.Day`/`.Day.Shadow`;
+`ImageSet_ID=1` — the plain 2D set, no shadow — is the natural choice
+for this viewer's top-down 2D view) → `ImageBlob_BaseAttributes.
+ImageData`, which is a REAL, STANDARD PNG FILE (confirmed via its own
+magic bytes, `89 50 4E 47 0D 0A 1A 0A` — no proprietary container at
+all). Every icon in the `2D.34.39...` sets is exactly 34×39 pixels — the
+SAME dimensions already found for `tpd/`'s own `ICONS/` PNG folder
+(§3.24), consistent with a shared/sibling icon set across both POI
+subsystems on this disc. `HotSpotX`/`HotSpotY` (17, 19 for these icons)
+give each icon's own real anchor point. **Visually confirmed**: decoded
+and saved several real icons directly — a genuine, recognizable gas
+pump (partition 3), airplane (partition 24, `"airport"`), and pharmacy
+cross (partition 11) — not garbage or placeholder art.
+`poi_db_reader.load_poi_icons()` implements the whole chain, returning
+raw PNG bytes per `PoiPartition_ID` (no PIL dependency in `research/` —
+the viewer decodes).
+
+**Viewer integration**: `App._get_poi_icon()` decodes each of the 61
+real icons once (PNG → `PIL.Image`, RGBA) and caches it for the App's
+whole lifetime. `_redraw()` pastes the real icon (alpha-composited,
+anchored at its own real hotspot) into the SAME rasterized bitmap as
+road dots, in place of the plain colored dot used in "v19 → v20" —
+**measured at ~0.0056ms per paste**, so even the widest realistic view
+(100k+ POIs) stays well under a second (confirmed: a whole-EEU 500km-span
+redraw with POIs on takes 0.150s total). Falls back to the plain dot
+only if a partition has no resolvable icon (not observed on the
+reference disc).
+
+**A real problem found and fixed while testing on the real ISO: icon
+clutter.** A real, dense area (central Sofia at a ~6km span, where every
+POI category active within that range legitimately has hundreds of real
+entries) rendered as a solid, unreadable wall of overlapping icons on
+the first pass — confirmed directly by rendering and visually inspecting
+a real screenshot, not assumed. **Fixed** with a cheap grid-occupancy
+declutter: each icon's own anchor point is bucketed into a
+`POI_ICON_CELL_PX`-sized cell (52px, padded past the 34×39 icon size for
+breathing room), and any POI whose cell is already taken is skipped —
+caps rendered density to roughly one icon per cell regardless of how
+many real POIs are actually in view. Re-rendered the same real Sofia
+area after the fix: genuinely readable, recognizable icons (gas pumps,
+restaurant fork/knife, coffee cups, pharmacy crosses, parking `P`, bank
+`€`) spread across the view with visible road detail between them, confirmed
+by direct visual inspection of the re-rendered output — not just "the
+code ran".
+
+**Disclosed limitation, not fixed this session**: which POI "wins" a
+contested declutter cell is simply whichever one `pois_for_bbox()`
+returns first (no priority weighting) — `PoiPartition_BaseAttributes.
+MapPriority` is uniformly `255` for every real partition on the
+reference disc, so it carries no usable signal for this. A future
+session could weight by real-world rarity/importance instead of query
+order if this matters more.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

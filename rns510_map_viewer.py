@@ -313,6 +313,7 @@ Known v2 limitations (explicit, not oversights) -- see README §10:
     for the full writeup.
 """
 
+import io
 import math
 import os
 import shutil
@@ -673,6 +674,7 @@ MIN_LABEL_PIXEL_LEN = 26     # don't label a named run shorter than this on scre
 LABEL_DEDUP_PX = 65          # don't draw a second same-name label within this many px
 MAX_CITY_LABELS = 40
 MAX_POI_LABELS = 40  # README §10 "v19 -> v20" -- caps POI text labels regardless of marker count
+POI_ICON_CELL_PX = 52  # README §10 "v20 -> v21" -- declutter grid cell size (icons are 34x39px; padded for breathing room)
 BIG_CITY_AREA_DEG2 = 0.02    # bbox area above which a city gets the bolder/larger label
 
 # Sanity upper bound on a city's bbox area for DISPLAY ranking purposes --
@@ -1176,6 +1178,7 @@ class MapData:
         self.poi_ready = False      # True once poi_cache is fully loaded
         self.poi_building = False   # True while load_poi_data() is running
         self.poi_cache = None       # poi_db_reader.load_poi_cache() result
+        self.poi_icons = None       # poi_db_reader.load_poi_icons() result (raw PNG bytes per partition_id)
 
         self.search_project = None  # core.MapProject, for road name search
         self.rd_cache = None        # road_naming.RdCache
@@ -1418,12 +1421,16 @@ class MapData:
         real POIs at once via `poi_db_reader.load_poi_cache()` (README
         §10 "v19 -> v20") -- the real, cracked `Coordinate` field
         (research/poi_db_reader.py's Morton/Z-order decode) makes this
-        possible for the first time. Meant to run in its OWN
-        BackgroundTask, same deferred pattern as load_heavy_layer()
-        above: kicked off right after `load()` returns so it finishes in
-        parallel with the user's first search/pan/zoom rather than
-        blocking "Open Map ISO". Sets `poi_ready=True` on success; until
-        then, `pois_for_bbox()` simply returns an empty list."""
+        possible for the first time. Also loads every real category icon
+        (README §10 "v20 -> v21", `poi_db_reader.load_poi_icons()` --
+        real, standard PNG images, `ImageSet_ID=1` = the plain 2D set) --
+        cheap (61 small PNGs) compared to the POI decode itself, so no
+        separate progress step. Meant to run in its OWN BackgroundTask,
+        same deferred pattern as load_heavy_layer() above: kicked off
+        right after `load()` returns so it finishes in parallel with the
+        user's first search/pan/zoom rather than blocking "Open Map
+        ISO". Sets `poi_ready=True` on success; until then,
+        `pois_for_bbox()` simply returns an empty list."""
         self.poi_building = True
         try:
             iso = riso.open_tolerant(self.iso_path)
@@ -1438,6 +1445,7 @@ class MapData:
             if progress:
                 progress("Decoding 4.7 million real POI coordinates...")
             self.poi_cache = poidb.load_poi_cache(self.poi_path)
+            self.poi_icons = poidb.load_poi_icons(self.poi_path)
             if progress:
                 progress("POI data ready: %d real points of interest." % len(self.poi_cache["poi_id"]))
             self.poi_ready = True
@@ -2398,6 +2406,13 @@ class App:
         # _to_canvas()'s own live-query fallback.
         self._canvas_w = None
         self._canvas_h = None
+        # Decoded POI icon cache (README §10 "v20 -> v21"): {partition_id:
+        # PIL.Image.Image, RGBA}, lazily decoded once from MapData.poi_icons'
+        # raw PNG bytes on first use (see _get_poi_icon()) and kept for the
+        # lifetime of this App -- there are only 61 real icons total, so
+        # this costs nothing to keep around, and decoding a PNG once instead
+        # of on every redraw matters at real POI counts.
+        self._poi_icon_images = {}
         self._drag_start = None
         self.busy = False
         self._area_loading = False
@@ -3381,6 +3396,26 @@ class App:
         rest = [c for c in cities if c.index != winner.index]
         return [winner] + rest[:max(0, MAX_CITY_LABELS - 1)]
 
+    def _get_poi_icon(self, partition_id):
+        """Real POI category icon for `partition_id` (README §10 "v20 ->
+        v21", `poi_db_reader.load_poi_icons()`'s cracked PNG data) as a
+        decoded `PIL.Image` (RGBA), decoded once and cached on
+        `self._poi_icon_images` thereafter. Returns None if no icon data
+        is loaded yet, or this partition has no resolvable icon (neither
+        should normally happen on the reference disc, but a caller
+        should still fall back gracefully rather than assume)."""
+        img = self._poi_icon_images.get(partition_id)
+        if img is not None:
+            return img
+        if self.data is None or not self.data.poi_icons:
+            return None
+        entry = self.data.poi_icons.get(partition_id)
+        if entry is None:
+            return None
+        img = Image.open(io.BytesIO(entry["png_bytes"])).convert("RGBA")
+        self._poi_icon_images[partition_id] = img
+        return img
+
     def _redraw(self):
         """Full redraw of the map view.
 
@@ -3591,28 +3626,58 @@ class App:
                         mx, my = self._to_canvas(mlon, mlat)
                         road_label_candidates.append((pix_len, name, mx, my))
 
-        # Real POIs (README §10 "v19 -> v20", EDB/POI/POI.DB3) -- rasterized
-        # into the SAME `img` bitmap as the road dots above, for the exact
-        # same reason (README §10 "v17 -> v18"): a wide, zoomed-out-enough
-        # viewport where a broad category like "gas station" (zoom_level_m
-        # 400,000) still qualifies could plausibly cover thousands of real
-        # POIs, and drawing that many as individual canvas.create_oval()
-        # items would risk reintroducing the exact "Not Responding" freeze
-        # the v17->v18 rework fixed for road dots. Text LABELS are still
-        # real canvas items (added below, like road/city labels) but capped
-        # at MAX_POI_LABELS regardless of how many markers were drawn.
+        # Real POIs (README §10 "v19 -> v20"/"v20 -> v21", EDB/POI/POI.DB3)
+        # -- rasterized into the SAME `img` bitmap as the road dots above,
+        # for the exact same reason (README §10 "v17 -> v18"): a wide,
+        # zoomed-out-enough viewport where a broad category like "gas
+        # station" (zoom_level_m 400,000) still qualifies could plausibly
+        # cover thousands of real POIs, and drawing that many as individual
+        # canvas items would risk reintroducing the exact "Not Responding"
+        # freeze the v17->v18 rework fixed for road dots. Each POI's own
+        # real category icon (research/poi_db_reader.py's cracked PNG data,
+        # "v20 -> v21") is pasted in with alpha compositing, anchored at its
+        # own real HotSpotX/HotSpotY -- measured at ~0.0056ms/paste, so even
+        # the widest realistic view (100k+ POIs) stays well under a second.
+        # Falls back to a plain colored dot only if no icon is available for
+        # that partition (should not happen on the reference disc, but not
+        # assumed impossible). Text LABELS are still real canvas items
+        # (added below, like road/city labels) but capped at MAX_POI_LABELS
+        # regardless of how many markers were drawn.
         poi_label_candidates = []
         if self.show_pois_var.get() and self.data is not None and self.data.poi_ready:
             vb = self._visible_bbox()
             if vb is not None:
                 lon_min, lon_max, lat_min, lat_max = vb
                 max_span_m = span_m_for_scale(self.scale, w, h)
+                # Declutter (README §10 "v20 -> v21"): a real, dense area
+                # (e.g. central Sofia at street level) can have MANY POIs
+                # within one icon's own on-screen footprint -- rendering all
+                # of them produces an unreadable solid wall of overlapping
+                # icons (confirmed directly on a real Sofia test render).
+                # Simple, cheap grid-occupancy dedup: bucket each icon's own
+                # anchor point into a POI_ICON_CELL_PX-sized cell and skip
+                # any POI whose cell is already taken -- keeps roughly one
+                # icon per icon-width of screen space, in `pois_for_bbox()`'s
+                # own return order (no particular priority weighting this
+                # session -- see "what remains open" below).
+                occupied_cells = set()
                 for poi in self.data.pois_for_bbox(lon_min, lon_max, lat_min, lat_max, max_span_m):
                     px, py = self._to_canvas(poi["lon"], poi["lat"])
                     if not (-10 <= px <= w + 10 and -10 <= py <= h + 10):
                         continue
-                    draw.ellipse([px - 2.2, py - 2.2, px + 2.2, py + 2.2],
-                                 fill=POI_DOT_COLOR, outline=BG_COLOR)
+                    cell = (int(px // POI_ICON_CELL_PX), int(py // POI_ICON_CELL_PX))
+                    if cell in occupied_cells:
+                        continue
+                    occupied_cells.add(cell)
+                    icon = self._get_poi_icon(poi["partition_id"])
+                    if icon is not None:
+                        entry = self.data.poi_icons.get(poi["partition_id"], {})
+                        hx = entry.get("hotspot_x", icon.width // 2)
+                        hy = entry.get("hotspot_y", icon.height // 2)
+                        img.paste(icon, (int(round(px - hx)), int(round(py - hy))), icon)
+                    else:
+                        draw.ellipse([px - 2.2, py - 2.2, px + 2.2, py + 2.2],
+                                     fill=POI_DOT_COLOR, outline=BG_COLOR)
                     if poi["name"]:
                         poi_label_candidates.append((poi["name"], px, py))
 
@@ -3648,14 +3713,17 @@ class App:
                                      font=("Segoe UI", 8), anchor="center")
             placed.append((name, mx, my))
 
-        # POI name labels (README §10 "v19 -> v20") -- markers are already
-        # rasterized above; only the TEXT is a real canvas item, and only
-        # up to MAX_POI_LABELS of them regardless of how many markers were
-        # drawn, same clutter guard MAX_CITY_LABELS already uses below.
+        # POI name labels (README §10 "v19 -> v20"/"v20 -> v21") -- markers
+        # are already rasterized above (as real icons since "v20 -> v21");
+        # only the TEXT is a real canvas item, and only up to MAX_POI_LABELS
+        # of them regardless of how many markers were drawn, same clutter
+        # guard MAX_CITY_LABELS already uses below. Offset -21px to clear a
+        # real icon's own top edge (34x39, hotspot at y=19 -- i.e. the icon
+        # extends ~19-20px above its own anchor point).
         for name, px, py in poi_label_candidates[:MAX_POI_LABELS]:
             if not far_enough(name, px, py):
                 continue
-            self.canvas.create_text(px, py - 6, text=name, fill=POI_LABEL_COLOR,
+            self.canvas.create_text(px, py - 21, text=name, fill=POI_LABEL_COLOR,
                                      font=("Segoe UI", 8), anchor="s")
             placed.append((name, px, py))
 

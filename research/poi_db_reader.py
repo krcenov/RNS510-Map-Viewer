@@ -342,3 +342,62 @@ def load_poi_cache(db_path):
         "name": name,
         "partitions": partitions,
     }
+
+
+# ---------------------------------------------------------------------------
+# Real POI icons -- CRACKED (a later session): a clean, fully self-
+# documenting schema, real standard PNG images.
+# ---------------------------------------------------------------------------
+#
+# `PoiPartition_BaseAttributes.Icon_ID` -> `Image_BaseAttributes.Image_ID`
+# (validated directly: joining the two and comparing each partition's own
+# real CATEGORY name against its own linked image's own real NAME shows an
+# exact or near-exact match for every partition checked, e.g. partition 3
+# "gas station" -> Image_ID 4, itself named "gas station"; partition 14
+# "atm" -> an image named "atm eur") -> `Image_ImageBlob_Relation` (filtered
+# to one `ImageSet_ID` -- `ImageSet_BaseAttributes` names 4 real sets:
+# `2D.34.39.PNG.Day`/`.Day.Shadow`, `3D.34.39.PNG.Day`/`.Day.Shadow`;
+# `ImageSet_ID=1` ("2D...Day", no shadow) is the natural choice for a 2D
+# top-down map view) -> `ImageBlob_BaseAttributes.ImageData`, which is a
+# REAL, STANDARD PNG FILE -- confirmed via its own magic bytes
+# (`89 50 4E 47 0D 0A 1A 0A`), no proprietary container at all. Every icon
+# in the `2D.34.39...` sets is exactly 34x39 pixels -- the SAME dimensions
+# already found for `tpd/`'s own `ICONS/` PNG folder (research/tpd_reader.py),
+# consistent with this being the same underlying icon set (or a close
+# sibling of it) shared across both POI subsystems on this disc.
+# `ImageBlob_BaseAttributes.HotSpotX`/`HotSpotY` give each icon's own real
+# anchor point (17, 19 for the 34x39 icons -- i.e. horizontally centered,
+# vertically just past center, consistent with a classic map-pin icon
+# whose "pointer" sits below the icon's own visual center).
+
+
+def load_poi_icons(db_path, image_set_id=1):
+    """Load every real POI category icon (CRACKED, see above) for one
+    `ImageSet_ID` (default 1, `"2D.34.39.PNG.Day"` -- the plain 2D set,
+    no drop-shadow). Returns {partition_id: {"png_bytes": bytes, "w":
+    int, "h": int, "hotspot_x": int, "hotspot_y": int}} -- raw PNG bytes,
+    not decoded to any particular image library's own type (this module
+    has no GUI/image-library dependency; the caller decodes with
+    whatever it already uses, e.g. `PIL.Image.open(io.BytesIO(...))`).
+    Partitions with no resolvable icon (should not happen on the
+    reference disc, but not assumed impossible) are simply omitted."""
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT p.PoiPartition_ID, b.X, b.Y, b.W, b.H, b.HotSpotX, b.HotSpotY, b.ImageData
+            FROM PoiPartition_BaseAttributes p
+            JOIN Image_ImageBlob_Relation rel
+                ON rel.Image_ID = p.Icon_ID AND rel.ImageSet_ID = ?
+            JOIN ImageBlob_BaseAttributes b ON b.ImageBlob_ID = rel.ImageBlob_ID
+        """, (image_set_id,))
+        icons = {}
+        for partition_id, x, y, w, h, hotspot_x, hotspot_y, image_data in cur.fetchall():
+            icons[partition_id] = {
+                "png_bytes": bytes(image_data),
+                "w": w, "h": h,
+                "hotspot_x": hotspot_x, "hotspot_y": hotspot_y,
+            }
+        return icons
+    finally:
+        conn.close()
