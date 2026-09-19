@@ -2795,6 +2795,25 @@ structure (a roughly-constant 2-byte value paired with a slowly,
 near-linearly incrementing one) but nothing decoded into named fields.
 Full methodology: `research/tmc_reader.py`.
 
+### 3.26 `db/zone.cfg` (81 bytes, plain text) — IDENTIFIED: the very last file on the disc this project had never actually opened
+The whole file is one line: `eeu = 10.1/DB 01234 18408555
+44444444444444434441111444444444214114442222444444`. `eeu` matches the
+disc's own dataset name; `18408555` ends in `8555` — this reference
+disc's own volume number (`CD_8555`, matching `cdrom.toc`'s own
+`Volume: CD_8555` line, §3.24) — consistent with a disc-specific (not
+dataset-generic) config value. `10.1/DB` and `01234` weren't matched
+against anything else found this session. The trailing 50-character
+digit string is mostly `4` (37/50, 74%) with a handful of `1`/`2`/`3`
+values — 50 doesn't match this project's own per-country (35) or
+per-timeinfo (13) counts exactly, so it isn't a direct 1:1 list under
+either existing counting, though the overall shape (one dominant value,
+several rare minorities) is qualitatively similar to `eeu.ti`'s own
+`timeinfo_id` distribution (§3.22). Not decoded further. Full details:
+`research/zone_reader.py`.
+
+**With this, every file on `CD_8555` — all 1,535 of them across `db/`
+and the 5 disc-root subsystems — has been examined at least once.**
+
 ---
 
 ## 4. ISO container handling
