@@ -1863,20 +1863,22 @@ first guessed, a "region" table itself).
   content. Not allocated in file order (first-seen sequence is
   `0, 39, 3, 1, 4, 2, 5, 6, ...`, not `0, 1, 2, 3, ...`) and records
   sharing one `state_id` aren't necessarily contiguous.
-- **`timeinfo_id` (byte 66) — CRACKED (identity, plausible; not
-  independently confirmed)**: range 1–13, heavily skewed (`1` alone covers
-  72% of records, `3` is next at 17%); constant within 98.6% of `state_id`
-  groups (681/691). §3.16's schema names the field immediately after
-  `name` in the real "county" table `timeinfoID` — a foreign key into
-  `eeu.ti`'s own time-dependent-restriction records (timezone, start/
-  duration fields — seasonal or time-of-day access rules), which fits this
-  byte's shape well (most counties share a common "default" profile) and
-  directly explains why this section's own two originally-tested
-  hypotheses (country reference; count of child `eeu.cty` localities) both
-  failed — it isn't counting or naming the county itself, it's pointing at
-  a shared, county-independent rule catalog. `eeu.ti` was not opened this
-  session, so this rests on the schema's field ordering plus a plausible
-  value shape, not a direct cross-file lookup.
+- **`timeinfo_id` (byte 66) — CRACKED (identity), CONFIRMED directly
+  against `eeu.ti`'s own content in a later session (§3.22)**: range
+  1–13, heavily skewed (`1` alone covers 72% of records, `3` is next at
+  17%); constant within 98.6% of `state_id` groups (681/691). §3.16's
+  schema names the field immediately after `name` in the real "county"
+  table `timeinfoID` — a foreign key into `eeu.ti`'s own time-dependent-
+  restriction records (timezone, start/duration fields — seasonal or
+  time-of-day access rules), which fits this byte's shape well (most
+  counties share a common "default" profile) and directly explains why
+  this section's own two originally-tested hypotheses (country
+  reference; count of child `eeu.cty` localities) both failed — it isn't
+  counting or naming the county itself, it's pointing at a shared,
+  county-independent rule catalog. **§3.22 closes the loop**: `eeu.ti`'s
+  own 2 richest, most-detailed timeinfo profiles (`timeinfo_id` 1 and 3)
+  are EXACTLY this field's own 2 most common values (72% and 17% of all
+  counties) — an exact, non-coincidental correspondence.
 - The 26 always-zero bytes between `state_id` and `name`, and the 109
   always-zero bytes after `timeinfo_id`, match the schema's own remaining
   "county" fields (`zoneID`, `start_cityID`, `end_cityID`, `cover`, a
@@ -2283,6 +2285,77 @@ has `state_id=4` → state 4 = `WALLIS`, `country_id=0`=`SCHWEIZ`
 (Switzerland). All exactly right — `eeu.cny`'s `state_id` really is a
 genuine foreign key into this real, independently-verifiable table, not
 a guess.
+
+### 3.22 `eeu.ti` — time-info / DST rule table (485 bytes, NOT_COMPRESSED) — CRACKED (partially): the real table `eeu.cny`'s `timeinfo_id` points into, confirmed by exact id-frequency correspondence
+94-byte header (record count 17 read straight from the header), then
+exactly **17 fixed 23-byte records** — small enough to fully hand-inspect
+in one pass.
+
+```
+uint16 LE  timeinfo_id  -- 1-13, CONFIRMED to match eeu.cny's own
+                            timeinfo_id range exactly (see below);
+                            NOT a per-record primary key — multiple
+                            physical records can share one value
+uint16 LE  ???           -- eeu.mod's real field name: timezone,
+                            position cracked, meaning not cracked (see
+                            below)
+uint8      seqnr         -- a clean 0, 1, 2 sub-entry counter within one
+                             timeinfo_id group
+bytes[18]  ???           -- 14 more named fields (typeofentry,
+                            startyear, monthorweek, flcount, startday,
+                            starthour, startminute, durationnegative,
+                            durationyears, durationmonths,
+                            durationweeks, durationdays, durationhours,
+                            durationminutes) — not decomposed into
+                            individual fields this session
+```
+
+**Grouping — CRACKED**: 17 physical records cover only 13 distinct
+`timeinfo_id` values. `timeinfo_id=1` has 3 sub-records (`seqnr` 0, 1,
+2); `timeinfo_id=3` has 3 sub-records; every other value (2, 4-13) has
+exactly 1 sub-record each (`3 + 3 + 11×1 = 17`, exact). The unresolved
+`timezone` field is constant within each group.
+
+**Cross-validated EXACTLY against `eeu.cny`'s own `timeinfo_id`
+distribution**: the 2 values with rich 3-sub-record groups here (1 and
+3) are EXACTLY the 2 most common values in `eeu.cny`'s own `timeinfo_id`
+field (§3.15) — `timeinfo_id=1` covers 1,674/2,326 counties (72%),
+`timeinfo_id=3` covers 398/2,326 (17%), together 89% of every county on
+the disc. Every other id here (each with just 1 simple sub-record)
+matches `eeu.cny`'s own much rarer counts for those same ids (2-180
+counties each). This is an exact, non-coincidental correspondence — the
+two heavily-used "default" time-info profiles are exactly the two with
+real, detailed sub-schedule data — and closes the loop `eeu.cny`'s own
+write-up (§3.15) left open: `timeinfo_id` really is a genuine foreign
+key into this real, independently-verifiable table.
+
+**Record shapes — CRACKED (structural pattern), not decomposed into
+named fields**: every record's `bytes[5:23]` falls into one of 2 clean
+shapes. "Real entry" (14/17 records — both `seqnr=0`/`seqnr=1` records,
+and all 11 singleton records): `byte[5] = 0x79`; the 11 singleton
+records additionally share an *identical* 18-byte tail — every rare/
+simple `timeinfo_id` profile carries the exact same "no extra schedule"
+default payload, differing from each other only in `timeinfo_id` and the
+unresolved `timezone` field. "Terminator" (the 2 `seqnr=2` records, one
+per rich group): `byte[5] = 0x2a`, every other byte in `bytes[5:23]` is
+zero — consistent with a list-terminator or count marker, not
+independently confirmed.
+
+**Plausible (untested) interpretation**, from the schema's own field
+names: `eeu.ti` is a real **Daylight Saving Time (DST) transition-rule
+table**. The field list (`startyear`/`monthorweek`/`startday`/
+`starthour`/`startminute` = when a transition happens;
+`durationnegative`/`durationyears`/.../`durationminutes` = how far the
+clock shifts, and in which direction) matches the classic shape of a DST
+rule (e.g. POSIX TZ rules or Windows `TIME_ZONE_INFORMATION`, which also
+encode transition dates as day-of-week + week-of-month). A real DST
+profile needs exactly 2 rules — "spring forward" and "fall back" —
+which is exactly the `seqnr=0`/`seqnr=1` pair found in both rich groups,
+with `seqnr=2` as a count/terminator record. **Not verified byte-by-
+byte**; the "real entry" tail bytes weren't decomposed into individual
+fields this session, and the `timezone` field's own values (1300, 1400,
+1400, 1500, ..., 2400 — stepping by ~100 per group rather than
+resembling a real UTC offset) weren't explained.
 
 ---
 

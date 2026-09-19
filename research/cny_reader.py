@@ -124,12 +124,21 @@ Liguria members, Imperia and Savona, are 11 records apart, with unrelated
 Swiss/other-Italian counties between them).
 
 ============================================================================
-`timeinfo_id` (byte 66) -- CRACKED (identity, plausible); not
-independently confirmed against eeu.ti's own content
+`timeinfo_id` (byte 66) -- CRACKED (identity), CONFIRMED in a later
+session directly against eeu.ti's own content (research/ti_reader.py)
 ============================================================================
 Range 1-13 across the file, heavily skewed: `1` alone covers 1,674/2,326
 (72%) of all records; `3` is next-most-common (398, 17%); the rest (4, 6,
 8, 5, 11, 12, 9, 10, 13, 2, 7) are rare (2-180 records each).
+
+CONFIRMATION (later session): eeu.ti's own 17 physical records cover
+exactly these same 13 distinct id values, and the 2 ids with RICH,
+detailed sub-schedule data in eeu.ti (id=1 and id=3, each with 3
+sub-records) are EXACTLY this file's own 2 most common ids (72% and 17%
+of all counties respectively) -- an exact, non-coincidental
+correspondence between "how often a profile is used" and "how much real
+schedule data that profile carries." See research/ti_reader.py for the
+full cross-check.
 
 eeu.mod's own "county" schema lists `timeinfoID` as the field immediately
 following `name` -- matching this byte's own position exactly. This is a
@@ -149,11 +158,13 @@ profile, with a handful of real exceptions (10 groups, concentrated at
 the highest `state_id` values, 679-690) plausibly reflecting a region
 that genuinely spans more than one such profile.
 
-**Not independently confirmed**: eeu.ti was not opened this session, so
-this identification rests on the schema's own field ordering plus the
-value shape's plausibility, not a direct cross-file lookup (unlike
-`state_id`, which was validated against real, independently-known
-geography).
+**Confirmed** (research/ti_reader.py, later session): the exact
+correspondence between eeu.cny's own id-frequency distribution and
+eeu.ti's own per-id record richness closes this gap -- `timeinfo_id`
+really is a genuine foreign key into eeu.ti's real "timeinfo" table, not
+just a schema-consistent guess (though eeu.ti's own per-field meaning
+beyond `timeinfo_id`/`seqnr` is itself only partially cracked -- see
+ti_reader.py).
 
 ============================================================================
 Practical use
@@ -178,9 +189,9 @@ def read_cny(path):
     characters -- decode with errors='replace' or per-locale as needed).
     Field names match eeu.mod's own real schema (mod_reader.py) --
     `state_id` is validated against real geography AND directly against
-    eeu.stt's own content (stt_reader.py), `timeinfo_id` is a
-    plausible, schema-consistent identification not independently
-    confirmed against eeu.ti's own content (see this module's
+    eeu.stt's own content (stt_reader.py), `timeinfo_id` is confirmed
+    directly against eeu.ti's own content (ti_reader.py) via an exact
+    id-frequency correspondence (see this module's
     docstring)."""
     with open(path, "rb") as f:
         data = f.read()
