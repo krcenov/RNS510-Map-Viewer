@@ -156,8 +156,18 @@ are for the East Europe (`eeu`) dataset on this specific disc.
   Linosa, Sicily; records ~300MB in decode to Timișoara, Romania. Both match real street
   names at those coordinates.
 - Unresolved fields (preserved as-is when editing, zero-filled as best-effort when
-  appending new records): `byte[0]` (high entropy), `bytes[1:5]` (~5 distinct patterns,
-  candidate road-class/one-way flags — cross-checked against `eeu.typ`, no match found),
+  appending new records): `byte[0]` (high entropy), `bytes[1:5]` (candidate road-class/
+  one-way flags — cross-checked against `eeu.typ`, no match found;
+  **CORRECTED, later session, §3.3**: a full-file-scale scan finds
+  **6,174 distinct values**, not "~5 distinct patterns" as this section
+  previously reported from a much smaller sample — no single value
+  covers more than 0.41% of records. Tested against `eeu.si` (§3.20):
+  decoding `bytes[1]` with `eeu.si`'s own exact `rank`/`class`/`divided`
+  bit layout produces values filling the full 0-7/0-15 range rather than
+  `eeu.si`'s own bounded 0-4/0-12 ranges, so `eeu.rd` does not directly
+  embed `eeu.si`-style flags that way; also tested for correlation
+  against `eeu.iof`'s own common-case `count` field and found none
+  (`r ≈ -0.02`, essentially zero) — see §3.3 for the full methodology),
   `bytes[5:8]` (3-byte LE, often shared across same-name records — candidate
   shared-geometry pointer), `bytes[16:20]`/`bytes[20:24]` (two more LE uint32 fields,
   small values, candidate cross-references — not matched to another file yet).
@@ -201,16 +211,42 @@ are for the East Europe (`eeu`) dataset on this specific disc.
   `.prl` hypothesis addresses, from a completely different file. Which (if
   either) the real unit's own address-entry screen actually uses is
   unconfirmed on hardware.
-- **Still open**: (1) the common-case `vb` byte (~99.6% of records, `zero4==0`)
-  remains completely unresolved — its real range is 0-255 (not 0-18, the old
-  15-sample finding), heavily skewed toward small values (2/1/3/0/4 are the 5
-  most common, >70% of records combined); the old weak tag-complexity
-  cross-check (§3.6/§8 #5) was never re-run at scale. (2) which ~31,318 of
-  8.8M records become anchors isn't recovered — not a clean 1:1 with `eeu.cty`'s
-  79,738 top-level settlements either. (3) `c80`'s exact bit-level meaning
-  (0x80 common case; 0 or 1 on confirmed anchors; rare 129-255 outliers) isn't
-  pinned down. (4) whether an anchor's own list is ordered by anything checked
-  (alphabetical: no, only 16/100 sampled; distance/on-disk-order: not tested).
+- **`eeu.mod`'s real field names** (§3.16, checked in a later session): this
+  table is `intersectionOffsetFile`, with 4 real leaf fields —
+  `offset`, `countAndType` (a wrapper), `type`, `count`. Confirms/renames
+  what was already found: `offset`=`zero4`, `count`=`vb`. `c80` is really
+  `type`, and its value shape now makes clean sense as a discriminator:
+  `type=0x80` (bit 7 set) is the "no real anchor" default; confirmed
+  anchors show `type` in `{0, 1}` (bit 7 clear) — plausibly bit 7 = "is
+  this a real offset/count pair", with 0/1 a genuine 2-valued sub-type
+  for real anchors. Not independently confirmed beyond this value-shape
+  observation.
+- **A later session's cross-reference attempts for the common-case
+  `count`/`vb`**: one real, moderate correlation found — `count` for
+  `zero4==0` records correlates positively (Pearson `r ≈ 0.21`, over the
+  739,211 `eeu.rd` records referenced at least once) with how many
+  `eeu.il` entries reference that same `eeu.rd` record elsewhere in the
+  file (built by parsing all 1,448,723 real `eeu.il` entries); records
+  `eeu.il` references at all have roughly DOUBLE the mean/median `count`
+  of records it never references (mean 7.23 vs. 3.82, median 5 vs. 2) —
+  a real, statistically significant signal, not an exact per-record
+  formula. **Two hypotheses tested and refuted**: `eeu.rd`'s own
+  `bytes[1:5]` does not correlate with `count` (`r ≈ -0.02`; this also
+  corrected that field's own "~5 distinct patterns" claim to 6,174
+  distinct values at full scale — see §3.1); a coordinate-grid local-
+  road-density proxy (a literal intersection-count hypothesis, given the
+  file's own real name) shows only a weak correlation (`r ≈ 0.04-0.15`).
+- **Still open**: (1) the common-case `count`'s exact meaning beyond the
+  `eeu.il`-reference-count correlation above; its real range is 0-255,
+  heavily skewed toward small values (2/1/3/0/4 are the 5 most common,
+  >70% of records combined). (2) which ~31,318 of 8.8M records become
+  anchors isn't recovered — not a clean 1:1 with `eeu.cty`'s 79,738
+  top-level settlements either. (3) `type`'s exact bit-level meaning
+  beyond the 0x80-vs-{0,1} discriminator (rare 129-255 outliers on the
+  common-case side, and 2-7 on a few confirmed anchors, aren't
+  individually explained). (4) whether an anchor's own list is ordered
+  by anything checked (alphabetical: no, only 16/100 sampled; distance/
+  on-disk-order: not tested).
   Full methodology, every validation number, and concrete next-step
   suggestions: `research/iof_reader.py`'s module docstring.
 
@@ -1960,12 +1996,14 @@ directly cross-referencing this schema**:
 - **`eeu.si` is named `seginfo`**, with real fields `rank`, `class`,
   `divided`, `drivables`, `toll_vignette`, `toll_road`, `restclass`,
   `urban`, `route_num_type`, `paved`, ... — a genuine road-classification
-  table. **Opened in a later session (§3.20)**: `rank`/`class`/`divided`
-  and `route_num_type`/`paved` were cracked, but the hoped-for link to
-  `eeu.rd`'s own `bytes[1:5]` turned out not to hold up structurally —
-  `eeu.rd`'s ~5 distinct patterns there are far too few to index
-  `eeu.si`'s 20,381 distinct records. See §3.20 for the corrected lead
-  (the real `seginfoID` FK likely lives on the MAP_COMPRESSED tile
+  table. **Opened in a later session (§3.20)**: `rank`/`class`/`divided`,
+  `route_num_type`/`paved`, `driveable_lower`/`drivable_upper`,
+  `tollbooth_direction`, and `restclass` were all cracked, but the
+  hoped-for link to `eeu.rd`'s own `bytes[1:5]` turned out not to hold up
+  — `eeu.rd`'s `bytes[1:5]` doesn't decode to `eeu.si`-style values using
+  `eeu.si`'s own bit layout, and shows no correlation with `eeu.iof`'s
+  own `count` field either (§3.3). See §3.20/§3.3 for the corrected
+  leads (the real `seginfoID` FK likely lives on the MAP_COMPRESSED tile
   format's own segment records instead).
 
 **What's not cracked**: the exact binary encoding surrounding each field
@@ -2238,12 +2276,16 @@ Full per-field byte tabulation: `research/si_reader.py`.
 
 **Corrects a previous session's lead**: §3.16 flagged `eeu.si` as "a
 strong, not-yet-pursued lead" for `eeu.rd`'s own unresolved `bytes[1:5]`
-(§3.1, "candidate road-class flags"). Checked directly this session:
-`eeu.rd`'s `bytes[1:5]` has only **~5 distinct patterns** across the
-whole file (§3.1) — far too few to serve as a direct foreign-key index
-into `eeu.si`'s 20,381 distinct records (a real FK into a table that
-size needs on the order of 15 bits of entropy, not ~5 discrete states).
-**This specific cross-reference does not hold up structurally.** More
+(§3.1, "candidate road-class flags"). Originally checked against a since-
+corrected "~5 distinct patterns" claim for `eeu.rd`'s own field (§3.1
+now corrects this to 6,174 distinct values at full scale) — but even
+with the correct cardinality, decoding `eeu.rd`'s `bytes[1]` using
+`eeu.si`'s own exact `rank`/`class`/`divided` bit layout produces values
+filling the FULL 0-7/0-15 range rather than `eeu.si`'s own bounded
+0-4/0-12 ranges (and a 46.5% `divided`-equivalent rate vs. `eeu.si`'s
+16.3%), and `eeu.rd`'s `bytes[1:5]` shows no correlation with
+`eeu.iof`'s own `count` field either (§3.3, `r ≈ -0.02`).
+**This specific cross-reference does not hold up.** More
 likely: the real `seginfoID` foreign key lives on the MAP_COMPRESSED
 tile format's own segment records (`eeu.mod`'s "Ordinary Map File" block
 independently names a `seginfoID` field there, alongside `seg`/

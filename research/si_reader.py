@@ -158,22 +158,28 @@ them to anchor a confident 1:1 assignment.
 
 ============================================================================
 eeu.rd cross-reference -- CORRECTS a previous session's lead: does NOT
-hold up as a direct index
+hold up, tested two ways
 ============================================================================
 README S3.16 (`eeu.mod` write-up) flagged `eeu.si` as "a strong,
 not-yet-pursued lead" for `eeu.rd`'s own unresolved `bytes[1:5]`
-("candidate road-class flags", README S3.1). Checked directly this
-session: `eeu.rd`'s `bytes[1:5]` was previously found to have only ~5
-distinct patterns across the WHOLE file (README S3.1) -- far too few
-to serve as a direct foreign-key index into `eeu.si`'s 20,381 distinct
-records (a real FK into a table that size would need on the order of
-15 bits of entropy, not ~5 discrete states). This specific cross-
-reference does not hold up structurally. More likely: the real
-`seginfoID` foreign key lives on the MAP_COMPRESSED tile format's own
-segment records (`eeu.mod`'s "Ordinary Map File" block independently
-names a `seginfoID` field there, alongside `seg`/`restr_left`/
-`restr_right`/`left_node`/`right_node`/`length` -- README S3.16), not on
-`eeu.rd` at all -- `eeu.rd` and the tile format are two separate
+("candidate road-class flags", README S3.1). Originally checked against
+a since-corrected "~5 distinct patterns" claim for that field (README
+S3.1 now corrects this to 6,174 distinct values at full scale, found
+while investigating research/iof_reader.py) -- but even with the
+correct cardinality, decoding `eeu.rd`'s `bytes[1]` directly using
+`eeu.si`'s own exact rank/class/divided bit layout (this module's
+`read_si()`) produces values filling the FULL 0-7/0-15 range rather
+than `eeu.si`'s own bounded 0-4/0-12 ranges (and a 46.5%
+divided-equivalent rate vs. `eeu.si`'s own 16.3%) -- `eeu.rd` does not
+directly embed `eeu.si`-style flags using that encoding. Also tested
+(iof_reader.py): `eeu.rd`'s `bytes[1:5]` shows no correlation with
+`eeu.iof`'s own `count` field either (`r ~ -0.02`). This specific
+cross-reference does not hold up. More likely: the real `seginfoID`
+foreign key lives on the MAP_COMPRESSED tile format's own segment
+records (`eeu.mod`'s "Ordinary Map File" block independently names a
+`seginfoID` field there, alongside `seg`/`restr_left`/`restr_right`/
+`left_node`/`right_node`/`length` -- README S3.16), not on `eeu.rd` at
+all -- `eeu.rd` and the tile format are two separate
 representations of the road network. Not pursued further this session
 (would require reopening the tile format's own segment record parser).
 

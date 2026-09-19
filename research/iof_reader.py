@@ -1,11 +1,15 @@
 """
 iof_reader.py -- decodes eeu.iof, the fixed 6-byte-per-record array parallel
-to eeu.rd (README S3.3). CRACKED this session: for a small (~0.355%) subset
-of eeu.rd records, an eeu.iof record is a pointer into eeu.il describing a
+to eeu.rd (README S3.3). CRACKED (for a small ~0.355% subset of eeu.rd
+records): an eeu.iof record is a pointer into eeu.il describing a
 "nearby street names" list -- an absolute byte OFFSET into eeu.il plus a
-COUNT of consecutive eeu.il entries to read from there. The much larger
-common case (~99.6% of records) still has an unexplained per-record value
--- NOT cracked, see "What remains open" below.
+COUNT of consecutive eeu.il entries to read from there -- and eeu.mod's
+own schema (a later session) confirms the real field names (`offset`,
+`type`, `count`) and gives `type`'s value shape a clean discriminator
+reading (see below). The much larger common case (~99.6% of records)
+still has an unexplained per-record `count` value -- one real, moderate
+correlation found (with `eeu.il`'s own per-road reference count), two
+other hypotheses tested and refuted -- see "What remains open" below.
 
 ============================================================================
 Record layout (6 bytes, same 94-byte SIEMENS header + fixed-record
@@ -96,27 +100,83 @@ unit's own address-entry screen actually reads THIS mechanism, `.rt`/`.rl`/
 `.prl`, both, or neither remains unconfirmed on hardware.
 
 ============================================================================
+eeu.mod's real field names for this table (a later session)
+============================================================================
+`eeu.mod` (research/mod_reader.py) names this table `intersectionOffsetFile`,
+with 4 real per-record leaf fields (once the 13 shared header-struct
+boilerplate strings are excluded, README S3.16): `offset`,
+`countAndType`, `type`, `count`. `countAndType` is a struct/group name
+(by analogy with `eeu.pmm`'s own `type_and_listIndex` wrapper,
+research/postal_reader.py) wrapping its two children `type`/`count`, not
+itself a 5th field. This directly confirms and renames the 2 fields
+already established: `offset` = `zero4` (CRACKED above), `count` = `vb`
+(the confirmed anchor-list length; still unresolved for the common
+case). `c80` is really `type` -- and its own value shape now makes clean
+sense as a discriminator: `type=0x80` (bit 7 set, low 7 bits clear) is
+the "no real anchor" default; confirmed anchors instead show `type` in
+`{0, 1}` (bit 7 CLEAR) -- i.e. bit 7 of `type` is plausibly the real
+"is this a real offset/count pair" flag, with 0/1 a genuine 2-valued
+sub-type for actual anchors. Not independently confirmed beyond this
+value-shape observation.
+
+============================================================================
+A later session's cross-reference attempts for the common-case `count`
+(`vb`) -- one real, moderate correlation found; two hypotheses tested
+and refuted
+============================================================================
+**Tested and CORRELATES (real, moderate, not a clean formula):**
+`count` for `zero4==0` (non-anchor) records correlates positively with
+how many `eeu.il` entries reference that SAME `eeu.rd` record elsewhere
+in the file (built by parsing all 1,448,723 real `eeu.il` entries and
+counting references per `rd_index`, README S3.2's already-cracked
+format) -- Pearson `r ≈ 0.21` over the 739,211 `eeu.rd` records `eeu.il`
+references at least once; `eeu.rd` records `eeu.il` references AT ALL
+have roughly DOUBLE the mean/median `count` value of records it never
+references (mean 7.23 vs. 3.82; median 5 vs. 2). A real, statistically
+significant signal -- not noise -- but not an exact per-record formula
+either (individual records with the same `eeu.il` reference count still
+show a wide spread of `count` values). Plausible reading: `count` may
+be counting something in the same family as "how much alternate-name/
+intersection data exists for this road" without being literally
+`eeu.il`'s own reference count.
+
+**Tested and REFUTED: `eeu.rd`'s own unresolved `bytes[1:5]`** does NOT
+correlate with `count` at full scale (`r ≈ -0.02`, essentially zero) --
+see the correction below; this also invalidates the "correlation with
+`bytes[1:5]` not yet re-tested" open item from the previous write-up.
+
+**Tested and REFUTED: local road density** (a coordinate-grid bucket
+count, ~100m cells, over all 8,809,081 `eeu.rd` records, as a proxy for
+"how many other roads pass through this area" / a literal intersection-
+count hypothesis suggested by the file's own real name
+`intersectionOffsetFile`) shows only a weak correlation with `count`
+(`r ≈ 0.04-0.15` depending on transform) -- much weaker than the
+`eeu.il`-reference-count signal above, not a strong lead.
+
+**CORRECTION to `eeu.rd`'s own documented `bytes[1:5]` field** (found
+while testing the above): a full-file-scale scan finds **6,174 distinct
+values**, not "~5 distinct patterns" as an earlier, much smaller sample
+reported (README S3.1, now corrected) -- a real, high-cardinality field
+(no single value covers more than 0.41% of records). Also tested and
+refuted: decoding `eeu.rd`'s own `bytes[1]` using `eeu.si`'s exact
+`rank`/`class`/`divided` bit layout (research/si_reader.py) produces
+values filling the FULL 0-7/0-15 range rather than `eeu.si`'s own
+bounded 0-4/0-12 ranges, and a `divided` rate of 46.5% vs. `eeu.si`'s
+16.3% -- `eeu.rd` does not directly embed `eeu.si`-style flags using
+that same encoding.
+
+============================================================================
 What remains open
 ============================================================================
-  - **The common-case `vb` byte (~99.6% of records, zero4==0)** is still
-    completely unresolved. Its real range is 0-255 (not the 0-18 an
-    earlier, 15-sample-only session reported) with a strongly right-skewed
-    distribution (2/1/3/0/4 are the 5 most common values, together >70% of
-    all records). A weak cross-check against topology-table tag complexity
-    on 15 samples from one tile found no clean separation (see
-    map_compressed_reader.py's decode_topology() docstring) -- inconclusive,
-    not refuted, on that tiny a sample. NOT re-tested this session against
-    any hypothesis; candidate next steps: road-class-style correlation
-    (does `vb` correlate with which MAP_COMPRESSED generalization layers
-    a road's own geometry appears in -- see map_compressed_reader.py's
-    build_geo_index()/find_tile_for_coord() plus road_naming.py's
-    match_feature() to link an eeu.rd record to its rendered tile
-    feature(s)); correlation with eeu.rd's own still-unresolved
-    bytes[1:5]/bytes[5:8] at FULL scale (the existing docstring's "no
-    match found" claim for bytes[1:5] predates this session and was never
-    re-tested at scale either); correlation with segment count per road
-    name (highways split into many eeu.rd records vs. short local
-    streets).
+  - **The common-case `vb`/`count` value's own exact meaning** is still
+    not pinned down -- only the `eeu.il`-reference-count correlation
+    above (real but not exact) was found this session. Candidate next
+    steps: does `count` correlate with which MAP_COMPRESSED
+    generalization layers a road's own geometry appears in (see
+    map_compressed_reader.py's build_geo_index()/find_tile_for_coord()
+    plus road_naming.py's match_feature()); does it correlate with
+    `eeuz.rl`/`eeuz.prl`'s own per-road name-search entry count (a
+    different, not-yet-tried search-index cross-reference).
   - **Which ~31,318 of 8,809,081 records become "anchors"** (nonzero
     `zero4`) is not recovered. Not a simple "one per real eeu.cty
     settlement" -- eeu.cty has 79,738 top-level (no-comma) entries on the
@@ -143,12 +203,15 @@ Practical use
 few hundred ms) and returns every record with a nonzero `zero4` --
 i.e. every "has a nearby-street-list" road. `nearby_street_entries()`
 reads the actual list for one anchor (offset, count) against a real,
-already-open `eeu.il` byte string. Neither of the two already-cracked
-prerequisite files needs re-implementing here: `.il`'s own
-`[11-byte prefix][name][0x00]` format is read inline (see README S3.2),
-not imported from a separate module (there isn't a dedicated `.il` reader
-module yet either -- `rns510_core.py` handles `.il` for the editing tool
-directly).
+already-open `eeu.il` byte string. `il_reference_counts()` parses the
+whole `eeu.il` file once and returns a `{rd_index: reference_count}`
+dict -- the basis for the `count`/`eeu.il`-reference-count correlation
+above, reusable for testing further hypotheses. Neither of the two
+already-cracked prerequisite files needs re-implementing here: `.il`'s
+own `[11-byte prefix][name][0x00]` format is read inline (see README
+S3.2), not imported from a separate module (there isn't a dedicated
+`.il` reader module yet either -- `rns510_core.py` handles `.il` for the
+editing tool directly).
 """
 
 import struct
@@ -247,6 +310,31 @@ def nearby_street_entries(il_data, offset, count):
         rd_index, name, pos = parsed
         entries.append((rd_index, name))
     return entries
+
+
+def il_reference_counts(il_data):
+    """Parse the whole eeu.il file once and return a {rd_index:
+    reference_count} dict -- how many eeu.il entries point at each
+    eeu.rd record. `il_data` is the whole, already-read eeu.il file
+    bytes (header included). This is the basis for the `count`/eeu.il-
+    reference-count correlation documented in this module's docstring
+    (r ~ 0.21 against eeu.iof's own common-case `count`/`vb` field)."""
+    from collections import Counter
+    body = il_data[IL_HEADER_SIZE:]
+    n = len(body)
+    pos = 0
+    counts = Counter()
+    while pos < n:
+        if pos + 11 > n:
+            break
+        rd_index = struct.unpack_from("<I", body, pos)[0]
+        rest = body[pos + 11:pos + 11 + 300]
+        nul = rest.find(b"\x00")
+        if nul <= 0:
+            break
+        counts[rd_index] += 1
+        pos = pos + 11 + nul + 1
+    return dict(counts)
 
 
 def rd_record(rd_data, index):
