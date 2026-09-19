@@ -87,7 +87,15 @@ dividing at k=0 for all 6 is a strong structural signal, not a guess):
 `eeu.pmc`/`eeu.pmm` (record_count_lo16 = 20,872 each) do NOT divide their
 own body sizes evenly at k=0..4 -- either their real record size isn't
 fixed, the true count needs a larger wraparound multiple, or they don't
-use this convention at all. `eeu.mod`/`eeu.tmc` both show
+use this convention at all.
+CORRECTION (later session, via research/pmc_reader.py): the real
+wraparound multiple was k=62 (20,872 + 65,536*62 = 4,084,104), giving an
+exact 4-byte fixed record -- this convention held after all, the k=0..4
+search range tried here just wasn't wide enough. Both files' bodies
+turned out to be a pure identity array (value == index for every
+record), confirming this disc's postal-code subsystem is unpopulated
+rather than this file having some unusual non-fixed format.
+`eeu.mod`/`eeu.tmc` both show
 `record_count_lo16 == 0` -- consistent with either a genuinely
 variable-length body (like `eeu.il`, README S3.2, which also doesn't fit
 a clean fixed-record model) or a real count that's an exact multiple of

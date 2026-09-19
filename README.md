@@ -1963,6 +1963,9 @@ per-field descriptor — e.g. `stamp`/`copyright`/`db_release`/`db_version`/
 with 5 identically-shaped fixed 16-byte string fields — but a complete,
 general parser for arbitrary fields wasn't built this session).
 
+Full methodology, the complete table→file mapping, and every
+cross-reference: `research/mod_reader.py`'s module docstring.
+
 ### 3.17 `eeu.pcl` — phoneme cluster list (94 bytes, NOT_COMPRESSED) — IDENTIFIED: genuinely empty on this disc, real name confirmed via the disc's own `files.cfg`
 94-byte header only — **zero body bytes**, confirmed directly: file size
 is exactly 94, and `bytes[90:94]` (`total_size`, §3.1) reads 94 too, an
@@ -2029,8 +2032,53 @@ simply never populated for this specific EU East V17 release. There is no
 byte-level format left to reverse-engineer (zero body bytes exist to
 examine); this is as cracked as an empty file can get.
 
-Full methodology, the complete table→file mapping, and every
-cross-reference: `research/mod_reader.py`'s module docstring.
+### 3.18 `eeu.pmc` — postal-code "merge city" table (16.3MB, NOT_COMPRESSED) — CRACKED: fixed 4-byte records, all-identity content confirms this disc's whole postal-code subsystem is unpopulated
+94-byte header (`bytes[90:94]` `total_size` matches the real file size
+exactly, `16,336,510`). Body is `16,336,416` bytes of fixed **4-byte**
+(uint32 LE) records — real record count **4,084,104**, an EXACT match
+(`4,084,104 × 4 = 16,336,416`, zero leftover bytes) once the header's own
+`record_count_lo16` field is un-truncated correctly: `20,872 + 65,536×62
+= 4,084,104`. The earlier unexamined-files pass (§3 "Worth investigating
+first") only tried small wraparound multiples (`k=0..4`) and flagged this
+file "not clean" — the real multiple just needed a much larger `k`, not a
+different convention.
+
+**The content is a perfect identity function, checked exhaustively across
+all 4,084,104 records, zero exceptions**: record `i`'s value is exactly
+`i` — `0, 1, 2, 3, ..., 4084103`. A real "merge" table, even a mostly-
+trivial one, would be expected to have at least some entries pointing
+elsewhere; a perfect identity sequence across 4 million+ records this
+large is the strongest possible signal of an auto-generated placeholder
+array, not populated data.
+
+`eeu.mod`'s own schema (§3.16) names this table `postalcodeListMergeCity`
+(13 fields); `files.cfg` (§3.17) calls it the "postalcode merge city
+file". **`eeu.pmm`** (schema name `postalcodeListSeparate`, `files.cfg`
+"postalcode merge separator file") — same size, same `record_count_lo16`
+— was checked directly against `eeu.pmc` and is **byte-identical in body
+content**, the same 4,084,104-entry identity array; only the 94-byte
+header's `file_type` byte (`63` vs. `64`) differs between the two files.
+Combined with the already-confirmed-empty `eeu.pmp`
+(`postalcodeListMergePostalcode`), `eeu.pol` (`postalcodeList`), and
+`eeu.pot` (`postalcodeTree`) — all bare 94-byte headers with zero body —
+**the entire postal-code subsystem (`.pol`/`.pot`/`.pmm`/`.pmc`/`.pmp`) is
+unpopulated on this specific EU East V17 disc.** Plausibly this
+East-Europe dataset's country set didn't have licensed/available postal
+code data at build time, or the feature wasn't enabled for this
+particular release — not independently confirmed (no other region/market
+disc was available this session to compare against a populated
+postal-code subsystem).
+
+**Open question, not resolved**: why a 4-byte record when `eeu.mod`'s
+schema declares 13 (`postalcodeListMergeCity`)/15
+(`postalcodeListSeparate`) named fields? `eeu.mod`'s own exact per-field
+binary type/width encoding was never fully cracked (§3.16), so this isn't
+a contradiction so much as an unresolved gap — plausibly most of those
+logical fields are zero-width/flag-only in the compiled physical layout
+when unpopulated, and only the one physically-fixed field (this uint32)
+actually exists on disc; or the schema describes a richer
+pre-compaction data model than the final physical format. Not testable
+without a populated postal-code disc to compare against.
 
 ---
 
