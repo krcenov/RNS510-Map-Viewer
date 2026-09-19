@@ -67,27 +67,63 @@ retailers, consistent with `PoiPartition_ID=1`/category `"gas station"`
 (`Category_BaseAttributes` row 6).
 
 ============================================================================
+`PredefinedStatement` -- CRACKED (identity + real embedded SQL text),
+confirms this project's own firmware-based architecture finding
+============================================================================
+35 rows, `(Statement_ID, Name, Class, Version, Par1, Par2, Par3)`. Each
+`Class='script'` row's own `Par3` blob is a small proprietary bytecode
+prefix followed directly by REAL, READABLE SQL TEXT -- e.g.
+`GetNumberOfCategories` embeds `select count(*) from
+Category_BaseAttributes;`; `GetFullPoiData` embeds a real multi-table
+join (`select b.Poi_ID, b.Coordinate, b.Name_String_ID, a.HouseNumber_
+String_ID, ... from Poi_BaseAttributes b left join Poi_AddressAttributes
+a on b.Poi_ID = a.Poi_ID left join Poi_AlertAttributes al on b.Poi_ID =
+al.Poi_ID where b.Poi_ID = ?1;`); `GetPartitionsOfCategoriesByName1`
+embeds a real subquery chain through `PoiPartition_Category_Relation`
+-> `Category_BaseAttributes` -> `String_BaseAttributes`. One
+`Class='sql'` row (`CurrentDateTime`) is plain SQL with no bytecode
+prefix at all (`select strftime('%s', 'now');`). **This directly
+confirms, from the database's own side, this project's earlier
+firmware-only finding** (README S2.5): the real `vdo.nav.api.edb.*`
+client only ever calls a FIXED CATALOG of precompiled, parameterized
+statement templates (`?1` placeholders) -- never arbitrary SQL -- and
+`PredefinedStatement` is that literal catalog.
+
+`PoiPartition_BaseAttributes` (61 rows) real fields include a
+`MapZoomLevel`-shaped column with plausible real map-scale values
+(500000, 400000, 150000, 50000, ...) and a constant `AlertDistance=255`
+sentinel on early rows -- consistent with partitions controlling at
+which zoom level a POI category becomes visible, not independently
+confirmed against the actual rendering code.
+
+`Poi_Relation` (865,543 rows) `RelationType` column takes only 2
+distinct values (`0`, `1`) -- a simple binary relation (plausibly
+"same place, different category" vs. a franchise/chain link, given
+`Related_Poi_ID` pairs of nearby `Poi_ID`s) -- not resolved further.
+
+============================================================================
 NOT decoded this session
 ============================================================================
 **`Poi_BaseAttributes.Coordinate` is a single 64-bit integer** (e.g.
 `-4414907183593832374`), NOT the `/100000`-scaled int32 lon/lat pair
-used everywhere else on this disc. Far too large in magnitude to be two
-packed 32-bit halves under that same scale -- likely a proprietary
-single-value spatial encoding (candidates: a Hilbert/Morton space-filling
--curve index for fast spatial range queries, a signed offset from some
-global origin at a different precision, or a vendor-specific "EDB"
-coordinate convention distinct from the rest of this disc's `eeu.*`
-files). Not reverse-engineered this session -- a real, self-contained
-next investigation (4.7M real POIs, each with a name/address to
-cross-reference against, is an excellent validation set for whichever
-encoding is eventually tried).
+used everywhere else on this disc. **Tested and REFUTED**: `tpd/`'s own
+`TABLES/*.IDX` search-table header (research/tpd_reader.py) declares an
+8-byte `POS:P:8` field for what's structurally the same kind of POI
+record -- splitting `Coordinate`'s 64 bits into two int32 halves (either
+byte order) produces values far outside any plausible degree range for
+every sample tried, so this isn't a simple 2x-int32 position either.
+Likely a proprietary single-value spatial encoding (candidates: a
+Hilbert/Morton space-filling-curve index for fast spatial range
+queries, or a signed offset from some global origin at a different
+precision/base). Not reverse-engineered this session -- a real,
+self-contained next investigation (4.7M real POIs, each with a name/
+address to cross-reference against, is an excellent validation set for
+whichever encoding is eventually tried).
 
 The `String_ID` -> name join, `Category`/`PoiPartition` hierarchy
 (`Category_ParentCategory_Relation`, `PoiPartition_Category_Relation`),
-`Image`/`ImageBlob` icon tables, and `PredefinedStatement` (35 rows, a
-real scripted-query mechanism named in the `DatabaseAttribute` metadata)
-were all identified by table/column name and row count only -- not
-explored in depth.
+and `Image`/`ImageBlob` icon tables were identified by table/column name
+and row count only -- not explored in depth.
 
 ============================================================================
 Practical use

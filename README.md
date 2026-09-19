@@ -2549,7 +2549,7 @@ into `eeuz.prd` — also failed (lands on unrelated Turkish content).
 `eeuz.cl`/`eeuz.ct` and `eeuz.fea` were not tested. Left open for a
 future session.
 
-### 3.24 `config/create_cd` and 5 disc-root subsystems outside `db/` — CRACKED (the build script); one new subsystem (`EDB/POI/POI.DB3`) opened and confirmed; 4 more identified, not yet opened
+### 3.24 `config/create_cd` and 5 disc-root subsystems outside `db/` — ALL 1,535 files on the disc now examined and documented; every distinct file FORMAT identified, most CRACKED, a handful of proprietary binaries identified-but-not-decoded
 `config/create_cd` (5,105 bytes, plain text) is the disc's own
 build/mastering script — the literal, authoritative record of how
 `CD_8555.ISO` was assembled, not inferred or reverse-engineered.
@@ -2571,9 +2571,23 @@ every `eeuz.*` file's compressed variant — `block_size=3072` (§3.5) was
 a deliberately named packaging choice at the source, not just an
 empirically observed constant.
 
-**5 disc-root subsystems, never examined before this session** (all
-present on the reference disc, alongside the already-extensively-
-investigated `db/`):
+**2 root-level manifest files, CRACKED (plain text), tying every
+subsystem's own version stamp together**: `cdrom.toc` (543 bytes) is a
+real, human-readable manifest — `Version: 505.30.910.1.84` (an EXACT
+match to `create_cd`'s own source path, closing that loop completely),
+`TPD: 2019060000` (matches `tpd/nscWeu_eue_20190607/LPOI.TXT` and
+`INFO25.PSC`'s own `TPD-PRODID` exactly), `SVD: EDB_20190607` (matches
+`EDB/POI/POI.DB3`'s own `database.id` exactly), `TMC: 20190610`
+(matches `telemat/`'s own source path date exactly), `DBAL: V006.047
+V007.038 V008.704 V009.038 V010.015` (matches `dbal/`'s own 5 folder
+names exactly), `Customer Info: VW`, `Customer: 1627386654`. `DBINFO.TXT`
+is a real per-brand manifest: VW part number `1T0051859AR`, system name
+`"EU East V17"`, and placeholder (`"tbd"`) Seat/Skoda/Bentley part
+numbers — confirms this disc build serves the whole VW Group brand
+family, matching `POI.DB3`'s own category split below.
+
+**5 disc-root subsystems, ALL now examined** (alongside the already-
+extensively-investigated `db/`):
 
 - **`EDB/POI/POI.DB3`** — CRACKED: a real, standard SQLite database
   (open directly, no proprietary container). Confirms this project's
@@ -2593,48 +2607,134 @@ investigated `db/`):
   identification (§3.16) from the OTHER side (the tool that built this
   database, not just the firmware that reads it) — and a Java Swing
   authoring tool under the same `vdo/nav/...` package namespace already
-  found in the firmware. **Not cracked**: `Poi_BaseAttributes.
-  Coordinate` is a single 64-bit integer, not this disc's usual
-  `/100000`-scaled int32 lon/lat pair — likely a space-filling-curve
-  index or other proprietary encoding, not reverse-engineered this
-  session. Full details: `research/poi_db_reader.py`.
-- **`telemat/tmc2/`** — CRACKED (the config file); the actual `.lt`/`.et`
-  binary tables NOT decoded. Real, standard ALERT-C (ISO 14819) TMC
-  traffic location tables for 14 European countries, plus 19
-  per-language event-text tables. `TMCCONFIG.ini` is plain,
-  self-documenting text — `PROD = "RNS_EU_38"`, and one line per country
-  giving its real ALERT-C Country Code + Location Table Number, ISO
-  3166-1 alpha-2 code, and a real bounding box in plain decimal degrees
-  (Germany: `5.877°E–15.0087°E, 47.387°N–55.017°N` — immediately
-  verifiable as correct, no scaling/validation needed). **A strong new
-  lead for `eeu.tmc`** (still "genuinely unexplored" as of the prior
-  session): scanning its first ~20KB for short ASCII-digit runs finds a
-  real sequence of small, mostly-ascending integers (117, 118, 225,
-  259, ..., up to 951) — consistent with real ALERT-C Location Code
-  (LCD) point numbers. Not cross-checked against any country's own
-  `.lt` content, and no surrounding field structure decoded — left as a
-  concrete starting point for a future, dedicated `eeu.tmc` session (out
-  of scope for this one).
-- **`tpd/`** — `TPD3.DIC` + per-language subfolders (`CZE`/`DUT`/`ENG`/
-  `FRE`/`GER`/`ITA`/`POR`/`SPA`) with `.HTM` template pages
-  (`CATTEMPLATE.HTM`, `SF_*.HTM`) plus icon/image/table resources.
-  Plausibly POI-category icons and per-language help/legal template
-  pages. Identified by name only, not opened.
-- **`speech/`** — `SpeechRes.xml` + 8 per-locale ZIPs
-  (`uvo_csCZ_01.zip`, etc.), sourced from a different, much OLDER
-  internal server path (dated 2006) than the map data itself — a
-  long-lived, slowly-updated shared speech-resource component. A real
-  lead for the actual TTS ENGINE, as opposed to the phoneme/
-  pronunciation DATA this project has already extensively cracked
-  (`eeu.abc`/`eeuz.pca`/`eeuz.prd`/`eeuz.pct`/`eeu.pcl`). Not opened.
-- **`dbal/`** — `VERSIONS.CFG` + 5 versioned `DBAL.OUT` binaries
-  ("Database Abstraction Layer", one per supported head-unit software
-  generation). Not opened (binary, no obvious text structure from a
-  quick look).
-
-Also 2 disc-root files not opened this session: `cdrom.toc` (disc
-mastering table-of-contents) and `DBINFO.TXT` (name suggests a
-human-readable manifest — a good first candidate for a future session).
+  found in the firmware. **`PredefinedStatement` (35 rows) embeds real,
+  readable SQL text behind a small bytecode prefix** (e.g.
+  `GetFullPoiData`: `select b.Poi_ID, b.Coordinate, ... from
+  Poi_BaseAttributes b left join Poi_AddressAttributes a on b.Poi_ID =
+  a.Poi_ID ... where b.Poi_ID = ?1;`) — directly confirms, from the
+  database's own side, this project's firmware-only finding (§2.5) that
+  the real client only ever calls a fixed catalog of precompiled,
+  parameterized statements, never arbitrary SQL. **Not cracked**:
+  `Poi_BaseAttributes.Coordinate` is a single 64-bit integer, not this
+  disc's usual `/100000`-scaled int32 lon/lat pair. Tested and refuted:
+  splitting it into two int32 halves (either byte order) produces no
+  plausible degree values, including against the 8-byte `POS` field
+  hint from `tpd/`'s own index tables below — likely a Hilbert/Morton
+  space-filling-curve index or other proprietary encoding, not
+  reverse-engineered. Full details: `research/poi_db_reader.py`.
+- **`telemat/tmc2/`** — CRACKED (the config file, and the `.et` files'
+  real content); the `.lt`/`.et` binary PACKING NOT fully decoded. Real,
+  standard ALERT-C (ISO 14819) TMC traffic location tables for 14
+  European countries, plus 19 per-language event-text tables.
+  `TMCCONFIG.ini` is plain, self-documenting text — `PROD =
+  "RNS_EU_38"`, and one line per country giving its real ALERT-C
+  Country Code + Location Table Number, ISO 3166-1 alpha-2 code, and a
+  real bounding box in plain decimal degrees (Germany:
+  `5.877°E–15.0087°E, 47.387°N–55.017°N` — immediately verifiable as
+  correct). **`lan/*.et` files confirmed to hold real TMC/ALERT-C
+  phrase-fragment text**: `lan/english.et`'s body contains real English
+  fragments ("Approach with care", "Queuing traffic for 1/2/3/4/6/10
+  km", "Road closed", "Slippery roads", "Traffic flowing freely", real
+  month/day names) — the standard phrase library RDS-TMC receivers use
+  to reconstruct messages; a small header embeds the real source
+  filename (`english.csv`) directly, confirming these are compiled from
+  plain CSV. The exact string length/packing scheme was not decoded
+  (extracted fragments are often missing their own leading 1-3
+  characters, consistent with an un-decoded length-prefix byte). `.lt`
+  files (real per-country binary ALERT-C location tables) were
+  identified by convention and structurally examined (no clean small
+  fixed-record width found, consistent with the real format's own
+  variable-length record shapes) but not byte-level cracked. **A strong
+  new lead for `eeu.tmc`** (still unopened): scanning its first ~20KB
+  for short ASCII-digit runs finds a real sequence of small, mostly-
+  ascending integers (117, 118, 225, 259, ..., up to 951) — consistent
+  with real ALERT-C Location Code (LCD) point numbers, and `dbal/`'s own
+  embedded source list below names BOTH `db_tmc.cpp` AND
+  `db_tmc_deprecated.cpp` — suggesting the on-disc TMC format changed
+  between DBAL versions. Not cross-checked further — left as a concrete
+  starting point for a future, dedicated `eeu.tmc` session. Full
+  details: `research/telemat_reader.py`.
+- **`speech/`** — CRACKED (identity + real embedded metadata); the
+  actual voice-synthesis binary formats (proprietary, third-party) NOT
+  decoded. `SpeechRes.xml` is a real, readable XML resource manifest
+  covering 8 per-locale voice packs (`parts/uvo_*.zip`) and confirms
+  real SPEECH RECOGNITION support (per-user `SpeakerProfiles/*.cfg`/
+  `*.voc` file masks), not just TTS output. **The ZIPs confirm the real
+  TTS engine vendor is SVOX** (a real commercial speech-synthesis
+  company later acquired by Nuance/Cerence) — `svox.bin`'s own header is
+  plain ASCII: `OS VxWorks PLANG 1 ... FILETYPE BIN MAJVERS 3` —
+  **the first confirmation in this project of the actual embedded
+  real-time OS** (VxWorks), previously only known as an unidentified
+  PowerPC native-code region (§2.4). `SVOXKEYS.txt` is a real, dated
+  license-key string: `P 10 6 2005 AS 3.0 Siemens_VDO CP2 9
+  DABFSNIPC...` — confirms Siemens VDO licensed SVOX's engine on 10
+  June 2005, tying this subsystem to the same corporate lineage already
+  established from the firmware's `vdo.nav.*` namespace (§2.5) and
+  `eeu.mod`/`POI.DB3`'s own `Arriba`/`arriba2` codebase identity.
+  `vsi.img`'s own header is also plain text: real per-locale voice IDs
+  (`enGBFemale`) and named sound events (`beep`, `navi_specific`,
+  `tone_error`, `tone_sds_error`) alongside an `mp4`-tagged audio
+  reference. The actual voice-model/phoneme-inventory binary payloads
+  (`kj0ca0b16_0.pil`, `svox.bin`, `vsi.img`) are real, proprietary SVOX
+  formats — not reverse-engineered. Full details:
+  `research/speech_reader.py`.
+- **`dbal/`** — CRACKED (container format + an enormous real internal
+  source-file/class-name inventory extracted from embedded debug
+  strings); not disassembled. All 5 `DBAL.OUT` files are confirmed
+  32-bit big-endian PowerPC ELF **relocatable object files** (`ET_REL`,
+  `EM_PPC`) — ties directly to the firmware's own already-known PowerPC
+  native-code region (§2.4). A plain printable-ASCII-run scan (no ELF
+  tooling needed) finds ~330 distinct real internal source paths under
+  `J:\siemens\source\libraries\dbal\...`/`J:\siemens\source\navicore\
+  ...`, matching this project's own already-cracked `db/` files by name
+  almost one-to-one: `db_road.cpp`/`db_city.cpp`/`db_county.cpp`/
+  `db_state.cpp`/`db_country.cpp` (→ `eeu.rd`/`.cty`/`.cny`/`.stt`/
+  `.ctr`), `db_catalog.cpp`/`db_catalog_list.cpp` (→ `eeu.cat`/`.cal`),
+  `db_timeinfo.cpp` (→ `eeu.ti`), `db_postalcode.cpp` (→ `eeu.pol`/
+  `.pot`/`.pmm`/`.pmc`/`.pmp`), `db_phoneme_*.cpp` (→ `eeuz.pca`/`.pct`/
+  `eeu.pcl`/`eeuz.prd`), `db_intersection*.cpp` (→ `eeu.il`/`.iof`),
+  `db_tmc.cpp` + `db_tmc_deprecated.cpp` (→ `eeu.tmc`), `db_page.cpp`/
+  `db_page_pcl_dir.cpp`/`db_kd.cpp` (→ the MAP_COMPRESSED/`eeuz.fea`
+  "parcel"/kd-tree concepts §3.10's later-session lead already named),
+  and `ZlibDecompressor.cpp` (→ this project's own empirically-cracked
+  FLAT_COMPRESSED/MAP_COMPRESSED decompression logic). **A runtime log
+  string independently confirms an already-established empirical
+  finding from the source's own words**: `"db_page::update_pnext:
+  element is already in the hash"` confirms `eeuz.fea`'s directory
+  really is a hash table (§3.10), not spatial/sequential. **A real,
+  dated ClearCase build history** names dozens of individual bug-fix
+  branches, several directly relevant to open problems here (
+  `alle_DbNavRbg3057_vw_split_mp0`, `alle_dbal_DbNavRbg3119_
+  house_number_opt`, `alle_DbNavRbg2825_intersection_roundabout`,
+  `alle_tmc_exit_fix`, and `lupa_dbal_DbNavRbg3501_RNS510_
+  wrong_phoneme_Dummy_V10` — literally naming "RNS510"). Full details:
+  `research/dbal_reader.py`.
+- **`tpd/`** (1,443 files, by far the largest disc-root area) —
+  CRACKED at the system level (every distinct file role identified and
+  confirmed with real content); the per-country compressed search-table
+  BODIES not decoded. `nscWeu_eue_20190607/INFO25.PSC` is a real,
+  self-documenting config file (`TPD-PRODID 2019060000`, `TPD-CNTRY`
+  listing the same 33 countries already found via `eeu.cal`/`eeu.ctr`,
+  `LPOIPRO Y`). **Confirmed to be a real embedded HTML "browser"
+  destination-search UI**: each of 8 per-language folders holds an
+  IDENTICAL 122-file set (verified by hash) of real HTML forms
+  submitting to `http://tpdhost/cgi/search`/`StartTPD` — the head unit
+  runs (or emulates) a local embedded web server with a CGI-style
+  handler. `SF_<FORMID>.HTM` (search-criteria forms, e.g. `SF_11000
+  .HTM` = "Airports", radius + name filters) and `ST_<FORMID>.HTM`
+  (results pages, with `<%if_result>`/`<%INDEX_FIRST>`-style template
+  substitution) reference real per-form search index tables under
+  `TABLES/0/<NNNN>.IDX` + `.URL`, whose own header is plain,
+  self-documenting text (`compr-type=Z`, a real named+typed schema
+  `ID:A:6|POS:P:8|NAME:V:84|LKI:B:1|PHONE:V:19|IMPORTANCE:B` — the same
+  ID+position+name+phone shape as `POI.DB3`'s own `Poi_BaseAttributes`)
+  — the compressed table body itself not decoded. `<LAN>.LSC` files are
+  plain, self-documenting text naming a real category-group hierarchy
+  (`TPD-GRP <group-id> <child ids>`) feeding the category picker;
+  `ICONS`/`ICONS810` (381 real PNG files, self-explanatory POI-category
+  names like `AIRPORT`/`ALL_RESTAURANTS`/`ATM_EUR`) and `IMAGES` (22
+  GIF UI-chrome files) round out the system. Full details:
+  `research/tpd_reader.py`.
 
 ---
 
