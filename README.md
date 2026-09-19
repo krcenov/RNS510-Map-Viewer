@@ -2286,76 +2286,105 @@ has `state_id=4` → state 4 = `WALLIS`, `country_id=0`=`SCHWEIZ`
 genuine foreign key into this real, independently-verifiable table, not
 a guess.
 
-### 3.22 `eeu.ti` — time-info / DST rule table (485 bytes, NOT_COMPRESSED) — CRACKED (partially): the real table `eeu.cny`'s `timeinfo_id` points into, confirmed by exact id-frequency correspondence
+### 3.22 `eeu.ti` — time-info / DST rule table (485 bytes, NOT_COMPRESSED) — CRACKED: a real DST/UTC-offset table, confirmed by exhaustive real-world geography (Russia's own 11 time zones)
 94-byte header (record count 17 read straight from the header), then
 exactly **17 fixed 23-byte records** — small enough to fully hand-inspect
 in one pass.
 
 ```
 uint16 LE  timeinfo_id  -- 1-13, CONFIRMED to match eeu.cny's own
-                            timeinfo_id range exactly (see below);
-                            NOT a per-record primary key — multiple
-                            physical records can share one value
-uint16 LE  ???           -- eeu.mod's real field name: timezone,
-                            position cracked, meaning not cracked (see
-                            below)
+                            timeinfo_id range exactly; NOT a per-record
+                            primary key — multiple physical records can
+                            share one value
+uint16 LE  timezone     -- CRACKED (exact formula, see below):
+                            utc_offset_hours = value/100 - 12
 uint8      seqnr         -- a clean 0, 1, 2 sub-entry counter within one
                              timeinfo_id group
-bytes[18]  ???           -- 14 more named fields (typeofentry,
+bytes[18]  ...           -- 14 more named fields (typeofentry,
                             startyear, monthorweek, flcount, startday,
                             starthour, startminute, durationnegative,
                             durationyears, durationmonths,
                             durationweeks, durationdays, durationhours,
-                            durationminutes) — not decomposed into
-                            individual fields this session
+                            durationminutes), byte POSITIONS assigned
+                            (1 byte/field, 14 bytes used + 4 reserved),
+                            exact real-world semantics of several
+                            fields not independently confirmed — see
+                            `research/ti_reader.py`
 ```
 
+**`timezone` — CRACKED, CONFIRMED against real-world geography** (not an
+opaque catalog index as first suspected): `utc_offset_hours =
+timezone_field/100 - 12`. Validated **exhaustively** against Russia's
+own real federal-district geography, which this disc's data happens to
+span all 11 of Russia's real UTC offsets — `timeinfo_id=2` (Severo-
+Zapadniy/NW district, Kaliningrad's zone) → `timezone=1400` → UTC+2,
+real; `4` (Moscow Time, shared with Belarus/Turkey) → 1500 → UTC+3,
+real; `5`→1600→UTC+4; `6`→1700→UTC+5 (Ural, Yekaterinburg); `7`→1800→
+UTC+6; `8`→1900→UTC+7 (Novosibirsk/Krasnoyarsk); `9`→2000→UTC+8
+(Irkutsk); `10`→2100→UTC+9 (Yakutsk); `11`→2200→UTC+10 (Vladivostok);
+`12`→2300→UTC+11 (Magadan/Sakhalin); `13`→2400→UTC+12 (Kamchatka) — all
+11 real Russian time zones, west to east, exactly right, zero
+exceptions. Also confirmed for the 2 DST-observing zones: `timeinfo_id=
+1` → 1300 → UTC+1, the real standard-time offset of Central European
+Time; `timeinfo_id=3` → 1400 → UTC+2, real Eastern European Time.
+
+**The id/country correspondence — CRACKED, via `eeu.cny` → `eeu.stt` →
+`eeu.ctr`**: joining every county on the disc through its real state and
+country reveals the WHOLE file's purpose at once. `timeinfo_id=1` (72%
+of counties, the "rich" 3-entry group) is every real Central European
+Time country on the disc (Germany, Italy, Poland, Switzerland, Austria,
+Czechia, Slovakia, Hungary, the Balkans, Scandinavia, Vatican City, San
+Marino, Liechtenstein). `timeinfo_id=3` (17%, also "rich") is every real
+Eastern European Time country (Bulgaria, Estonia, Greece, Latvia,
+Lithuania, Moldova, Romania, Finland, Ukraine). Every other id — each a
+"simple", single-record group — is Russia (across its own 11 real time
+zones) plus Belarus and Turkey (sharing `timeinfo_id=4`, Moscow Time).
+**This is not a coincidence**: Russia permanently abolished DST in 2014,
+Belarus does not observe DST, and Turkey abolished DST in 2016 (this
+disc's own version strings date it to 2019) — exactly the 3
+non-DST-observing country groups on the disc, and exactly the ids with
+no detailed sub-schedule. The 2 DST-observing zones (CET, EET) are
+exactly the 2 ids with a real 2-rule sub-schedule (`seqnr=0`/`seqnr=1`,
+a real "spring forward"/"fall back" pair) plus a `seqnr=2` terminator;
+every non-DST id has just 1 simple "no schedule" record.
+
 **Grouping — CRACKED**: 17 physical records cover only 13 distinct
-`timeinfo_id` values. `timeinfo_id=1` has 3 sub-records (`seqnr` 0, 1,
-2); `timeinfo_id=3` has 3 sub-records; every other value (2, 4-13) has
-exactly 1 sub-record each (`3 + 3 + 11×1 = 17`, exact). The unresolved
-`timezone` field is constant within each group.
+`timeinfo_id` values (`3 + 3 + 11×1 = 17`, exact). `timezone` is
+constant within each group.
 
 **Cross-validated EXACTLY against `eeu.cny`'s own `timeinfo_id`
-distribution**: the 2 values with rich 3-sub-record groups here (1 and
-3) are EXACTLY the 2 most common values in `eeu.cny`'s own `timeinfo_id`
-field (§3.15) — `timeinfo_id=1` covers 1,674/2,326 counties (72%),
-`timeinfo_id=3` covers 398/2,326 (17%), together 89% of every county on
-the disc. Every other id here (each with just 1 simple sub-record)
-matches `eeu.cny`'s own much rarer counts for those same ids (2-180
-counties each). This is an exact, non-coincidental correspondence — the
-two heavily-used "default" time-info profiles are exactly the two with
-real, detailed sub-schedule data — and closes the loop `eeu.cny`'s own
-write-up (§3.15) left open: `timeinfo_id` really is a genuine foreign
-key into this real, independently-verifiable table.
+distribution** (§3.15): `timeinfo_id=1` covers 1,674/2,326 counties
+(72%), `timeinfo_id=3` covers 398/2,326 (17%) — together 89% of every
+county on the disc, exactly matching which 2 ids carry real DST
+sub-schedules here.
 
-**Record shapes — CRACKED (structural pattern), not decomposed into
-named fields**: every record's `bytes[5:23]` falls into one of 2 clean
-shapes. "Real entry" (14/17 records — both `seqnr=0`/`seqnr=1` records,
-and all 11 singleton records): `byte[5] = 0x79`; the 11 singleton
-records additionally share an *identical* 18-byte tail — every rare/
-simple `timeinfo_id` profile carries the exact same "no extra schedule"
-default payload, differing from each other only in `timeinfo_id` and the
-unresolved `timezone` field. "Terminator" (the 2 `seqnr=2` records, one
-per rich group): `byte[5] = 0x2a`, every other byte in `bytes[5:23]` is
-zero — consistent with a list-terminator or count marker, not
-independently confirmed.
+**Record shapes — byte positions assigned, not every field's exact
+semantics confirmed**: the 14 named fields map 1:1 onto `bytes[5:19]`
+in `eeu.mod`'s own field order, with `bytes[19:23]` always zero. "Real
+entry" (4 records — both `seqnr=0`/`seqnr=1` records in each DST zone):
+`typeofentry=121`; `startyear=77` (constant — plausibly a reference/
+epoch year rather than a real calendar year, since an annually-recurring
+rule doesn't need one); `monthorweek=108` (constant across BOTH DST
+zones — consistent with CET and EET sharing the same real transition
+CALENDAR DATE, last Sunday of March/October, differing only in local
+clock hour); `starthour=3` (`seqnr=0`, "spring forward") or `10`
+(`seqnr=1`, "fall back") — **not independently confirmed** to mean
+literal local clock hour (the real EU-wide rule transitions at 01:00
+UTC, and CET/EET should differ from each other by 1 local hour, but
+both show `starthour=3` here — possibly UTC-referenced, or this byte's
+position assignment is off by one field); `durationmonths` increases
+monotonically across sub-entries (2, 3, 3, 4); `durationminutes=8`
+constant. The "duration" fields' literal shape (~1 year, ~8 minutes)
+doesn't obviously match a real 1-hour DST clock shift, so these may
+encode a rule *validity window* rather than the shift amount — not
+resolved. "Simple default" (11 singleton records): byte-for-byte
+identical across all 11 (`typeofentry=121`, `startyear=77`,
+`monthorweek=100` — different from the DST zones' 108, consistent with
+"no real transition month" — everything else 0). "Terminator" (2
+`seqnr=2` records): `typeofentry=42`, everything else 0.
 
-**Plausible (untested) interpretation**, from the schema's own field
-names: `eeu.ti` is a real **Daylight Saving Time (DST) transition-rule
-table**. The field list (`startyear`/`monthorweek`/`startday`/
-`starthour`/`startminute` = when a transition happens;
-`durationnegative`/`durationyears`/.../`durationminutes` = how far the
-clock shifts, and in which direction) matches the classic shape of a DST
-rule (e.g. POSIX TZ rules or Windows `TIME_ZONE_INFORMATION`, which also
-encode transition dates as day-of-week + week-of-month). A real DST
-profile needs exactly 2 rules — "spring forward" and "fall back" —
-which is exactly the `seqnr=0`/`seqnr=1` pair found in both rich groups,
-with `seqnr=2` as a count/terminator record. **Not verified byte-by-
-byte**; the "real entry" tail bytes weren't decomposed into individual
-fields this session, and the `timezone` field's own values (1300, 1400,
-1400, 1500, ..., 2400 — stepping by ~100 per group rather than
-resembling a real UTC offset) weren't explained.
+Full methodology and the complete per-field byte tabulation:
+`research/ti_reader.py`.
 
 ### 3.23 `eeuz.pca` — country/continent phoneme catalog (7.5KB decompressed, FLAT_COMPRESSED) — CRACKED (record framing, full file scale); 2 of 4 trailer fields decoded
 Standard FLAT_COMPRESSED container (§3 intro). Same self-delimiting

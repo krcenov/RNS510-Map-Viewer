@@ -161,10 +161,12 @@ that genuinely spans more than one such profile.
 **Confirmed** (research/ti_reader.py, later session): the exact
 correspondence between eeu.cny's own id-frequency distribution and
 eeu.ti's own per-id record richness closes this gap -- `timeinfo_id`
-really is a genuine foreign key into eeu.ti's real "timeinfo" table, not
-just a schema-consistent guess (though eeu.ti's own per-field meaning
-beyond `timeinfo_id`/`seqnr` is itself only partially cracked -- see
-ti_reader.py).
+really is a genuine foreign key into eeu.ti's real "timeinfo" table, now
+fully identified as a DST-rule/UTC-offset table: `timeinfo_id=1` is the
+disc's Central European Time DST zone, `timeinfo_id=3` is Eastern
+European Time, and every other id is one of Russia's 11 real time zones
+(plus Belarus/Turkey, none of which observe DST) -- see ti_reader.py's
+own docstring for the full real-world cross-reference.
 
 ============================================================================
 Practical use
