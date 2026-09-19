@@ -312,18 +312,21 @@ producing exactly 649,956 records.
   = unset/padding-sentinel convention elsewhere, e.g. the false-edge topology
   bug, §3.6/§10 "v16 → v17") — its members are small, single-language-looking
   local place names, not a real 73,396-way collision.
-- **The group VALUE's own derivation is NOT cracked** — three hypotheses
-  tested and refuted: sequential index into `eeu.cty` (values are tens-to-
-  hundreds of millions, far outside `eeu.cty`'s 939,351-record range); byte
-  offset into `eeu.cty` (doesn't land on a valid 79-byte record for any tested
-  example); byte offset into `eeuz.fea` (the most structurally plausible
-  candidate — `.fea` is itself a multi-language gazetteer with the exact same
-  "many names, one real place" shape, §3.10 — but no tested offset lands on a
-  recognizable zlib stream header). A hash of the displayed name text is ruled
-  out by construction (wildly different spellings share one group value); a
-  hash of some other, not-yet-identified per-place database key remains an
-  untested possibility. Full methodology: `research/pct_reader.py`'s module
-  docstring.
+- **The group VALUE's own derivation — CRACKED in a later session (§3.16)**:
+  it's `[uint32 LE offset][uint16 LE count]` — `eeu.mod`'s own real field
+  names for this exact table are `.../phonemeRoadOffset/phonemeRoadCount`,
+  a pointer into `eeuz.prd` naming that city's own road/route phonetic
+  entries (multi-language name variants of one city correctly share the
+  same value because they all point at the same city's same roads — not a
+  "language-variant grouping key" as first guessed). Three earlier
+  hypotheses (sequential/byte-offset index into `eeu.cty`; byte offset
+  into `eeuz.fea`) were tested and refuted before the real answer turned
+  up via `eeu.mod`'s schema; validated directly against real `eeuz.prd`
+  content (Venice lands next to real ferry routes `VENEZIA-CORFÙ`/
+  `VENEZIA-PATRASSO`, Vatican City among real Italian streets, Munich and
+  Frankfurt among their own real streets). Full methodology:
+  `research/pct_reader.py`'s and `research/mod_reader.py`'s module
+  docstrings.
 
 ### 3.6 MAP_COMPRESSED (`eeuz.mp0`, `.mg1`-`.mg4`) — MOSTLY CRACKED; `eeuz.fea` DIFFERENT, UNCRACKED
 These are the actual map-rendering tile layers (`mp0` = most detailed/primary,
@@ -1818,14 +1821,21 @@ is the **same numbering §3.13 cracked for `eeu.cal`** (0=Europe, 1-34=the
 
 Full methodology: `research/cat_reader.py`'s module docstring.
 
-### 3.15 `eeu.cny` — county catalog (400KB, NOT_COMPRESSED) — CRACKED (structure + content identity); 2 numeric fields not fully explained
+### 3.15 `eeu.cny` — county catalog (400KB, NOT_COMPRESSED) — CRACKED, field names corrected via §3.16's schema discovery
 94-byte header (record count 2,326 read straight off its own header
 field), then exactly **2,326 fixed 176-byte records**, **validated at full
 scale (every record parses cleanly, zero exceptions)**:
-`[uint16 LE index][uint16 LE region_id][26 zero bytes][36-byte NUL-padded
-name][uint8 level][109 zero bytes]`. A real sub-national administrative
-catalog — one level below `eeu.cal`'s countries, one level above
-`eeu.cty`'s cities/localities.
+`[uint16 LE county_id][uint16 LE state_id][26 zero bytes][36-byte
+NUL-padded name][uint8 timeinfo_id][109 zero bytes]`. A real sub-national
+administrative catalog — one level below `eeu.stt`'s "state" table
+(regions/cantons — `eeu.stt` itself remains unopened, see §3.16), one
+level above `eeu.cty`'s cities/localities.
+
+**Field names corrected**: this section originally called the first two
+fields `index`/`region_id`; §3.16's discovery of `eeu.mod` (the disc's own
+schema dictionary) named them precisely — `countyID`/`stateID` — and
+confirmed this file is genuinely the schema's own "county" table (not, as
+first guessed, a "region" table itself).
 - **`name` — CRACKED**: real administrative divisions, confirmed directly.
   The first 5 records alone are `CHANIA`/`RETHYMNO`/`IRAKLEIO`/`LASITHI`
   — the 4 real prefectures of Crete, Greece, in their real west-to-east
@@ -1834,33 +1844,124 @@ catalog — one level below `eeu.cal`'s countries, one level above
   Italy (`TORINO`/`CUNEO`/`ASTI`/`ALESSANDRIA`/`BIELLA`/`VERCELLI`/
   `NOVARA`/`VERBANO-CUSIO-OSSOLA`) and real districts of the Swiss cantons
   Valais, Vaud, and Fribourg.
-- **`region_id` — CRACKED (identity)**: groups counties into their real
+- **`state_id` — CRACKED (identity)**: groups counties into their real
   sub-national region/canton/province — not a country reference (`eeu.cal`/
-  `eeu.cat`'s own `country_id` tops out at 34; this reaches 690). Validated
-  directly: every county with `region_id=4` is a real Valais district;
-  `region_id=6` is Vaud; `region_id=8` is Fribourg; `region_id=3` groups
-  Piedmont's 8 provinces; `region_id=39` groups Liguria's. 691 distinct
-  values total — plausible for ~34 countries' real regional subdivisions.
-  Not allocated in file order (first-seen sequence is `0, 39, 3, 1, 4, 2,
-  5, 6, ...`, not `0, 1, 2, 3, ...`) and records sharing one `region_id`
-  aren't necessarily contiguous — an opaque id assigned elsewhere in the
-  source database, referenced here in whatever order the file's own real
-  geographic clustering happens to produce.
-- **`level` (byte 66) — NOT fully cracked**: range 1–13, heavily skewed
-  (`1` alone covers 72% of records, `3` is next at 17%). Constant within
-  98.6% of `region_id` groups (681/691) — clearly tied to the same
-  region/hierarchy concept `region_id` encodes, not an independent
-  per-county property, but its own semantic meaning isn't pinned down.
-  Two hypotheses tested and refuted: a direct country reference (doesn't
-  match `eeu.cal`/`eeu.cat`'s numbering, and the same value recurs across
-  clearly different countries); a count of that county's own child
-  localities in `eeu.cty` (real sub-locality counts for 5 sample counties
-  — 15/6/35/8/31 — don't relate to their `level` values of 3/3/3/1/1).
-  A plausible, untested idea: some kind of real administrative-depth
-  indicator, since European countries genuinely differ in how many admin
-  levels sit between "country" and "county."
+  `eeu.cat`'s own `country_id` tops out at 34; this reaches 690) but a real
+  foreign key into `eeu.stt`'s own "state" records (§3.16). Validated
+  directly against real geography: every county with `state_id=4` is a
+  real Valais district; `state_id=6` is Vaud; `state_id=8` is Fribourg;
+  `state_id=3` groups Piedmont's 8 provinces; `state_id=39` groups
+  Liguria's. 691 distinct values total — plausible for ~34 countries' real
+  regional subdivisions. Not allocated in file order (first-seen sequence
+  is `0, 39, 3, 1, 4, 2, 5, 6, ...`, not `0, 1, 2, 3, ...`) and records
+  sharing one `state_id` aren't necessarily contiguous.
+- **`timeinfo_id` (byte 66) — CRACKED (identity, plausible; not
+  independently confirmed)**: range 1–13, heavily skewed (`1` alone covers
+  72% of records, `3` is next at 17%); constant within 98.6% of `state_id`
+  groups (681/691). §3.16's schema names the field immediately after
+  `name` in the real "county" table `timeinfoID` — a foreign key into
+  `eeu.ti`'s own time-dependent-restriction records (timezone, start/
+  duration fields — seasonal or time-of-day access rules), which fits this
+  byte's shape well (most counties share a common "default" profile) and
+  directly explains why this section's own two originally-tested
+  hypotheses (country reference; count of child `eeu.cty` localities) both
+  failed — it isn't counting or naming the county itself, it's pointing at
+  a shared, county-independent rule catalog. `eeu.ti` was not opened this
+  session, so this rests on the schema's field ordering plus a plausible
+  value shape, not a direct cross-file lookup.
+- The 26 always-zero bytes between `state_id` and `name`, and the 109
+  always-zero bytes after `timeinfo_id`, match the schema's own remaining
+  "county" fields (`zoneID`, `start_cityID`, `end_cityID`, `cover`, a
+  `min_long`/`min_lat`/`max_long`/`max_lat` bounding box, `alpha_cities`,
+  `cityID`) — all apparently unpopulated for every county on this disc,
+  not incorrectly identified; exact per-field byte boundaries within these
+  regions weren't independently determined (every candidate field being
+  zero makes the split unverifiable from this file's own content alone).
 
 Full methodology: `research/cny_reader.py`'s module docstring.
+
+### 3.16 `eeu.mod` — database schema dictionary (40KB, NOT_COMPRESSED) — CRACKED: the single most valuable file examined this project
+94-byte header (`bytes[86:88]` record count correctly reads `0` — this is
+NOT a fixed-record file, same situation as `eeu.il`), then a dense run of
+NUL-terminated ASCII strings (table names, field names, and short
+file-extension markers) interleaved with short binary runs whose exact
+per-field type/width encoding was **not** fully reverse-engineered (see
+below) — but the string content alone, extracted with a plain
+printable-ASCII-run-terminated-by-NUL scan, is already the biggest single
+win of this whole project: **this file is the disc's own full database
+schema / data dictionary**, built by the original authoring tool — whose
+real name this file itself reveals: `Arriba`, version `5.3` (the literal
+first two strings in the file), almost certainly the actual internal name
+of Navteq/Siemens/Continental's own map-database compiler.
+
+Scanning the whole body this way finds exactly 1,605 strings, organized as
+one block per real table: `[table name][fieldHeader][stamp/copyright/
+db_release/db_version/comp_version/dbID/fileID/rec_cnt/byte_cnt][own data
+fields...][short file-extension marker]`. All **36 expected file-extension
+tokens** appear, in the same order this project already independently
+confirmed those files' identities in — strong corroboration the extraction
+is correct, not coincidental: `abc`, `ctr`, `stt`, `cny`, `cty`, `rd`,
+`typ`, `aff`, `mp0`/`mg1`-`mg4`/`mpa`/`mpb` (one shared block — `mpa`/
+`mpb` aren't present as real files on this disc), `si`, `fea`, `cal`,
+`ct`, `cl`, `rt`, `rl`, `prl`, `pot`, `pol`, `pmm`, `pmc`, `pmp`, `ti`,
+`iof`, `il`, `tmc`, `cat`, `pca`, `pct`, `prd`. `eeu.pcl` has no
+corresponding block at all (not just an empty one, like `.pmp`/`.pol`/
+`.pot` get) — its real purpose is still unexplained.
+
+**Confirmed corrections and extensions to already-cracked files, found by
+directly cross-referencing this schema**:
+- **`eeuz.pct`'s "group" field mystery (§3.5) is fully solved**: the real
+  fields are `.../phonemeRoadOffset/phonemeRoadCount` — a pointer into
+  `eeuz.prd`, not a "language-variant grouping key." Validated directly
+  against real `eeuz.prd` content for 4 example cities (Venice lands next
+  to real Adriatic ferry routes `VENEZIA-CORFÙ`/`VENEZIA-PATRASSO`;
+  Vatican City among real Italian streets; Munich at a real square;
+  Frankfurt among real streets) — see `research/pct_reader.py`'s updated
+  docstring.
+- **`eeu.ctr`'s 2 "trailing zero bytes" (§3.11-adjacent)** are named
+  `speedUnit`/`drivingSide` (both zero-valued for every country on this
+  disc).
+- **`eeuz.rl`'s previously-unresolved trailing flag byte and always-zero
+  `bytes[4:7]` (§3.7)** are named `hasHouseNumbers` and a packed
+  `minNumber`/`maxNumber` range — consistent with the flag's own
+  already-measured 71%/29% split and the range's always-zero content.
+- **`eeu.il`'s 7 still-unresolved prefix bytes (§3.2)** include a named
+  `vnodeID` field — a real, disc-confirmed "virtual node id" reference,
+  and a promising, **not yet pursued** lead for the long-standing
+  topology node-id↔coordinate mapping problem
+  (`resolve_topology_adjacency()`, §3.6/§8 item 5), since the MAP_COMPRESSED
+  tile schema (below) independently references `left_node`/`right_node`
+  fields on its own segment records.
+- **`eeu.cal`'s always-`0xFFFFFFFF` trailer (§3.13)** is named
+  `cityTreeOffset`/`postalcodeTreeOffset` (2× uint16, both the `0xFFFF`
+  "unset" sentinel for every country/continent entry).
+- **`eeu.cny`** — see §3.15's corrected write-up above.
+- **The "Ordinary Map File" block is the MAP_COMPRESSED tile schema**
+  (`eeuz.mp0`/`.mg1`-`.mg4`, §3.6) and is the largest single block (615
+  field names) — parcels, k-d tree nodes, segments (`seg`, `seginfoID`,
+  `restr_left`/`restr_right`, `left_node`/`right_node`, `length`), shapes,
+  turn restrictions, ADAS/truck speed limits, lane connectivity, and much
+  more. **`left_node`/`right_node` on a segment record is a strong, not
+  yet pursued lead for finally closing the topology node-id↔coordinate
+  mapping gap** — this session did not attempt cross-referencing it
+  against the tile format's own still-partially-cracked tagged record
+  table, given the scope of that undertaking on its own.
+- **`eeu.si` is named `seginfo`**, with real fields `rank`, `class`,
+  `divided`, `drivables`, `toll_vignette`, `toll_road`, `restclass`,
+  `urban`, `route_num_type`, `paved`, ... — a genuine road-classification
+  table, and a strong, **not yet pursued** lead for `eeu.rd`'s own
+  long-unresolved `bytes[1:5]` "candidate road-class flags" (§3.1).
+  `eeu.si` itself was not opened this session.
+
+**What's not cracked**: the exact binary encoding surrounding each field
+name (hand inspection suggests a `[type/flag][size][size][...]`-style
+per-field descriptor — e.g. `stamp`/`copyright`/`db_release`/`db_version`/
+`comp_version` all share an identical trailing byte pattern, consistent
+with 5 identically-shaped fixed 16-byte string fields — but a complete,
+general parser for arbitrary fields wasn't built this session).
+
+Full methodology, the complete table→file mapping, and every
+cross-reference: `research/mod_reader.py`'s module docstring.
 
 ---
 
