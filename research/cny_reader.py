@@ -4,9 +4,9 @@ CORRECTED and EXTENDED in a later session once eeu.mod (the disc's own
 schema dictionary, research/mod_reader.py) was found and decoded: this is
 the "county" table -- real sub-national administrative divisions (Italian
 provinces, Swiss canton districts, Greek prefectures, ...) one level below
-`eeu.stt`'s "state" table (regions/cantons -- eeu.stt itself is still
-unexamined, only its own schema-declared field list is known) and one
-level above `eeu.cty`'s cities/localities. Previously entirely unexamined
+`eeu.stt`'s "state" table (regions/cantons -- CRACKED in a later session,
+research/stt_reader.py) and one level above `eeu.cty`'s cities/
+localities. Previously entirely unexamined
 -- only a candidate record size (176 bytes) had been derived from the
 shared NOT_COMPRESSED header fields (aff_reader.py), not the content.
 
@@ -16,8 +16,13 @@ used in the original write-up ("index", "region_id") were guesses. The
 real schema (eeu.mod's own "county" block) names them `countyID` and
 `stateID` -- confirmed to be the SAME fields, just correctly named now.
 The original write-up also guessed this file might BE the "region/state"
-table; eeu.mod's schema shows that's actually `eeu.stt` (still
-unexamined), which `eeu.cny`'s own `stateID` field refers to.
+table; eeu.mod's schema shows that's actually `eeu.stt`, which
+`eeu.cny`'s own `stateID` field refers to -- CONFIRMED directly in a
+later session (research/stt_reader.py): `eeu.cny`'s 691 distinct
+`state_id` values are the exact same SET as `eeu.stt`'s own 691
+`state_id` values, and CHANIA/IMPERIA/SION (this file) all resolve to
+the exactly-correct real state (KRITI/LIGURIA/WALLIS) in `eeu.stt`'s own
+content.
 ============================================================================
 
 ============================================================================
@@ -36,8 +41,10 @@ cracked bytes[86:88] field), then exactly 2,326 fixed 176-byte records:
                                      cantons/provinces, see below --
                                      eeu.mod's real field name: `stateID`,
                                      referencing eeu.stt's own "state"
-                                     records (not yet independently
-                                     opened/decoded)
+                                     records -- CONFIRMED (later session,
+                                     research/stt_reader.py): a real,
+                                     exact foreign key, not just a
+                                     plausible guess
     +4    bytes[26]  --  always zero on every record checked (2326/2326)
                           -- per eeu.mod's own "county" schema, this
                           region should hold `zoneID`, `start_cityID`,
@@ -92,9 +99,11 @@ sub-national region/canton/province (eeu.stt's own "state" records)
 ============================================================================
 Not a country reference (eeu.cal/eeu.cat's own country_id tops out at 34;
 `state_id` reaches 690) -- a genuinely finer-grained identifier, one
-level between country and county, now confirmed by eeu.mod's own schema
-to be a real foreign key into eeu.stt's own "state" table (bounding box,
-county-id range, etc. -- eeu.stt itself remains unopened this session).
+level between country and county, confirmed by eeu.mod's own schema to
+be a real foreign key into eeu.stt's own "state" table, and CONFIRMED
+DIRECTLY in a later session (research/stt_reader.py) by opening
+eeu.stt's own content: eeu.cny's 691 distinct state_id values are the
+exact same SET as eeu.stt's own 691 state_id values.
 Validated directly against real geography regardless: every county with
 `state_id=4` is a real district of the Swiss canton VALAIS; every one
 with `state_id=6` is a real district of VAUD; `state_id=8` is FRIBOURG;
@@ -108,8 +117,8 @@ cantons with further district-level splits).
 `state_id` is NOT allocated in the file's own record order (the first
 few distinct values encountered, by increasing `county_id`, are 0, 39, 3,
 1, 4, 2, 5, 6, ... -- not 0, 1, 2, 3, ...), consistent with it being a
-real foreign key assigned by eeu.stt's own record order (not yet checked
-against eeu.stt directly). Records with the same `state_id` are NOT
+real foreign key assigned by eeu.stt's own record order (CONFIRMED,
+research/stt_reader.py). Records with the same `state_id` are NOT
 necessarily contiguous in this file either (e.g. `state_id=39`'s two
 Liguria members, Imperia and Savona, are 11 records apart, with unrelated
 Swiss/other-Italian counties between them).
@@ -151,9 +160,9 @@ Practical use
 ============================================================================
 `read_cny(path)` returns every record as (county_id, state_id, name,
 timeinfo_id). Combine with eeu.cal/eeu.cat (cal_reader.py/cat_reader.py)
-and eeu.stt (unopened) for a 4-level administrative hierarchy (country ->
-state -> county -> city), and with eeu.cty (README S3.8) for the city
-level itself.
+and eeu.stt (research/stt_reader.py) for a 4-level administrative
+hierarchy (country -> state -> county -> city), and with eeu.cty
+(README S3.8) for the city level itself.
 """
 
 import struct
@@ -168,7 +177,8 @@ def read_cny(path):
     file order. `name` is bytes (mostly ASCII, some non-ASCII European
     characters -- decode with errors='replace' or per-locale as needed).
     Field names match eeu.mod's own real schema (mod_reader.py) --
-    `state_id` is validated against real geography, `timeinfo_id` is a
+    `state_id` is validated against real geography AND directly against
+    eeu.stt's own content (stt_reader.py), `timeinfo_id` is a
     plausible, schema-consistent identification not independently
     confirmed against eeu.ti's own content (see this module's
     docstring)."""

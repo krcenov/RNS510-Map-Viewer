@@ -1830,7 +1830,7 @@ scale (every record parses cleanly, zero exceptions)**:
 `[uint16 LE county_id][uint16 LE state_id][26 zero bytes][36-byte
 NUL-padded name][uint8 timeinfo_id][109 zero bytes]`. A real sub-national
 administrative catalog — one level below `eeu.stt`'s "state" table
-(regions/cantons — `eeu.stt` itself remains unopened, see §3.16), one
+(regions/cantons — cracked in a later session, §3.21), one
 level above `eeu.cty`'s cities/localities.
 
 **Field names corrected**: this section originally called the first two
@@ -1846,16 +1846,22 @@ first guessed, a "region" table itself).
   Italy (`TORINO`/`CUNEO`/`ASTI`/`ALESSANDRIA`/`BIELLA`/`VERCELLI`/
   `NOVARA`/`VERBANO-CUSIO-OSSOLA`) and real districts of the Swiss cantons
   Valais, Vaud, and Fribourg.
-- **`state_id` — CRACKED (identity)**: groups counties into their real
+- **`state_id` — CRACKED (identity, and — later session, §3.21 —
+  independently confirmed directly against `eeu.stt`'s own content, not
+  just real-world geography)**: groups counties into their real
   sub-national region/canton/province — not a country reference (`eeu.cal`/
   `eeu.cat`'s own `country_id` tops out at 34; this reaches 690) but a real
-  foreign key into `eeu.stt`'s own "state" records (§3.16). Validated
-  directly against real geography: every county with `state_id=4` is a
-  real Valais district; `state_id=6` is Vaud; `state_id=8` is Fribourg;
-  `state_id=3` groups Piedmont's 8 provinces; `state_id=39` groups
-  Liguria's. 691 distinct values total — plausible for ~34 countries' real
-  regional subdivisions. Not allocated in file order (first-seen sequence
-  is `0, 39, 3, 1, 4, 2, 5, 6, ...`, not `0, 1, 2, 3, ...`) and records
+  foreign key into `eeu.stt`'s own "state" records (§3.16, opened §3.21).
+  Validated directly against real geography: every county with
+  `state_id=4` is a real Valais district; `state_id=6` is Vaud;
+  `state_id=8` is Fribourg; `state_id=3` groups Piedmont's 8 provinces;
+  `state_id=39` groups Liguria's. **§3.21 closes the loop**: `eeu.cny`'s
+  691 distinct `state_id` values are the exact same *set* as `eeu.stt`'s
+  own 691 `state_id` values, and 3 spot-checks (`CHANIA`→state 0=`KRITI`/
+  Greece; `IMPERIA`→state 39=`LIGURIA`/Italy; `SION`→state 4=`WALLIS`/
+  Switzerland) all resolve exactly right against `eeu.stt`'s own real
+  content. Not allocated in file order (first-seen sequence is
+  `0, 39, 3, 1, 4, 2, 5, 6, ...`, not `0, 1, 2, 3, ...`) and records
   sharing one `state_id` aren't necessarily contiguous.
 - **`timeinfo_id` (byte 66) — CRACKED (identity, plausible; not
   independently confirmed)**: range 1–13, heavily skewed (`1` alone covers
@@ -2218,6 +2224,65 @@ independently names a `seginfoID` field there, alongside `seg`/
 not on `eeu.rd` at all — `eeu.rd` and the tile format are two separate
 representations of the road network. Not pursued further this session
 (would require reopening the tile format's own segment record parser).
+
+### 3.21 `eeu.stt` — state/region catalog (79KB, NOT_COMPRESSED) — CRACKED and validated at full scale against real geography AND real cross-file content
+94-byte header (record count 691 read straight from the header), then
+exactly **691 fixed 114-byte records**. Every byte range was checked
+across the whole file (not sampled) for "always zero" vs. real content,
+giving an exact, unambiguous field layout:
+```
+uint16 LE  state_id    -- ascending 0-690, primary key
+bytes[22]              -- always zero (691/691) -- eeu.mod's zoneID/
+                          start_countyID/end_countyID/cover/bbox fields,
+                          unpopulated -- the SAME pattern already found
+                          in eeu.cny's own analogous region (§3.15)
+bytes[36]  name        -- NUL-padded, in the parent country's own
+                          language (matching eeu.ctr's own convention)
+uint8      country_id  -- CRACKED, see below
+bytes[53]              -- always zero (691/691) -- eeu.mod's
+                          alpha_counties/countyID fields, unpopulated
+```
+This is the real "state" table `eeu.cny`'s own `state_id` field points
+into (§3.15, §3.16) — closing a loop this project opened when `eeu.cny`
+was first cracked.
+
+**`name` — CRACKED**: real sub-national divisions, named in the parent
+country's own language: `KRITI` (Crete, Greece), `GENÈVE`/`WALLIS`/
+`TICINO` (3 real Swiss cantons, German/French as `eeu.ctr` itself uses
+for that country), `VALLE D'AOSTA`/`PIEMONTE`/`LIGURIA` (3 real Italian
+regions).
+
+**`country_id` — CRACKED, validated exactly against all 691 records (zero
+anomalies)**: a real foreign key into `eeu.ctr`'s own ROW ORDER (0-34) —
+**not** `eeu.cal`'s alphabetical-by-ISO-rank numbering (§3.13). Brute-force
+checked against `eeu.cal`'s scheme first and found no matching byte
+offset at all; checked instead against `eeu.ctr`'s own literal row
+position and found an exact match (row 0 = `SCHWEIZ`, row 2 = `ITALIA`,
+row 13 = `ELLADA` — exactly the 3 initial test values). Extended to the
+full file: every one of 691 records' `country_id` decodes to a real
+`eeu.ctr` country, summing to exactly 691 with zero unmapped values.
+Sanity-check counts per country are plausible (Vatican City=1, San
+Marino=1, Liechtenstein=2 — microstates; Turkey=81 — many provinces),
+with one unexplained outlier (Latvia=119, surprisingly high relative to
+similarly-sized countries — not independently resolved). **This is now
+the THIRD distinct country-numbering scheme confirmed on this disc**
+(alongside `eeu.cal`'s alphabetical `country_id`, §3.13, and `eeu.cty`'s
+own coarser per-country tag, §3.8) — every table that references a
+country on this disc uses its own locally-consistent scheme, not one
+shared space.
+
+**Cross-validated against `eeu.cny`'s own `state_id` field — full set
+equality, not just spot checks**: `eeu.cny`'s 691 distinct `state_id`
+values are the exact same *set* as this file's own 691 `state_id` values
+(both `{0, ..., 690}`, verified by direct set comparison). 3 individual
+spot-checks, each independently correct: `CHANIA` (a real Cretan county)
+has `state_id=0` → state 0 = `KRITI` (Crete), `country_id=13`=`ELLADA`
+(Greece); `IMPERIA` (a real Ligurian province) has `state_id=39` → state
+39 = `LIGURIA`, `country_id=2`=`ITALIA`; `SION` (a real Valais district)
+has `state_id=4` → state 4 = `WALLIS`, `country_id=0`=`SCHWEIZ`
+(Switzerland). All exactly right — `eeu.cny`'s `state_id` really is a
+genuine foreign key into this real, independently-verifiable table, not
+a guess.
 
 ---
 
