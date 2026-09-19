@@ -1,10 +1,13 @@
 """
-prd_reader.py -- decodes eeuz.prd, CRACKED this session: a phonetic
-pronunciation catalog for road names, presumably feeding the same
-text-to-speech engine eeuz.pca's phoneme catalog serves (voice guidance,
-e.g. "turn right onto Via ..."). Not previously examined at all -- this is
-the first session to look at this file's content (only its FLAT_COMPRESSED
-container was known, README S3.5).
+prd_reader.py -- decodes eeuz.prd, CRACKED: a phonetic pronunciation
+catalog for road names, presumably feeding the same text-to-speech
+engine eeuz.pca's phoneme catalog serves (voice guidance, e.g. "turn
+right onto Via ..."). Not previously examined at all before the session
+that cracked the record framing and `roadID` field (only its
+FLAT_COMPRESSED container was known, README S3.5); the 2 remaining
+fields (`minNumber`/`maxNumber`, a real house-number address range) were
+cracked in a later session via `eeu.mod`'s own schema, validated
+exhaustively (zero exceptions across all 11,960,527 records).
 
 ============================================================================
 Container
@@ -92,49 +95,43 @@ common case (2,721,836 roads), then 1 (1,779,289), then 3 (1,207,162),
 tailing off sharply from there (max observed: 9 entries for 2 roads).
 
 ============================================================================
-Fields 2 and 3 -- NOT CRACKED (two hypotheses tested and REFUTED this
-session -- read before re-attempting either)
+Fields 2 and 3 -- CRACKED (later session): a house-number address range
 ============================================================================
-**REFUTED: "index of a nearby/related road."** An early small sample (the
-first ~40 records, all from one tight Linosa, Sicily cluster) looked like
-`f2`/`f3` were `eeu.rd` indices of geographically nearby roads (every
-pair under 1km apart). This did NOT hold up at full-file, randomly-sampled
-scale: median distance between a record's own road and its `f2`/`f3`
-"targets" (interpreted the same way) is ~1,700km, essentially the span of
-the whole dataset -- i.e. uncorrelated with real distance. The early
-sample was misleading because in that specific tight cluster, EVERY small
-index (both origin and "target") happens to be geographically close
-regardless of any real relationship between them -- a sampling artifact,
-caught by re-testing at proper scale (this project's established
-discipline: don't trust a hypothesis validated on fewer than a few
-thousand real, randomly-drawn samples).
+`eeu.mod`'s own schema (research/mod_reader.py) names this table
+`phRoad`, with real fields `graphemLength`/`graphem`(=name)/
+`phonemLength`/`phonem`(=phon)/`roadID`(=f1, already confirmed)/
+`minNumber`(=f2)/`maxNumber`(=f3) -- directly naming `f2`/`f3` as a
+house-number address range, immediately explaining why the two earlier
+hypotheses (nearby-road index; same-name count) both failed: they
+were never pointers or counts at all.
 
-**REFUTED: "total count of eeu.rd records sharing this exact name."**
-`f3` is usually a small number (rarely above a few dozen). Real `eeu.rd`
-name-frequency counts for the same sample roads are much larger (e.g.
-"MASSIMO D'AZEGLIO" occurs 556 times across the whole disc, this record's
-own `f3` was 3) -- doesn't match at the whole-disc scope. Scoping the
-count to "just this local area/city" was not tested (no ready per-area
-grouping to test against was available this session) and remains a live,
-untested variant of this idea.
+**Validated EXHAUSTIVELY, not sampled**: `f2 <= f3` holds on EVERY SINGLE
+one of the 11,960,527 records in the file, zero exceptions -- about as
+strong a confirmation as a real min/max range invariant can get.
+3,171,255 records (26.5%, matching the earlier-observed "`f2==0` for
+26.5% of records" finding exactly) have `f2==f3==0` -- no house-number
+data for that road (plausible: piazzas, footpaths, and other
+non-addressed ways realistically have none). Real, plausible-looking
+examples: "VIA LIDO AZZURRO" -> `47-49` (a short street, small range);
+"VIA DEPOSITI" -> `1-95` (a longer street, wider range);
+"PIAZZA MEDUSA"/"PIAZZA CASTELLO"-style square/plaza entries mostly
+`0-0` (matches the earlier observation of the pattern skewing toward
+0/1-ish `f2` values -- squares with no linear address range are common
+in this sample). Also explains the earlier observation that `(f2, f3)`
+is IDENTICAL across every one of a road's own multiple `.prd` entries
+(e.g. bare name + "name, containing place" variants) -- a house-number
+range is a property of the ROAD segment itself, not of any one
+phonetic-name variant.
 
-**Observed, not yet explained**: `f2` is 0 for 26.5% of records and,
-when nonzero, is very heavily concentrated at small values (median 1,
-with `f2==1` alone covering roughly half of ALL 11.96M records) --
-looks rank/count-like, not like an arbitrary pointer. `f3` is 0 for the
-same 26.5% of records (i.e. `f2`/`f3` are zero together) but has a wider,
-less concentrated nonzero distribution (median 20). Both are IDENTICAL
-across every one of a road's own multiple `.prd` entries (e.g. all 2-3
-entries for one `eeu.rd` index always share the exact same `(f2, f3)`
-pair) -- so whatever they mean, it's a property of the ROAD (or its local
-context), not a per-duplicate-entry variant counter (a "1st/2nd/3rd
-phonetic variant" rank hypothesis was checked directly against this and
-also does NOT hold -- the observed duplicate groups all show identical,
-not incrementing, `(f2, f3)`). A genuinely untested next idea: `f2`/`f3`
-as a (rank, total) pair over `eeu.rd` records sharing the same name
-WITHIN A SMALL LOCAL AREA specifically (not the whole disc) -- would need
-a per-area grouping (e.g. via `eeu.cty` bounding boxes, README S3.8) to
-test properly.
+**A genuine cross-file curiosity, not a contradiction**: `eeuz.rl`
+(README S3.7) independently declares its OWN `minNumber`/`maxNumber`
+pair (packed, gated by a `hasHouseNumbers` flag) but that copy is
+ALWAYS ZERO on this disc -- while `eeuz.prd`'s own copy here IS
+populated with real data. Two different tables, sharing the schema's
+naming convention, populated independently and inconsistently at build
+time -- not investigated further (would require checking a different
+region/market disc to see whether `eeuz.rl`'s own range is ever
+populated there).
 
 ============================================================================
 The duplicate-entry pattern (a real, useful side finding)
@@ -161,11 +158,15 @@ import struct
 
 
 def iter_prd_records(body, header_size=94):
-    """Yield (name, phon, f1, f2, f3) tuples from an already-decompressed
-    eeuz.prd buffer (the FULL logical file, header included -- pass
-    flat_compressed_reader.decompress_all()'s own return value directly).
-    Streams without building a full list, so this is safe to call on the
-    whole 572MB decompressed file."""
+    """Yield (name, phon, road_id, min_number, max_number) tuples from an
+    already-decompressed eeuz.prd buffer (the FULL logical file, header
+    included -- pass flat_compressed_reader.decompress_all()'s own return
+    value directly). `road_id` is an eeu.rd record index; `min_number`/
+    `max_number` is a real house-number address range for that road
+    (min_number <= max_number holds on every record in the file, or both
+    are 0 if the road has no house-number data -- see this module's
+    docstring). Streams without building a full list, so this is safe to
+    call on the whole 572MB decompressed file."""
     data = body[header_size:]
     pos = 0
     n = len(data)
@@ -176,9 +177,9 @@ def iter_prd_records(body, header_size=94):
         phon_len = data[pos]
         phon = data[pos + 1:pos + 1 + phon_len]
         pos = pos + 1 + phon_len
-        f1, f2, f3 = struct.unpack_from("<III", data, pos)
+        road_id, min_number, max_number = struct.unpack_from("<III", data, pos)
         pos += 12
-        yield name, phon, f1, f2, f3
+        yield name, phon, road_id, min_number, max_number
 
 
 def rd_name_and_lonlat(rd_data, index, header_size=94, record_size=67):

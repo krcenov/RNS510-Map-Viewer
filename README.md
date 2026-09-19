@@ -279,14 +279,15 @@ records (e.g. a sorted or spatial-index view). (Superseded — see §3.7: this s
 hypothesis was tested and refuted; §3.7 also documents the CRACKED character-trie
 structure `.rt` actually uses.)
 
-**`eeuz.prd` — CRACKED this session: a phonetic pronunciation catalog for road
+**`eeuz.prd` — CRACKED: a phonetic pronunciation catalog for road
 names**, presumably feeding the same text-to-speech engine `eeuz.pca`'s phoneme
 catalog serves (voice guidance). This file's content had never been examined
-before — only its FLAT_COMPRESSED container was known. Decompresses to 572MB
+before the session that cracked its record framing — only its FLAT_COMPRESSED
+container was known. Decompresses to 572MB
 (599,975,088 bytes). Record format, **validated at FULL scale (every byte of the
 decompressed file)**: 94-byte header, then self-delimiting variable-length records
-back-to-back — `[uint8 name_len][name][uint8 phon_len][phon][uint32 LE f1][uint32 LE
-f2][uint32 LE f3]`. Parsing the ENTIRE decompressed body this way consumes every
+back-to-back — `[uint8 name_len][name][uint8 phon_len][phon][uint32 LE roadID][uint32 LE
+minNumber][uint32 LE maxNumber]`. Parsing the ENTIRE decompressed body this way consumes every
 byte with **zero leftover/misaligned bytes at EOF**, producing exactly 11,960,527
 well-formed records — about as strong a structural confirmation as a variable-length
 record format can get without an explicit spec.
@@ -300,27 +301,33 @@ record format can get without an explicit spec.
   = "E seventy-five", spoken out — genuine number-to-speech, not digit-by-digit
   playback); Norwegian `"341"` → `"tre: ""h}n|dr@ %O f2|ti|"e:n` ("tre hundre og
   førtién" = "three hundred and forty-one").
-- **`f1` — CRACKED**: a direct `eeu.rd` record index. Validated on a 5,000-record
+- **`roadID` — CRACKED**: a direct `eeu.rd` record index. Validated on a 5,000-record
   random sample spanning the whole file: 100% are valid indices, and 100% of those
   have `eeu.rd`'s own (type-word-free) name as an exact substring/suffix of this
   record's own `name` field. Coverage: 5,981,409/8,809,081 (67.9%) of `eeu.rd`
   records have at least one `.prd` entry; most get 1-3 (2 is the single most common
   count: 2,721,836 roads).
-- **`f2`/`f3` — NOT CRACKED, two hypotheses tested and REFUTED this session**: (1)
-  "index of a nearby/related road" — an early small sample (~40 records, one tight
-  Sicily cluster) looked like close geographic neighbors, but full-scale random
-  sampling found a median ~1,700km "distance" (uncorrelated with real geography) —
-  the early result was a sampling artifact (everything in that one tight cluster is
-  near everything else regardless of any real relationship), caught by re-testing
-  properly at scale. (2) "total count of same-named `eeu.rd` records" — real
-  whole-disc name-frequency counts (e.g. 556 for `"MASSIMO D'AZEGLIO"`) are far
-  larger than observed `f3` values (3, in that example) — doesn't match at
-  whole-disc scope (a per-local-area-scoped version of this idea was NOT tested).
-  Observed but unexplained: both fields are identical across all of one road's own
-  multiple `.prd` entries (ruling out a "1st/2nd/3rd variant" rank hypothesis too);
-  `f2` is 0 for 26.5% of records and, when nonzero, heavily concentrated near small
-  values (median 1); `f3` shares the same zero cases but has a wider nonzero spread
-  (median 20). A real, useful side finding: where a road has multiple entries, a
+- **`minNumber`/`maxNumber` — CRACKED (later session): a real house-number
+  address range**. `eeu.mod`'s own schema (§3.16) names this table `phRoad`
+  with exactly these 2 field names after `roadID` — immediately explaining
+  why the two hypotheses originally tried (nearby-road index; same-name
+  count) both failed: neither field was ever a pointer or a count.
+  **Validated EXHAUSTIVELY, not sampled**: `minNumber <= maxNumber` holds
+  on every single one of the 11,960,527 records in the file, zero
+  exceptions. 3,171,255 records (26.5%, matching the earlier-observed
+  "`f2==0` for 26.5%" finding exactly) have `minNumber==maxNumber==0` — no
+  house-number data for that road (plausible for piazzas, footpaths, and
+  other non-addressed ways). Real, plausible examples: `"VIA LIDO
+  AZZURRO"` → `47-49` (a short street); `"VIA DEPOSITI"` → `1-95` (a
+  longer one). Also explains why the pair is IDENTICAL across every one
+  of a road's own multiple `.prd` entries (§3.5's original observation) —
+  a house-number range is a property of the road segment itself, not of
+  any one phonetic-name variant. **A genuine cross-file curiosity, not a
+  contradiction**: `eeuz.rl` (§3.7) independently declares its own
+  `minNumber`/`maxNumber` pair, but that copy is ALWAYS ZERO on this disc
+  — two different tables sharing the schema's naming convention,
+  populated inconsistently at build time. A real, useful side finding
+  from the original session: where a road has multiple entries, a
   common (not universal) pattern is one bare-name entry plus one
   `"<name>, <containing place>"` entry (`eeu.cty`'s own naming convention, §3.8) —
   e.g. plain `"VIA CRISTOFORO COLOMBO"` alongside `"VIA CRISTOFORO COLOMBO, LAMPEDUSA
