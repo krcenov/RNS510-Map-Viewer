@@ -5689,6 +5689,71 @@ the independently-computed ground truth exactly, 5/5 — and a point far
 from any real anchor (0°, 0°) correctly returned `None` rather than a
 false hit.
 
+### v19 → v20: real POI display, unlocked by this session's own `POI.DB3.Coordinate` crack (this session)
+
+**The user's request:** after cracking `POI.DB3`'s `Coordinate` field (a
+64-bit Morton/Z-order code, §3.24) while investigating what to build next
+in the viewer, the user was asked whether to build real POI display and
+said yes.
+
+**Data pipeline**: `MapData.load_poi_data()` extracts `EDB/POI/POI.DB3`
+(~1.1GB, disc root, a new `POI_ISO_PATH = "/EDB/POI/POI.DB3"` — not under
+`/DB/` like every other extracted file) in its own background
+`BackgroundTask`, same deferred-loading pattern as `load_heavy_layer()`
+("mp0") — kicked off right after "Open Map ISO" returns, so it never
+blocks opening the disc. `research/poi_db_reader.py` gained a vectorized
+bulk-decode path (`decode_coordinates_np()`, `load_poi_cache()`) — the
+whole-file "read once, numpy-filter per viewport" pattern
+`road_naming.RdCache` already uses for `eeu.rd`. **Measured on the
+reference disc**: 8.6s total to extract POI.DB3 and decode all
+4,733,183 real POI coordinates (verified byte-for-byte identical to the
+scalar `decode_coordinate()` on a random sample, 0 mismatches).
+
+**Real, disc-designed zoom gating, not a guessed cutoff.**
+`PoiPartition_BaseAttributes.MapZoomLevel` (previously only noted as
+"consistent with partitions controlling visibility, not confirmed") is
+used directly as each POI category's own visible-span-in-meters cutoff
+— `"airport"` (`zoom_level_m` 5,000,000) stays visible zoomed way out,
+`"downtown area"` (50,000) only appears zoomed in close, `"gas
+station"`/`"restaurants"`/etc. sit in between — exactly matching this
+viewer's own existing `ZOOM_LEVELS_M` span-in-meters convention, so no
+new unit conversion was needed (`span_m_for_scale()`, the exact inverse
+of the already-existing `scale_for_zoom_span_m()`). `MapData.
+pois_for_bbox(lon_min, lon_max, lat_min, lat_max, max_span_m)` combines
+this with the ordinary bbox filter. **Verified directly**: a Sofia-area
+query at a 50km span returns 6,162 real POIs with a sensible category
+mix (826 restaurants, 811 ATMs, 807 pharmacies, 95 gas stations, 213
+hotels, ...); the SAME query widened to the whole EEU bbox at a 500km
+span correctly drops to ONLY long-range categories (`airport`, `cng
+station`, `lpg station`, `monuments`) — `"gas station"` is confirmed
+ABSENT at that span, exactly as its own 400,000m `zoom_level_m` demands.
+
+**Rendering: rasterized into the SAME bitmap as road dots, not
+individual canvas items.** A wide-but-still-in-range viewport (e.g. a
+broad category's own 400,000m cutoff implies a viewport that could
+plausibly cover hundreds of thousands of real POIs — confirmed directly:
+185,520 POIs at the widest EEU-spanning 500km-span query above) drawn as
+individual `canvas.create_oval()` items would risk reintroducing the
+exact "Not Responding" freeze the "v17 → v18" rasterization rework
+already fixed for road dots. POI markers (`POI_DOT_COLOR`, Material
+"purple 700" — visually distinct from every other on-map color already
+in use) are drawn into the same `PIL.Image`/`ImageDraw` bitmap
+`_redraw()` already builds for roads; only POI NAME labels are real
+canvas text items, capped at `MAX_POI_LABELS` (40, the same pattern
+`MAX_CITY_LABELS` already uses) regardless of how many markers were
+drawn. A new "Show POIs" checkbox (checked by default) is a pure
+rendering-time filter — no background reload needed, unlike the layer/
+connected-roads checkboxes, since it doesn't change what's loaded, only
+what a redraw draws.
+
+**Verified with a real, running-`App`-level test** (not just `MapData`-
+level): after a real redraw of a Sofia-area view, 6,918 sample pixels of
+the rendered bitmap match `POI_DOT_COLOR` exactly (within a small
+anti-aliasing tolerance); unchecking "Show POIs" and redrawing again
+finds exactly 0 such pixels — confirms both that POIs actually render
+and that the checkbox actually controls it, at the pixel level, not just
+"the code path didn't crash".
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

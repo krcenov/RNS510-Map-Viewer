@@ -338,6 +338,7 @@ import road_index_reader as rir
 import ctr_reader as ctrr
 import flat_compressed_reader as fcr
 import iof_reader as iofr
+import poi_db_reader as poidb
 from rns510_gui import BackgroundTask
 
 APP_TITLE = "RNS510 Map Viewer (read-only)"
@@ -361,6 +362,10 @@ CTY_ISO_PATH = "/DB/EEU.CTY"
 # despite being a confirmed real eeuz.cl entry).
 RT_ISO_PATH = "/DB/EEUZ.RT"
 CTR_ISO_PATH = "/DB/EEU.CTR"
+
+# Real POI database (README §10 "v19 -> v20"): a disc-root file, NOT under
+# /DB/ like everything else extracted above -- research/poi_db_reader.py.
+POI_ISO_PATH = "/EDB/POI/POI.DB3"
 
 # ---------------------------------------------------------------------------
 # Cumulative scale-stacked layer set (README §10, "v5 -> v6") -- replaces the
@@ -510,6 +515,19 @@ def scale_for_zoom_span_m(span_m, width_px, height_px):
     return max(min(width_px, height_px), 1) / span_deg
 
 
+def span_m_for_scale(scale, width_px, height_px):
+    """Inverse of scale_for_zoom_span_m() (README §10 "v19 -> v20"): the
+    real-world span, in meters, the SMALLER of the canvas's two pixel
+    dimensions currently covers at a given `scale`. Used to gate POI
+    display by each POI's own partition MapZoomLevel (MapData.
+    pois_for_bbox()) -- the same span-in-meters concept ZOOM_LEVELS_M
+    already uses, just read off the CURRENT view instead of picking a
+    discrete step."""
+    scale = max(scale, 1e-9)
+    span_deg = max(min(width_px, height_px), 1) / scale
+    return span_deg * METERS_PER_DEGREE_LAT
+
+
 def nearest_zoom_level_index(scale, width_px, height_px, levels=ZOOM_LEVELS_M):
     """Index into `levels` (ZOOM_LEVELS_M by default) whose own
     scale_for_zoom_span_m() is closest to the given `scale` -- lets
@@ -622,6 +640,12 @@ MARKER_FILL = "#e8821b"          # orange current-position marker (photos #3/#4)
 MARKER_OUTLINE = "#8a4c0a"
 PICK_MARK_COLOR = "#c2185b"      # magenta ring/number for click-to-identify picks (v6 -> v7) -- distinct
 PICK_MARK_HALO = "#ffffff"       # from every other on-map color (gold roads, navy cities, orange marker)
+# Real POI markers (README §10 "v19 -> v20", EDB/POI/POI.DB3) -- Material
+# Design "purple 700", chosen to be visually distinct from every other
+# on-map color already in use (red road dots, gold road lines, navy city
+# dots, orange current-position marker, magenta pick rings).
+POI_DOT_COLOR = "#7b1fa2"
+POI_LABEL_COLOR = "#4a148c"
 
 # --- Hardware bezel / physical-unit chrome (photo #1) ----------------------
 BEZEL_COLOR = "#26282c"          # dark gunmetal/black plastic
@@ -648,6 +672,7 @@ TEAL_ACCENT_FG = "#f2fbfd"
 MIN_LABEL_PIXEL_LEN = 26     # don't label a named run shorter than this on screen
 LABEL_DEDUP_PX = 65          # don't draw a second same-name label within this many px
 MAX_CITY_LABELS = 40
+MAX_POI_LABELS = 40  # README §10 "v19 -> v20" -- caps POI text labels regardless of marker count
 BIG_CITY_AREA_DEG2 = 0.02    # bbox area above which a city gets the bolder/larger label
 
 # Sanity upper bound on a city's bbox area for DISPLAY ranking purposes --
@@ -1140,6 +1165,18 @@ class MapData:
         self.mp0_ready = False      # True once HEAVY_LAYER's geo-index is built
         self.mp0_building = False   # True while load_heavy_layer() is running
 
+        # Real POI display (README §10 "v19 -> v20") -- loaded lazily in
+        # its OWN background task after "Open Map ISO" returns, same
+        # deferred-loading pattern as mp0 (load_heavy_layer() above):
+        # extracting POI.DB3 (~1.1GB) and decoding all 4.7M Coordinate
+        # values is real, non-trivial work that shouldn't block opening
+        # the disc. poi_path is set here (not lazily) so it's always a
+        # valid, predictable location even before load_poi_data() runs.
+        self.poi_path = os.path.join(self.workdir, "POI.DB3")
+        self.poi_ready = False      # True once poi_cache is fully loaded
+        self.poi_building = False   # True while load_poi_data() is running
+        self.poi_cache = None       # poi_db_reader.load_poi_cache() result
+
         self.search_project = None  # core.MapProject, for road name search
         self.rd_cache = None        # road_naming.RdCache
         self.cty_cache = None       # city_reader.CtyCache
@@ -1375,6 +1412,78 @@ class MapData:
             return True
         finally:
             self.mp0_building = False
+
+    def load_poi_data(self, progress=None):
+        """Extract `EDB/POI/POI.DB3` (~1.1GB) and decode all 4,733,183
+        real POIs at once via `poi_db_reader.load_poi_cache()` (README
+        §10 "v19 -> v20") -- the real, cracked `Coordinate` field
+        (research/poi_db_reader.py's Morton/Z-order decode) makes this
+        possible for the first time. Meant to run in its OWN
+        BackgroundTask, same deferred pattern as load_heavy_layer()
+        above: kicked off right after `load()` returns so it finishes in
+        parallel with the user's first search/pan/zoom rather than
+        blocking "Open Map ISO". Sets `poi_ready=True` on success; until
+        then, `pois_for_bbox()` simply returns an empty list."""
+        self.poi_building = True
+        try:
+            iso = riso.open_tolerant(self.iso_path)
+            try:
+                if progress:
+                    progress("Extracting %s (real POI database, ~1.1GB)..." % POI_ISO_PATH)
+                with open(self.poi_path, "wb") as f:
+                    iso.get_file_from_iso_fp(f, iso_path=POI_ISO_PATH)
+            finally:
+                iso.close()
+
+            if progress:
+                progress("Decoding 4.7 million real POI coordinates...")
+            self.poi_cache = poidb.load_poi_cache(self.poi_path)
+            if progress:
+                progress("POI data ready: %d real points of interest." % len(self.poi_cache["poi_id"]))
+            self.poi_ready = True
+            return True
+        finally:
+            self.poi_building = False
+
+    def pois_for_bbox(self, lon_min, lon_max, lat_min, lat_max, max_span_m):
+        """Real POIs (README §10 "v19 -> v20") within the given bbox AND
+        whose own partition is visible at the current viewport's real-
+        world span (`max_span_m`, meters -- see App._span_m_for_scale()):
+        a POI only shows once `max_span_m` has zoomed in past its own
+        partition's `MapZoomLevel` (e.g. `"airport"`'s 5,000,000 makes
+        airports visible from very far out; `"downtown area"`'s 50,000
+        only shows up close) -- the disc's OWN real, designed visibility
+        hierarchy (`poi_db_reader.load_poi_partitions()`), not a guessed
+        cutoff. Returns [] if no POI data is loaded yet (poi_ready is
+        False) -- never raises for that case, so a caller can call this
+        unconditionally every redraw.
+
+        Returns a list of dicts: {"poi_id", "lon", "lat", "name",
+        "partition_id", "category_name"}."""
+        if not self.poi_ready or self.poi_cache is None:
+            return []
+        c = self.poi_cache
+        mask = (
+            (c["lon"] >= lon_min) & (c["lon"] <= lon_max) &
+            (c["lat"] >= lat_min) & (c["lat"] <= lat_max) &
+            (c["zoom_level_m"] >= max_span_m)
+        )
+        idxs = np.nonzero(mask)[0]
+        partitions = c["partitions"]
+        out = []
+        for i in idxs:
+            i = int(i)
+            pid = int(c["partition_id"][i])
+            meta = partitions.get(pid)
+            out.append({
+                "poi_id": int(c["poi_id"][i]),
+                "lon": float(c["lon"][i]),
+                "lat": float(c["lat"][i]),
+                "name": c["name"][i],
+                "partition_id": pid,
+                "category_name": meta["category_name"] if meta else None,
+            })
+        return out
 
     # --------------------------------------------------------------- search
 
@@ -2540,6 +2649,27 @@ class App:
             font=("Segoe UI", 9), highlightthickness=0)
         self.hide_garbage_cb.pack(side="left", padx=(10, 0))
 
+        # ---- "Show POIs" checkbox (README §10 "v19 -> v20") ----
+        # Real POIs (gas stations, hotels, restaurants, airports, ...)
+        # from EDB/POI/POI.DB3, made possible by this session's crack of
+        # its own Coordinate field (research/poi_db_reader.py). CHECKED
+        # by default, same as the road layers -- POI display is already
+        # self-limiting via each POI's own partition zoom threshold
+        # (MapData.pois_for_bbox()), so there's no dense-clutter risk at
+        # a normal zoomed-out view the other checkboxes exist to guard
+        # against. Purely a rendering-time filter (no background reload
+        # needed, unlike the layer/connected-roads checkboxes) -- toggling
+        # it just calls _redraw() directly.
+        self.show_pois_var = tk.BooleanVar(value=True)
+        self._status_divider(layers_row)
+        self.show_pois_cb = tk.Checkbutton(
+            layers_row, text="Show POIs", variable=self.show_pois_var,
+            onvalue=True, offvalue=False, command=lambda: self._redraw(),
+            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
+            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
+            font=("Segoe UI", 9), highlightthickness=0)
+        self.show_pois_cb.pack(side="left", padx=(10, 0))
+
         # ---- hardware bezel + screen (photo #1) ----
         bezel = tk.Frame(self.root, bg=BEZEL_COLOR)
         bezel.pack(fill="both", expand=True)
@@ -2627,6 +2757,13 @@ class App:
         # search/pan/zoom status messages, and never disables anything.
         self.mp0_status_var = tk.StringVar()
         tk.Label(status_bar, textvariable=self.mp0_status_var, bg=STATUS_BAR_BG, fg="#8b93a0",
+                 font=("Segoe UI", 8)).pack(side="left", padx=8)
+        self._status_divider(status_bar)
+
+        # Same pattern, for the background POI.DB3 load/decode (README §10
+        # "v19 -> v20") -- see App._start_poi_load().
+        self.poi_status_var = tk.StringVar()
+        tk.Label(status_bar, textvariable=self.poi_status_var, bg=STATUS_BAR_BG, fg="#8b93a0",
                  font=("Segoe UI", 8)).pack(side="left", padx=8)
         self._status_divider(status_bar)
 
@@ -2933,8 +3070,32 @@ class App:
             self._set_status("Ready. Search a place/road (or enter lat/lon), then Go.")
             self._set_controls_enabled(True)
             self._start_heavy_layer_load()
+            self._start_poi_load()
 
         BackgroundTask(self.root, do_load, self._set_status, done).start()
+
+    def _start_poi_load(self):
+        """Kick off POI.DB3 extraction + decode in its OWN background
+        BackgroundTask (README §10 "v19 -> v20"), same deferred pattern as
+        _start_heavy_layer_load() above -- the user can search/pan/zoom
+        the whole time this runs. On success, immediately redraws so any
+        already-open view gains its POI dots right away, with no user
+        action needed."""
+        self.poi_status_var.set("Loading real POI database in the background...")
+
+        def do_load(progress):
+            return self.data.load_poi_data(progress=progress)
+
+        def done(result, error):
+            if error:
+                self.poi_status_var.set("POI data unavailable (%s)." % error)
+                return
+            n = len(self.data.poi_cache["poi_id"]) if self.data.poi_cache else 0
+            self.poi_status_var.set("%d real POIs ready." % n)
+            self.root.after(4000, lambda: self.poi_status_var.set(""))
+            self._redraw()
+
+        BackgroundTask(self.root, do_load, lambda msg: self.poi_status_var.set(msg), done).start()
 
     def _start_heavy_layer_load(self):
         """Kick off HEAVY_LAYER ("mp0", street-level detail) extraction +
@@ -3430,6 +3591,31 @@ class App:
                         mx, my = self._to_canvas(mlon, mlat)
                         road_label_candidates.append((pix_len, name, mx, my))
 
+        # Real POIs (README §10 "v19 -> v20", EDB/POI/POI.DB3) -- rasterized
+        # into the SAME `img` bitmap as the road dots above, for the exact
+        # same reason (README §10 "v17 -> v18"): a wide, zoomed-out-enough
+        # viewport where a broad category like "gas station" (zoom_level_m
+        # 400,000) still qualifies could plausibly cover thousands of real
+        # POIs, and drawing that many as individual canvas.create_oval()
+        # items would risk reintroducing the exact "Not Responding" freeze
+        # the v17->v18 rework fixed for road dots. Text LABELS are still
+        # real canvas items (added below, like road/city labels) but capped
+        # at MAX_POI_LABELS regardless of how many markers were drawn.
+        poi_label_candidates = []
+        if self.show_pois_var.get() and self.data is not None and self.data.poi_ready:
+            vb = self._visible_bbox()
+            if vb is not None:
+                lon_min, lon_max, lat_min, lat_max = vb
+                max_span_m = span_m_for_scale(self.scale, w, h)
+                for poi in self.data.pois_for_bbox(lon_min, lon_max, lat_min, lat_max, max_span_m):
+                    px, py = self._to_canvas(poi["lon"], poi["lat"])
+                    if not (-10 <= px <= w + 10 and -10 <= py <= h + 10):
+                        continue
+                    draw.ellipse([px - 2.2, py - 2.2, px + 2.2, py + 2.2],
+                                 fill=POI_DOT_COLOR, outline=BG_COLOR)
+                    if poi["name"]:
+                        poi_label_candidates.append((poi["name"], px, py))
+
         # Hand the finished rasterization off to Tk as ONE canvas item
         # (README §10 "v17 -> v18") -- everything drawn above (every dot,
         # every high-confidence connected-roads line) is now baked into
@@ -3461,6 +3647,17 @@ class App:
             self.canvas.create_text(mx, my, text=name, fill=ROAD_LABEL_COLOR,
                                      font=("Segoe UI", 8), anchor="center")
             placed.append((name, mx, my))
+
+        # POI name labels (README §10 "v19 -> v20") -- markers are already
+        # rasterized above; only the TEXT is a real canvas item, and only
+        # up to MAX_POI_LABELS of them regardless of how many markers were
+        # drawn, same clutter guard MAX_CITY_LABELS already uses below.
+        for name, px, py in poi_label_candidates[:MAX_POI_LABELS]:
+            if not far_enough(name, px, py):
+                continue
+            self.canvas.create_text(px, py - 6, text=name, fill=POI_LABEL_COLOR,
+                                     font=("Segoe UI", 8), anchor="s")
+            placed.append((name, px, py))
 
         # City/town labels -- queried fresh each redraw (CtyCache is cheap).
         if self.data is not None and self.data.cty_cache is not None:
