@@ -1952,9 +1952,13 @@ directly cross-referencing this schema**:
 - **`eeu.si` is named `seginfo`**, with real fields `rank`, `class`,
   `divided`, `drivables`, `toll_vignette`, `toll_road`, `restclass`,
   `urban`, `route_num_type`, `paved`, ... — a genuine road-classification
-  table, and a strong, **not yet pursued** lead for `eeu.rd`'s own
-  long-unresolved `bytes[1:5]` "candidate road-class flags" (§3.1).
-  `eeu.si` itself was not opened this session.
+  table. **Opened in a later session (§3.20)**: `rank`/`class`/`divided`
+  and `route_num_type`/`paved` were cracked, but the hoped-for link to
+  `eeu.rd`'s own `bytes[1:5]` turned out not to hold up structurally —
+  `eeu.rd`'s ~5 distinct patterns there are far too few to index
+  `eeu.si`'s 20,381 distinct records. See §3.20 for the corrected lead
+  (the real `seginfoID` FK likely lives on the MAP_COMPRESSED tile
+  format's own segment records instead).
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style
@@ -2137,6 +2141,83 @@ that `eeu.pmc`/`.pmm` carry a provable placeholder identity array rather
 than real content, the coherent conclusion for the whole file family is:
 **the entire postal-code subsystem (`.pol`/`.pot`/`.pmm`/`.pmc`/`.pmp`)
 was designed and schema'd but never populated on this specific disc.**
+
+### 3.20 `eeu.si` — segment classification table (195KB, NOT_COMPRESSED) — CRACKED: fixed 8-byte records, 2 of 5 real data bytes decoded in exact schema order
+94-byte header (record count 24,353 read straight from the header),
+then exactly **24,353 fixed 8-byte records** — validated at full scale:
+`24,353 × 8 = 194,824` bytes, an exact match to the real body size, zero
+leftover. Real content lives in the first **5 bytes**; `bytes[5:8]` are
+**always zero** on every one of the 24,353 records checked (not sampled)
+— unused/reserved padding.
+
+Only **20,381 of 24,353 records have a distinct 5-byte payload** — 3,972
+records duplicate another record's exact value. Not a clean dedup table
+(that would require zero duplicates); more likely allocated per some
+other axis (e.g. per-region/country) where the same attribute
+combination legitimately recurs.
+
+`eeu.mod`'s own schema (§3.16) names this table `seginfo`, with 20 real
+leaf fields once the 11 shared header-struct boilerplate strings are
+excluded (§3.16): `rank`, `class`, `divided`, [`drivables`:
+`driveable_lower`, `drivable_upper`], `toll_vignette`, `toll_road`,
+`tollbooth_direction`, `hwy_complex_bit`, `restclass`, `landmark`,
+`dbldig`, `detailedcity`, `urban`, `bifurcation_left`,
+`bifurcation_right`, `rnc`, `truck_digitized`, `route_num_type`,
+`paved`. `drivables` is (by analogy with `eeu.pmm`'s own
+`type_and_listIndex` wrapper, §3.19) almost certainly a struct/group
+name wrapping its two children, not itself a field — the inconsistent
+spelling ("driveable" vs "drivable") is a real quirk of the original
+compiler's packing, not a project typo, consistent with a single logical
+value split low/high across non-adjacent bits.
+
+**Byte 0 (bits 0-7) CRACKED = `rank`/`class`/`divided`, in exact schema
+order**:
+```
+bits[0:3]  rank      -- values 0-4 ONLY (5,6,7 never observed)
+bits[3:7]  class     -- values 0-12 (13,14,15 never observed)
+bit[7]     divided   -- boolean, 16.30% of records (3,970/24,353)
+```
+**Byte 4's low nibble (bits 32-35) CRACKED = `route_num_type`/`paved`,
+the exact LAST 2 real fields in schema order, in the LAST real byte**:
+```
+bits[32:35]  route_num_type  -- values 0-6 ONLY (7 never observed)
+bit[35]      paved           -- boolean, 94.56% of records (23,029/24,353)
+```
+Both crackings are validated by: exact bit-width match (sub-fields sum
+to a whole byte with no slack), exact schema-order match, small/clean
+bounded value ranges (not filling the sub-field's full range, consistent
+with real bounded enums rather than noise), and real-world plausibility
+(`divided`'s ~16% and `paved`'s ~95% are both realistic rates for a
+European road network). Not independently confirmed against ground truth
+— see the "eeu.rd cross-reference" note below.
+
+**NOT cracked: bytes 1-3 (24 bits), 15 more named fields**
+(`driveable_lower`/`drivable_upper`/`toll_vignette`/`toll_road`/
+`tollbooth_direction`/`hwy_complex_bit`/`restclass`/`landmark`/`dbldig`/
+`detailedcity`/`urban`/`bifurcation_left`/`bifurcation_right`/`rnc`/
+`truck_digitized`) — no bit assignment determined. One clean structural
+fact, not yet tied to a name: byte 2's low 3 bits are always zero on
+every record (every byte-2 value is a multiple of 8), leaving a clean
+5-bit sub-field (values 0-30, 30/32 possible values used) — high
+cardinality, more consistent with a multi-value code than a boolean
+flag, but not assigned to a specific field name. Bytes 1 and 3 show no
+comparably clean internal boundary.
+
+**Corrects a previous session's lead**: §3.16 flagged `eeu.si` as "a
+strong, not-yet-pursued lead" for `eeu.rd`'s own unresolved `bytes[1:5]`
+(§3.1, "candidate road-class flags"). Checked directly this session:
+`eeu.rd`'s `bytes[1:5]` has only **~5 distinct patterns** across the
+whole file (§3.1) — far too few to serve as a direct foreign-key index
+into `eeu.si`'s 20,381 distinct records (a real FK into a table that
+size needs on the order of 15 bits of entropy, not ~5 discrete states).
+**This specific cross-reference does not hold up structurally.** More
+likely: the real `seginfoID` foreign key lives on the MAP_COMPRESSED
+tile format's own segment records (`eeu.mod`'s "Ordinary Map File" block
+independently names a `seginfoID` field there, alongside `seg`/
+`restr_left`/`restr_right`/`left_node`/`right_node`/`length`, §3.16),
+not on `eeu.rd` at all — `eeu.rd` and the tile format are two separate
+representations of the road network. Not pursued further this session
+(would require reopening the tile format's own segment record parser).
 
 ---
 
