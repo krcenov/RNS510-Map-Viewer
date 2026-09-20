@@ -211,13 +211,18 @@ just file coexistence), `db_get_parcel_dir_V005`/`db_load_pcl_dir_V005`
 (the `eeuz.fea` parcel directory), `db_check_junction_view_V006` (the
 V009_038-added junction-view schema), and `db_us_state_from_segment_
 V008` (independent evidence of a real NA-specific map-data code path,
-alongside the already-found `CPhonemeNA*Handler` split). **Not done**:
-locating or disassembling the actual CODE behind any of these names —
-their strings are found, but README S2.4's own documented wall (no
-recoverable load-base address for this region) still applies; a
-pattern-based heuristic function-finder (confirmed to work on
-`WA/CTEST.OUT`) is the concrete, well-scoped next step, not yet built.
-Full details: `research/swl_5238_reader.py`.
+alongside the already-found `CPhonemeNA*Handler` split). **A direct
+attempt to locate the CODE behind these names was made and hit a real
+wall**: no `\x7fELF` magic anywhere in the 0-24MB region (ruling out any
+surviving ELF/DWARF structure to parse), and a `lis`/`addi` string-
+cross-reference load-base recovery (39,715 candidate absolute-address
+pairs, tested against 7 known accessor-name strings) found no
+consistent load base — each string's own top candidates are unrelated
+to every other string's. Most likely explanation: these are DWARF-
+`.debug_str`-like debug-only strings, structurally never referenced by
+executing code, so no code-side cross-referencing technique can locate
+them — a genuine, structural dead end for this line of attack, not an
+unexplored gap. Full details: `research/swl_5238_reader.py`.
 
 ---
 

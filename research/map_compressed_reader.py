@@ -2192,6 +2192,19 @@ def decode_topology(raw, declen=None, features=None):
     located or disassembled this session (no recoverable load-base
     address for that region, same wall as README S2.4), so this remains
     a confirmed lead, not a byte-offset crack.
+
+    **UPDATE, same later session: a direct attempt to recover the load
+    base was made and REFUTED.** String cross-referencing via `lis`/
+    `addi` immediate-pair scanning (39,715 candidate absolute-address
+    pairs found across the whole 24MB region, tested against 7 known
+    accessor-name string offsets including `db_seg_marker_left_V004`
+    itself) found NO consistent load base -- each string's own top
+    candidate values are completely unrelated to every other string's.
+    Most likely explanation (see `research/swl_5238_reader.py` for the
+    full writeup): these strings are DWARF-`.debug_str`-like debug-only
+    data, structurally never referenced by executing code, so no amount
+    of code-side cross-referencing can locate them -- a real, structural
+    dead end for this specific technique, not an unexplored gap.
     """
     if declen is None:
         declen = len(raw)

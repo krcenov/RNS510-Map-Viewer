@@ -343,18 +343,62 @@ directly relevant to this project's own open walls:
     the authoring-tool schema dictionary are almost certainly generated
     from the SAME underlying table definitions.
 
-**Not attempted**: disassembling any of these named functions'
-actual code bodies. Their STRING locations are known (offsets within
-`FHDD6.FLI`), but their CODE addresses are not directly recoverable
-without either (a) parsing this region's own `.debug_info`/symbol table
-properly (README S2.4's documented wall — no recoverable load base for
-the whole 24MB region) or (b) a pattern-based heuristic function-finder
-(searching for real PowerPC prologue bytes, as confirmed working on
-`WA/CTEST.OUT` above, then trying to correlate candidates to these
-known names by cross-referencing string-table/`.rodata` proximity) —
-neither was built this session. This is the concrete, well-scoped next
-step for a future session wanting exact byte offsets rather than just
-confirmed field names.
+**A LATER session tried the load-base recovery (b) directly, and hit a
+real, well-reasoned wall -- not just "not attempted".** Confirmed first:
+no `b"\x7fELF"` magic anywhere in the 0-24MB region (0 hits) -- unlike
+`WA/CTEST.OUT`, there is no ELF container surviving here at all, ruling
+out approach (a) outright (there is no `.debug_info`/symtab structure to
+parse -- the debug strings are the ONLY surviving trace). For (b): every
+`lis Rt,HI16` PowerPC instruction immediately followed by an `addi
+Rt,Rt,LO16` on the SAME register was found via a direct 32-bit
+big-endian word scan (no capstone needed for this narrow pattern) across
+the whole 24MB region -- 39,715 such pairs, each forming a candidate
+32-bit absolute address `(HI16<<16)+sign_extend(LO16)`. The idea: if any
+of these pairs load the real address of one of the known debug strings
+above, then `candidate_address - string_file_offset` should equal one
+CONSISTENT unknown load-base value across MANY independent strings --
+directly recovering the load base this project has never had. **Tested
+against 7 known string offsets (`db_seg_marker_left_V004`,
+`db_tmc_all_headers_V003`, `db_get_dbal_version_V000`, etc): each
+string's own top candidate "base" values are COMPLETELY DIFFERENT from
+every other string's** (no shared value appears as a top candidate for
+more than one string) -- i.e. none of these 39,715 `lis`/`addi` pairs
+are genuinely loading any of these strings' addresses; the high
+per-string counts (700-900 each) are just the most common unrelated
+immediate-pair values occurring anywhere in 24MB of code, coincidence
+only.
+
+**Why, most likely**: byte-level inspection around several of these
+strings (`db_page_releaseParcel_V003\x00\x00db_tmc_all_headers_
+V003\x00db_tmc_seg_V003\x00\x00\xe8\x00\x19\x00\x00\x01 _city_
+V004\x00\x00...`, `_vt$27RouteCalculatorMana<4 raw garbage bytes>
+roxy\x00fp_db_seg_marker_left_V004\x00...`) shows this is MOSTLY a
+plain, flat NUL-terminated string pool (consistent with a DWARF
+`.debug_str`-style section, or a stripped `.strtab` with its `.symtab`
+counterpart removed) -- occasionally interrupted by a few stray binary
+bytes at what look like segment/seam boundaries, not a regular per-
+string binary header. A `.debug_str` (or bare `.strtab`) is, by design,
+referenced ONLY by other debug/symbol-table structures (an external
+debugger, or a linker's own bookkeeping) -- NEVER by the executing
+code's own instruction stream. If that is what survived here, there is
+NO `lis`/`addi` reference to find, for ANY string, no matter how
+thorough the scan -- not a limitation of this technique, but a
+structural fact about what kind of data this is. This is consistent
+with, and extends, README S2.4's own finding (no recoverable load base
+for a proper disassembly) — it adds a second, independent reason (no
+runtime code ever touches these specific bytes) alongside the original
+one (the region mixes ROM-resident code with runtime-relocated
+structures).
+
+**Genuine wall for this session, not a workaround-able gap**: getting
+real byte offsets for `db_seg_marker_left`/`db_seg_rank`/etc would need
+either (1) the ACTUAL executing code that calls these accessors (not
+their debug-only name strings) — a much harder, unscoped disassembly
+search with no current entry point, or (2) external tooling/ground
+truth this project doesn't have (a symbol map, a debugger attached to
+real hardware, or the original build's own unstripped object files).
+Recorded here in detail so a future session doesn't repeat the same
+`lis`/`addi` correlation attempt expecting a different result.
 
 ============================================================================
 NOT done this session
@@ -374,16 +418,16 @@ NOT done this session
   session wants it).
 - The 0-24MB native-PowerPC region's rich debug-STRING table was mined
   (source paths, the `dbaLib` dynamic-loader log strings, 77 versioned
-  `db_*_V0NN` accessor names -- see above), but no attempt was made to
-  locate or disassemble the actual CODE behind any of those names --
-  README S2.4 already documents why that's hard in general (no
-  recoverable load-base address for the whole region) and this
-  session's own ELF-magic-scan attempt (in the DIFFERENT 76-85.6MB
-  VxWorks region, not the native-code region) was a real, refuted
-  negative result, not a new angle on the S2.4 wall itself. A pattern-
-  based heuristic function-finder (real PowerPC prologue bytes,
-  confirmed to work on `WA/CTEST.OUT`) was identified as the concrete
-  next step but not built.
+  `db_*_V0NN` accessor names -- see above). Locating or disassembling
+  the actual CODE behind any of those names WAS attempted (a `lis`/
+  `addi` string-cross-reference load-base recovery, 39,715 candidate
+  pairs tested against 7 known string offsets) and hit a real,
+  documented wall: no consistent load base was found, most likely
+  because these strings are DWARF-`.debug_str`-like debug-only data
+  never referenced by executing code (see the detailed writeup above).
+  This is a genuine dead end for THIS specific technique, not an
+  unexplored gap — a different technique (real ground truth from
+  external tooling or hardware) would be needed to go further.
 
 ============================================================================
 Practical use
