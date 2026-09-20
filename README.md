@@ -2129,7 +2129,22 @@ directly cross-referencing this schema**:
   `eeu.si`'s own bit layout, and shows no correlation with `eeu.iof`'s
   own `count` field either (§3.3). See §3.20/§3.3 for the corrected
   leads (the real `seginfoID` FK likely lives on the MAP_COMPRESSED tile
-  format's own segment records instead).
+  format's own segment records instead). **A later session attempted
+  exactly this** (goal: real per-segment road styling — divided/paved/
+  tollbooth — in the map viewer). **Real progress, not a crack**: found
+  a genuine, previously undocumented 3rd tile region right after
+  `decode_topology()`'s own topology table ends (real, visibly grouped
+  byte structure on a real 83-point test tile, confirmed non-empty and
+  similarly-shaped on 8 more real tiles; its own byte length correlates
+  with point count at ~8.95 bytes/point). This is almost certainly (part
+  of) the `seg_list`/`attr_list` region `eeu.mod`'s schema describes —
+  but the exact per-record boundary and field layout weren't pinned down
+  precisely enough to test a specific byte position against `eeu.si`'s
+  own real value ranges as ground truth, and a quick every-byte-position
+  scan across several tiles was too noisy for a clean answer. Left
+  honestly as an open, real lead — see `map_compressed_reader.py`'s
+  `decode_topology()` docstring for the full writeup and the suggested
+  next step.
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style

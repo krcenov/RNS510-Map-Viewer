@@ -2079,6 +2079,66 @@ def decode_topology(raw, declen=None, features=None):
     results; see `resolve_topology_adjacency()`'s docstring for the full
     before/after high-confidence numbers on the Sofia sample after this
     fix (including this specific tile's corrected outcome).
+
+    ============================================================================
+    A LATER SESSION: a genuine, PREVIOUSLY UNDOCUMENTED 3rd tile region exists
+    right after this function's own topology table ends -- real structure
+    found, NOT parsed into named fields, task was locating `eeu.si`'s own
+    `seginfoID` (eeu.mod's "Ordinary Map File" schema, README §3.16, names
+    `seg`/`seginfoID`/`restr_left`/`restr_right`/`left_node`/`right_node`/
+    `length` fields on a per-segment record this session set out to find)
+    ============================================================================
+    This session's goal was to link a rendered tile segment to its real
+    `eeu.si` classification (rank/class/divided/paved/tollbooth, README
+    §3.20) so the map viewer could style roads by real attributes, not
+    just draw plain dots. `eeu.mod`'s own schema for this table is the
+    largest in the whole disc (615 field names) with a MUCH deeper nested
+    structure than either the coordinate region or this function's own
+    10-byte topology table (a `seg` record alone has ~13 real leaf
+    fields: `seg_marker`/`seg_marker_left`/`seg_marker_right`/
+    `seg_turn_restr`/`seginfoID_ext_count`/`seginfoID`/`seginfoIDext1`/
+    `seginfoIDext2`/`restr_left`/`restr_right`/`left_node`/`right_node`/
+    `length`, itself nested under `parcel_data` -> `node_list`/`seg_list`/
+    `attr_list`/`abs_addr_list`/etc., each with their own counts, under a
+    kd-tree parcel-navigation structure this session did not attempt to
+    fully walk).
+
+    **A real finding, on the way to that goal**: on a real single-feature
+    83-point tile (`eeuz.mg4` offset 5,138,331), the bytes immediately
+    after this function's own topology table (which ends at
+    `table_start + (point_count+1)*10`) are NOT simply the end of the
+    compressed entry -- there are 878 more real bytes, containing
+    visible, repeating, GROUPED structure (spot-checked by eye: runs like
+    `8c 35 01 02 dc 00 00 00` / `8c 35 01 06 62 02 00 00` recur, with the
+    leading 2 bytes and a small "count-like" 3rd byte varying by group,
+    consistent with a real, `attr_list`/`abs_addr_list`-shaped tagged
+    record region, not padding). **Confirmed on 8 more real single-feature
+    tiles**: every one has a real, non-empty tail of the same general
+    shape, and the tail's own BYTE LENGTH correlates strongly with the
+    feature's own point count -- a linear fit across the 8 tiles gives
+    ~8.95 bytes/point (intercept ~35), consistent with roughly one small
+    variable-length record per point/segment, not a fixed global size.
+    Checking whether a small integer anywhere in this tail resembles a
+    real `eeu.si` `seginfoID` (bounded 0-24,352, `eeu.si`'s own real
+    24,353-record range) was NOT completed this session -- the region's
+    own record boundaries/field layout were not pinned down precisely
+    enough to test a specific byte position with confidence, and a naive
+    every-byte-position overlapping scan across several tiles (looking
+    for one dominant recurring value) was too noisy to draw a real
+    conclusion (dominated by small-integer/padding collisions, not a
+    clean answer). **Honest status: this is a real, new, previously
+    undocumented lead (the tile format has a 3rd real content region
+    here, not just [coordinates][topology table]) -- not yet a crack of
+    `seginfoID` or road styling.** A future session's most promising next
+    step: find the exact per-record boundary within this tail (the same
+    "search forward for a plausible small-value run" technique
+    `_find_topology_table_start()` already uses for the topology table
+    might work here too, once a candidate record shape is guessed from a
+    few more hand-inspected examples), then test candidate small-integer
+    fields against `eeu.si`'s own real, already-cracked value ranges
+    (rank 0-4, class 0-12, paved's ~94.6% true rate, etc.) as ground
+    truth, the same cross-validation technique that cracked `eeu.si`
+    itself (README §3.20).
     """
     if declen is None:
         declen = len(raw)
