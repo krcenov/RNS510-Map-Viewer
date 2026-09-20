@@ -2394,6 +2394,32 @@ directly cross-referencing this schema**:
   quick continuation can responsibly solve. A real wall for the
   "single formula" approach specifically, with a concrete next-model
   suggestion, not a dead end for the investigation as a whole.
+  **The user then provided real, human-verified ground truth from their
+  own RNS510 unit running this exact disc** (3 precisely-located real
+  road segments via the map viewer's edge-pick tool: 2 independent
+  points on the A1/Trakia motorway near Sofia, confirmed divided, plus a
+  contrast point on Vladimir Bashev street, Sofia, a confirmed one-way
+  local street — exact tile/offset/feature/point coordinates preserved
+  in `decode_topology()`'s own docstring). **3 independent shortcut
+  methods were tested against this real ground truth and ALL REFUTED**:
+  the `seginfoID`-lookup approach came back directionally plausible but
+  weak for `divided`, and BACKWARDS (lower than baseline on a real
+  Bulgarian motorway, which legally requires a toll vignette) for
+  `toll_vignette` — a clean, real refutation, not just noise. A 3rd,
+  purely positional/distributional scan found one candidate that failed
+  a basic internal-consistency check (its own statistics swung wildly
+  between the first and second half of a single real road's own tail
+  region) — very plausibly a multiple-comparisons artifact from
+  screening ~150 candidate positions, correctly caught rather than
+  reported as a discovery. **A real, well-earned wall for any shortcut
+  approach**, now backed by real ground truth rather than just internal
+  statistics — see `decode_topology()`'s docstring for the full account,
+  the exact preserved ground-truth coordinates, and a concrete reframing
+  for a future session (the firmware's own `db_seg_speed_V004`/
+  `db_seg_rank_V004` accessor names suggest per-segment classification
+  may be encoded DIRECTLY in each `seg` record, with `seginfoID` being a
+  comparatively rare optional cross-reference, not the primary
+  mechanism).
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style

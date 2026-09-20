@@ -2303,6 +2303,96 @@ def decode_topology(raw, declen=None, features=None):
     move to a per-record, per-field presence/absence model (closer to
     `eeu.tmc`'s own successfully-cracked variable-field-count
     `chain_count` structure) rather than a single count byte.
+
+    ============================================================================
+    REAL HUMAN GROUND TRUTH obtained, a still-later session -- 3 precisely-
+    located, real-world-confirmed road segments (the user has the actual
+    RNS510 unit running this exact disc, CD_8555, and used the map viewer's
+    own edge-pick tool to identify exact tile/feature/point locations for
+    roads they could personally confirm). This is the same category of
+    evidence that eventually cracked the LOCAL topology graph (the human-
+    verified 19-point/17-point connectivity orders) -- preserved here in
+    full so a future session does not need to re-acquire it.
+    ============================================================================
+      1. **A1 motorway (Trakia), segment 1** -- CONFIRMED divided motorway.
+         `eeuz.mg4`, tile_id 2391, file offset 6,562,278, feature 0 (of 5
+         real features in this tile -- the motorway is NOT necessarily the
+         only feature), edge points #158<->#160<->#161<->#162<->#165<->#166
+         <->#171 (real coords 23.69253,42.55447 through 23.69857,42.5527).
+      2. **A1 motorway (Trakia), segment 2** -- CONFIRMED divided motorway,
+         a 2nd, independent real point on the same road. `eeuz.mg4`,
+         tile_id 2389, file offset 6,557,013, feature 0 (this tile's ONLY
+         feature, 196 points), point #71 (real coords 23.99894,42.34009).
+      3. **Vladimir Bashev street, Sofia** -- CONFIRMED one-way LOCAL
+         street (contrast case: NOT divided). `eeuz.mp0`, tile_id 88178,
+         file offset 972,000,264, feature 0 (this tile's ONLY feature, 391
+         points), edge points #198<->#269 (real coords 23.3561,42.67998
+         and 23.35786,42.6796).
+
+    **3 independent shortcut methods were tried against this real ground
+    truth, ALL REFUTED -- a real, thorough negative result, not just
+    inconclusive:**
+
+    (a) The earlier "unaligned 2-byte sliding-window, filter by `eeu.si`'s
+    0-24,352 bound" approach (this docstring's own earlier UPDATE) was
+    re-run against `divided` on all 3 segments: weighted `divided` rate
+    among candidate IDs was 15.4%/19.5% for the 2 CONFIRMED-divided A1
+    segments and 10.7% for the CONFIRMED-non-divided one-way street --
+    directionally plausible (lower for the local street) but nowhere near
+    a clean, confident signal, and NOT what a real, working ID lookup
+    should look like. **A key realization, testing this**: `eeu.si` has
+    24,353 of 65,536 possible 16-bit values -- ANY random 16-bit number
+    has a ~37% chance of passing the "plausible index" filter purely by
+    chance, meaning this filter is far weaker than it first appeared, and
+    the whole approach may have been analyzing mostly noise all along.
+
+    (b) The SAME test re-run for `toll_vignette` (motivated by real-world
+    knowledge: Bulgarian motorways legally require a toll vignette, a
+    strong, distinctive, binary real-world fact for the 2 A1 segments)
+    came back BACKWARDS -- both A1 segments showed a LOWER weighted
+    `toll_vignette` rate (7.0%/7.9%) than the disc-wide baseline (11.6%),
+    the opposite of the expected direction. This is a real, clean
+    refutation, not just noise: a working ID-lookup mechanism should never
+    show a real motorway's own toll-vignette rate BELOW baseline.
+
+    (c) A positional/distributional scan (not ID-based at all): for every
+    candidate `(period 4-16, phase)`, compared the byte-value distribution
+    at that position across the whole tail between the 2 real motorway
+    tiles and the real one-way-street tile, looking for a position where
+    both motorway tiles agree with each other but differ from the street.
+    One candidate survived the initial filter (period=14, phase=11: both
+    A1 tiles ~65-75% "small" (<=4) values vs. 44% for the street) -- but
+    FAILED a basic internal-consistency check (splitting each tile's own
+    tail in half and re-checking): tile 2391's own first half was 90%
+    small values, its second half only 60% -- a huge swing WITHIN one
+    real road's own single tail region, which a genuine structural field
+    would not show. Given ~150 `(period, phase)` combinations were
+    screened, this is very plausibly a multiple-comparisons artifact, not
+    a real field -- correctly caught by the follow-up check rather than
+    reported as a discovery.
+
+    **Honest overall conclusion**: 3 independent shortcut families, tested
+    against 3 independent pieces of real, human-verified ground truth
+    (not just internal statistics), all fail. This is now a well-earned,
+    thoroughly-tested wall for ANY approach that doesn't first solve the
+    real per-record field-boundary problem -- see the exhaustive
+    single-count-field refutation above for why that's a genuinely bigger
+    undertaking than a shortcut. A concrete reframing worth trying next,
+    suggested by the firmware's own `db_seg_speed_V004`/`db_seg_rank_V004`
+    accessor names (README S2.6, `research/swl_5238_reader.py`): the
+    per-segment classification (rank, speed, tunnel, etc) may be encoded
+    DIRECTLY in each `seg` record's own fields, not solely via an indirect
+    `seginfoID` lookup into `eeu.si` -- `seginfoID_ext_count`/`seginfoID`/
+    `seginfoIDext1`/`seginfoIDext2` may be a comparatively RARE, optional
+    cross-reference (an "extension"), not the primary classification
+    mechanism for the common case. A future session should build the real
+    per-record parser directly against these 3 known real segments (not
+    blind statistics across a whole tail), since a correct parser must,
+    at minimum, decode something distinctly different between the 2
+    CONFIRMED-divided motorway segments and the 1 CONFIRMED-non-divided
+    street segment -- a genuine, human-verified acceptance test that no
+    prior candidate in this project has ever had for this specific file
+    region.
     """
     if declen is None:
         declen = len(raw)
