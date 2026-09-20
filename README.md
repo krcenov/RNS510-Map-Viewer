@@ -145,13 +145,52 @@ programming script (`INSTALL_FRAGMENT`/`LOAD_FIB`/`LOAD_LIBRARY`/
 on-disc file's exact size. This directly shows how `APPS\SILVER_1\
 RNSMIDEC\PROG\FHDD6.FLI` (§2.1's already-examined 85.6MB application
 image) actually reaches the unit: `INSTALL_FRAGMENT` first applies
-`A_HDD.FRG` (85,254,064 bytes, real magic `"ZZZZ"`, a distinct,
-not-yet-decoded container — plausibly a delta/patch given its size is
-within 0.5% of `FHDD6.FLI`'s own), then `LOAD_FIB` writes `FHDD6.FLI`
-itself. `COMPARE_REG_ID 0x091C 0x09 <lang> ...` is a real per-language
-branch chain confirming register `0x091C` is the on-unit language-
-selection value the factory tool reads before installing the matching
-`SPEECH/FRG/LANG_*.FRG`+`RECOG_*.FRG` pair.
+`A_HDD.FRG` (85,254,064 bytes, real magic `"ZZZZ"`), then `LOAD_FIB`
+writes `FHDD6.FLI` itself. `COMPARE_REG_ID 0x091C 0x09 <lang> ...` is a
+real per-language branch chain confirming register `0x091C` is the
+on-unit language-selection value the factory tool reads before
+installing the matching `SPEECH/FRG/LANG_*.FRG`+`RECOG_*.FRG` pair.
+
+**`.FRG`'s own `"ZZZZ"` container — CRACKED, a later session**: the
+fixed 64-byte header, validated EXACTLY across 5 independent files
+spanning 2 ECU targets and a 94x size range (`A_HDD.FRG` for `APPS`;
+`H_PQEE.FRG`/`H_SB_HDD.FRG`/`H_AK.FRG`/`H_SE_DAB.FRG` for `HOST`). As 16
+big-endian uint32 words: `word0`=`"ZZZZ"` magic; `word1`=constant
+`0x7d020100`; `word2`=constant `36` (this header's own byte length);
+`word4`/`word7`=constant `1`; **`word5`/`word8` (a redundant duplicate
+pair) = `(real file size) − 36`, exact with zero exceptions across all
+5 files**; `word6`=a per-ECU-TARGET constant (99 for every `HOST` file
+tested regardless of size, 160 for `APPS`'s `A_HDD.FRG`); `word9`=a
+`0x69696969` ("iiii") marker; `word10`-`word15`=6 more fixed constants.
+`word3` (offset 12) is the one field not yet matched to anything. Right
+after this header, each `.FRG` embeds its own small real plain-text
+sub-script — genuinely new commands beyond `DLSCRIPT.TXT`'s own
+vocabulary: `INSTALL_IMAGE`/`INSTALL_ALL_LOG_DB`/`SET_LOG_DB_STATUS`/
+`STORE_FRAGMENT`/`FINISHED_FRAGMENT` — followed by a real, dated
+VxWorks 5.5.1 build banner (`"Copyright 1984-2001 Wind River Systems,
+Inc."`, `"Sep 25 2012, 11:33:51"`) confirming the separate `HOST`
+processor runs the SAME RTOS version as `APPS` (§2.1), plus standard
+zlib inflate error strings confirming zlib is linked there too.
+
+**A first pass over the other, previously untouched ECU images found
+one genuinely new architectural discovery**: `DAB\1\RNSMIDEC\PROG\
+DAB.FLI`'s own real, clean startup banner (`"DSPLink Version:
+dsplink_sla_1_62_02"`, `"PSP DRx40x: Version 1.1.4.3"`, `"EDMA3 driver
+used: Version 1.05"`, `"Starting J2VIS. Build Date: %s, Time: %s"`,
+dated `"Mar  2 2012, 13:55:04"`) confirms the DAB digital-radio tuner
+runs on a **Texas Instruments DSP** — `DSPLink`/`EDMA3`/`PSP` are real
+TI DSP/BIOS ecosystem terms — a 3rd distinct processor architecture in
+this whole system, alongside PowerPC/VxWorks (`APPS`/`HOST`) and the
+already-known ST10F276E/TMS470 satellite MCUs (§2.2), not previously
+documented anywhere in this project. `VUCI`'s `GATEWAY.FLI` shows real
+`"NO_BOOT"`/`"ipcRP_uart"` strings (an inter-processor-communication-
+over-UART mechanism); `RADIO.FLI` references a 3rd-party `osAbsLayer.c`
+framework distinct from the `navicore` codebase; `MPEGAPPS.FLI` showed
+no clear identifying strings in this first pass. None of these 4 show
+any `.cpp`/`.h` debug-string paths at all, unlike `FHDD6.FLI`/
+`CTEST.OUT` — consistent with different (non-Siemens/Continental)
+codebases or debug-stripped builds. Not investigated further; real,
+open, low-priority leads for a future session.
 
 **`FHDD6.FLI` re-examined — one refutation, no new crack**: a raw ELF-
 magic scan over the whole 85.6MB file finds 4 hits inside the

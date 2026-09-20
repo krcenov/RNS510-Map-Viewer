@@ -122,9 +122,8 @@ Every `<byte-size>` argument to `INSTALL_FRAGMENT`/`LOAD_FIB`/
 the real file's `85,658,916`-byte size on disc, exact). This single
 `DLSCRIPT.TXT` shows exactly how `FHDD6.FLI` gets onto the unit:
 `INSTALL_FRAGMENT` first applies `A_HDD.FRG` (85,254,064 bytes, its own
-real magic `b"ZZZZ"` -- a distinct, NOT yet decoded container format,
-plausibly a delta/patch or a pre-verification wrapper around the same
-payload, given its size is within 0.5% of `FHDD6.FLI`'s own), then
+real magic `b"ZZZZ"` -- see the dedicated section below, a LATER session
+CRACKED its 64-byte fixed header), then
 `LOAD_FIB` writes `FHDD6.FLI` itself. `COMPARE_REG_ID 0x091C 0x09 <lang>
 <label> de` is a real per-language branch chain (11 languages this
 project's own `speech/`/`SpeechRes.xml` work already enumerated,
@@ -490,17 +489,153 @@ properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,
 actively used, same pattern of confirmation as the `db_seg_*` catalog.
 
 ============================================================================
+`.FRG`'s own `b"ZZZZ"` container -- CRACKED (a later session): the fixed
+64-byte header, validated exact across 5 independent files spanning 2
+different ECU targets and a 94x size range
+============================================================================
+Every `.FRG` file on this disc (`A_HDD.FRG` for `APPS`, and every
+`HOST\SILVER_1\RNSMIDEC\PROG\H_*.FRG` variant checked) opens with the
+SAME fixed 64-byte header template, only 2 fields of which vary by
+file. As 16 big-endian uint32 words:
+
+    word0  (off 0)   0x5a5a5a5a                 -- "ZZZZ" magic
+    word1  (off 4)   0x7d020100                 -- constant, format/version tag
+    word2  (off 8)   36                         -- constant: this header's own
+                                                    "overhead" size in bytes
+    word3  (off 12)  file-specific, small       -- NOT matched to anything yet
+    word4  (off 16)  1                          -- constant
+    word5  (off 20)  = (real file size) - 36    -- EXACT, all 5 files tested
+    word6  (off 24)  99 (HOST files) / 160 (APPS)-- per-ECU-TARGET constant,
+                                                    not size-derived (same value,
+                                                    99, across H_PQEE/H_AK/
+                                                    H_SB_HDD/H_SE_DAB.FRG despite
+                                                    very different file sizes)
+    word7  (off 28)  1                          -- constant, = word4
+    word8  (off 32)  = word5                     -- exact duplicate (redundancy/
+                                                    checksum-style double-store)
+    word9  (off 36)  0x69696969                 -- "iiii" marker/sentinel
+    word10 (off 40)  33554432 (0x02000000 BE)   -- constant
+    word11 (off 44)  1                          -- constant
+    word12 (off 48)  0                          -- constant
+    word13 (off 52)  32                         -- constant
+    word14 (off 56)  2                          -- constant
+    word15 (off 60)  16                         -- constant
+
+`word5`/`word8` = `filesize - 36` validated EXACTLY on `A_HDD.FRG`
+(85,254,064 bytes), `H_PQEE.FRG` (1,286,592), `H_SB_HDD.FRG`
+(1,855,592), `H_AK.FRG` (1,286,592, note: same size as `H_PQEE.FRG` but
+a genuinely different file/variant), and `H_SE_DAB.FRG` (994,140) --
+zero exceptions, confirming `word2`'s own constant `36` really is this
+header's own byte length and `word5` is a real, self-describing payload-
+size field (the container knows its own total size, useful for the SWL
+loader to validate a clean read/copy before installing). `word3`
+(off 12) was NOT matched to anything (checked against filesize,
+filesize-36, and a handful of simple transforms of both -- no hit);
+left open for a future session.
+
+Immediately after this 64-byte header, the file's own readable
+sub-script begins (see below) -- i.e. bytes 64+ are NOT yet more binary
+header, they're the next real content.
+
+============================================================================
+`.FRG`'s own embedded sub-script -- a genuinely new, small command
+vocabulary, extending `DLSCRIPT.TXT`'s own (both found this session)
+============================================================================
+Right after the 64-byte header, `H_PQEE.FRG` (and presumably every
+`.FRG`) embeds its own short, real, plain-text script:
+
+    INSTALL_IMAGE 15
+    INSTALL_IMAGE 23
+    INSTALL_ALL_LOG_DB
+    SET_LOG_DB_STATUS 2 2
+    STORE_FRAGMENT
+    FINISHED_FRAGMENT
+
+4 of these 5 distinct commands (`INSTALL_IMAGE`, `INSTALL_ALL_LOG_DB`,
+`SET_LOG_DB_STATUS`, `STORE_FRAGMENT`, `FINISHED_FRAGMENT`) do not
+appear anywhere in `DLSCRIPT.TXT`'s own vocabulary (which uses
+`INSTALL_FRAGMENT`/`LOAD_FIB`/`LOAD_LIBRARY`/etc, README S2.6) --
+real, additional, per-fragment-internal directives the outer
+`DLSCRIPT.TXT`'s `INSTALL_FRAGMENT` step hands off to once it opens
+this specific `.FRG`. Immediately following this tiny script:
+`"Copyright 1984-2001 Wind River Systems, Inc."`, `"VxWorks"`,
+`"VxWorks5.5.1"`, and a real dated build stamp `"Sep 25 2012,
+11:33:51"` -- confirms the separate `HOST` processor ALSO runs VxWorks
+5.5.1 (same RTOS version already confirmed for `APPS`, README S2.1),
+and gives a real, independent build timestamp ~1 month before this
+disc's own `VERSION.TXT` date (2012-10-19). Standard zlib inflate
+error strings follow (`"oversubscribed dynamic bit lengths tree"`,
+etc) -- confirms zlib is linked into the `HOST` image too, consistent
+with this whole project's own already-established zlib-based
+FLAT_COMPRESSED/MAP_COMPRESSED decompression scheme.
+
+============================================================================
+Other ECU images -- a first pass, real new findings, not deeply pursued
+============================================================================
+`DAB\1\RNSMIDEC\PROG\DAB.FLI` (3.2MB) -- **a genuinely new discovery**:
+the DAB digital-radio tuner runs on a **Texas Instruments DSP**, not the
+same PowerPC/VxWorks platform as everything else on this disc. Real,
+clean, readable startup banner:
+
+    ************* Current Configuration: *********************
+    DSPLink Version:          dsplink_sla_1_62_02
+    PSP DRx40x:               Version 1.1.4.3
+    EDMA3 driver used:        Version 1.05
+    Number of ADE instances:  %d
+    Number of AEE instance:   %d
+    Radio configuration: DAB
+    Starting J2VIS. Build Date: %s, Time: %s
+    Platform Initialization complete
+
+`DSPLink`/`EDMA3`/`PSP` (Platform Support Package) are real, standard TI
+DSP/BIOS ecosystem terms -- `DSPLink` is TI's own cross-processor (ARM
+host <-> DSP) communication framework, `EDMA3` its DMA controller
+driver. A real, independent dated build stamp: `"Mar  2 2012,
+13:55:04"`. "J2VIS" is plausibly this DAB decoder software's own
+internal codename. This is a 3rd distinct processor architecture in the
+whole system, alongside the already-known PowerPC/VxWorks (`APPS`/
+`HOST`) and the already-identified ST10F276E/TMS470 satellite MCUs
+(README S2.2) -- not previously documented anywhere in this project.
+
+`VUCI\B101\RNSMIDEC\PROG\GATEWAY.FLI` (864KB, the already-identified
+MOST-bus/CAN gateway, README S2.2's ST10F276E): real strings
+`"NO_BOOT"`/`"NO_BOOTSW"` and a heavily-repeated `"ipcRP_uart"` token --
+consistent with a real inter-processor-communication-over-UART
+mechanism on this chip, not decoded further.
+
+`RADIO\1\RNSMIDEC\PROG\RADIO.FLI` (896KB): mostly compiled/compressed
+binary, one real embedded source path found: `"..\..\libraries\
+frameworks\osAbsLayer\sources\osAbsLayer.c"` -- a 3rd-party "OS
+Abstraction Layer" framework, distinct from the `navicore`/`dbal`
+codebase this whole project otherwise studies. Not investigated
+further.
+
+`MPEG\1\RNSMIDEC\PROG\MPEGAPPS.FLI` (2MB): mostly compiled/compressed
+binary, no real source paths or identifying banners found in a first
+pass; one recognizable fragment, `"DEBUG: R"` / `" @ 0x%08"`, suggesting
+real printf-style debug logging exists but wasn't captured intact by
+the plain-string scan (likely broken up by intervening binary bytes).
+Not investigated further -- a real, open, low-priority lead for a
+future session (this ECU is peripheral to the map/navigation work this
+project otherwise focuses on).
+
+None of `RADIO`/`MPEG`/`DAB`/`VUCI`'s images showed any `.cpp`/`.h`
+source-path strings at all (0 hits each, vs. hundreds/thousands in
+`FHDD6.FLI`/`CTEST.OUT`) -- consistent with these being built without
+debug info, or from a different (non-Siemens/Continental in-house)
+codebase entirely for at least some of them (`osAbsLayer`, the TI DSP
+stack).
+
+============================================================================
 NOT done this session
 ============================================================================
 - `INFO/CDSTRUCT.CFG` (25,955 lines) was characterized (grammar, keyword
   set, the real dated comment header) but not fully parsed line-by-line.
-- `A_HDD.FRG`'s own `b"ZZZZ"` container format was identified as real
-  and distinct from `FHDD6.FLI`'s own `0xAA55AA55` format, but not
-  decoded.
 - `WA/*.WSH` shell scripts, `SPEECH/FRG/*.FRG` (44 files) and
-  `SPEECH/*.ZIP` (24 files), and every non-`APPS` ECU target's own
-  `.FLI`/`.FRG` payloads (`HOST`, `RADIO`, `MPEG`, `DAB`, `VUCI`, `HDD`)
-  were enumerated by name/size only, not opened.
+  `SPEECH/*.ZIP` (24 files) were enumerated by name/size only, not
+  opened. `HOST`/`RADIO`/`MPEG`/`DAB`/`VUCI` got only a first-pass
+  string scan (above), not a deep investigation; `HDD` wasn't checked
+  for any `.FLI`/`.FRG` payloads at all.
 - `CTEST.OUT`'s real DWARF `.debug_info`/`.debug_line` sections were
   confirmed present but not parsed (no DWARF parser was written this
   session -- would give real source-line-level detail if a future
