@@ -2587,6 +2587,38 @@ def decode_topology(raw, declen=None, features=None):
     but meaningfully stronger evidence than the original byte2/3-only
     finding: 4 independent positions, not 2, converge on the same
     qualitative pattern.
+
+    ============================================================================
+    A specific semantic hypothesis was then tested using data this project
+    ALREADY had (no new ground truth needed) -- CLEANLY REFUTED.
+    ============================================================================
+    `eeu.mod`'s own schema names real per-record flag fields
+    (`seg_turn_restr`, `restr_left`, `restr_right`) that would plausibly be
+    zero at a plain through-point and nonzero only at a real intersection
+    -- and divided motorways have far fewer at-grade intersections along
+    their mainline than ordinary roads, which could explain the observed
+    correlation INDIRECTLY (via junction density) rather than "divided"
+    being encoded directly. This is testable against data already in hand:
+    `resolve_topology_adjacency()`'s own already-cracked local topology
+    graph gives a real per-tile junction fraction (nodes with degree > 2)
+    with NO new ground truth needed.
+
+        A1_2389  (divided):      166 topology nodes, 0 junctions (0.0%)   | seg anyzero=1.2%
+        Hemus    (divided):      209 topology nodes, 5 junctions (2.4%)   | seg anyzero=0.0%
+        A6       (non-divided):  186 topology nodes, 1 junction  (0.5%)   | seg anyzero=19.1%
+
+    If the signal tracked junction/intersection density, MORE junctions
+    should mean a HIGHER `seg anyzero` rate. It's the OPPOSITE: `Hemus` has
+    the MOST junctions (2.4%) of the 3 tiles but the LOWEST `seg anyzero`
+    rate (0.0%, even lower than `A1`'s 0% junctions/1.2% rate); `A6` has
+    FEWER junctions than `Hemus` (0.5% vs. 2.4%) but a FAR higher rate
+    (19.1%). A real, clean refutation, efficiently obtained by reusing
+    already-cracked data rather than assuming the explanation or asking
+    for more ground truth. Whatever bytes 1-4 encode, it is NOT simply
+    "is this point a real intersection" -- the underlying STATISTICAL
+    correlation with divided status (from real human ground truth) still
+    stands; only this one candidate SEMANTIC explanation for it is ruled
+    out.
     """
     if declen is None:
         declen = len(raw)
