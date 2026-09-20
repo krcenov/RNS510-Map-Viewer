@@ -2267,6 +2267,42 @@ def decode_topology(raw, declen=None, features=None):
     and tile-3 noise could plausibly be a real alignment/parsing
     artifact of the shortcut, not evidence against the underlying field
     itself.
+
+    **UPDATE, that exact next step attempted, same still-later session:
+    a single-count-field variable-length model is EXHAUSTIVELY REFUTED,
+    computationally, not just by hand.** Built a joint search requiring
+    a candidate `(base_record_length, ext_count_byte_offset,
+    ext_field_size, id_field_offset)` to simultaneously (a) consume the
+    WHOLE 878-byte tail with zero leftover via `record_length =
+    base_record_length + ext_count_value * ext_field_size`, where
+    `ext_count_value` is read from a fixed record-relative byte offset
+    every record, AND (b) never see an `ext_count_value` above a
+    generous cap. Swept `base_record_length` 5-13, every possible
+    `ext_count_byte_offset`/`ext_field_size`/`id_field_offset` within
+    that range, and caps up to 15 (`eeu.mod`'s own `seginfoID_ext_count`
+    field would realistically only need 0-2): **zero configurations
+    achieve exact consumption, at ANY cap**. Root cause, confirmed by
+    direct inspection: the byte at the single most plausible candidate
+    position (relative offset 2, whose whole-tail value distribution
+    genuinely looks like a real small count field -- 0/1/2/3 in
+    decreasing frequency, `eeu.si`-scale evidence, not a coincidence)
+    reads the SAME value (`1`) on 3 consecutive real records whose true
+    lengths are 8, 8, and 11 bytes -- direct, irreconcilable proof that
+    no single formula tied to that byte (or, the exhaustive sweep shows,
+    to ANY other fixed-offset byte) can be the sole length driver.
+    **Conclusion, now considerably more solid than the earlier hand-
+    checked version**: the tail's true record format needs genuinely
+    MULTIPLE, independently-variable fields (plausible candidates from
+    `eeu.mod`'s own 13-field `seg` list: `seg_marker_left`/
+    `seg_marker_right`/`restr_left`/`restr_right` could each
+    independently be present or absent, not just one shared
+    `seginfoID_ext_count` toggle) -- a genuinely bigger parsing problem
+    than a quick continuation can responsibly solve. This is a real
+    wall for the "single formula" approach specifically, not a dead end
+    for the whole investigation: a future session with more time should
+    move to a per-record, per-field presence/absence model (closer to
+    `eeu.tmc`'s own successfully-cracked variable-field-count
+    `chain_count` structure) rather than a single count byte.
     """
     if declen is None:
         declen = len(raw)

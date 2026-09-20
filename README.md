@@ -2371,7 +2371,29 @@ directly cross-referencing this schema**:
   conclusion: a real, new lead, not a confirmed crack — see
   `decode_topology()`'s own docstring for the full account, including why
   the mixed result doesn't rule out the underlying hypothesis (the
-  shortcut used unaligned scanning, not a real record parse).
+  shortcut used unaligned scanning, not a real record parse). **That
+  exact next step (a proper `seginfoID_ext_count`-driven parser) was
+  then attempted directly, same session — and a single-count-field
+  model is now EXHAUSTIVELY REFUTED, computationally.** A joint search
+  over every plausible `(base length, count-byte offset, extension
+  size, id offset)` combination, requiring exact whole-tail consumption
+  under `record_length = base + count_value × extension_size`: **zero
+  configurations succeed, at any count cap up to 15**. Root cause,
+  confirmed directly: the single most plausible count-byte position
+  (whose overall value distribution genuinely looks like a real small
+  count field, 0/1/2/3 decreasing) reads the identical value on 3
+  consecutive real records whose true lengths are 8, 8, and 11 bytes —
+  no single formula tied to any fixed byte position can explain that.
+  This is considerably more solid than the earlier hand-checked
+  refutation. Real conclusion: the tail's true record format needs
+  MULTIPLE independently-variable fields (plausible candidates:
+  `seg_marker_left`/`seg_marker_right`/`restr_left`/`restr_right` each
+  independently present or absent, not one shared toggle) — a genuinely
+  bigger parsing problem, closer in scope to what it took to crack
+  `eeu.tmc`'s own variable-field-count `chain_count` structure, than a
+  quick continuation can responsibly solve. A real wall for the
+  "single formula" approach specifically, with a concrete next-model
+  suggestion, not a dead end for the investigation as a whole.
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style
