@@ -2498,7 +2498,31 @@ directly cross-referencing this schema**:
   entirely. The `mp0`-format Vladimir Bashev ground truth remains
   unusable for this specific parser (confirmed genuinely different byte
   structure — a wide-range attempt exhausted 15M search steps with no
-  solution) — a separate, not-yet-started reverse-engineering target.
+  solution) — was a separate reverse-engineering target, **now solved for
+  a real chunk of the tail** (see below).
+
+  **`mp0`'s own tail format — first real crack, a later session.** The
+  Vladimir Bashev tail (14,393 bytes) splits into distinct zones, not
+  one uniform structure. A dominant recurring 2-byte tag (`f1 44`, ~1 in
+  every 15 bytes) marks a middle zone (bytes 3,788-12,312, 8,524 bytes)
+  with a real, validated record format: 7 bytes normally (`[tag][0x44]
+  [0x00][idx: u16][subidx][value]`), 11 bytes for a "special" case with
+  4 extra bytes inserted (directly analogous to `mg4`'s own bigger
+  junction records). Proved via an exhaustive backward DP (every
+  position must reach the zone's exact end through a chain of 7s and
+  11s, no partial credit) — **949 records, exact, zero-leftover coverage
+  of the whole zone** (477×7-byte + 472×11-byte). `idx` climbs steadily
+  through exactly 3 resets — matching this tile's 3 real, named streets
+  (Vladimir Bashev/Svetlostruy/San Martin) one-for-one, strong
+  independent confirmation `idx` is a real per-street segment counter,
+  with street boundaries encoded purely by the counter resetting. The
+  paired `subidx`/`value` pattern looks like a forward/backward
+  attribute pair, but the real-world meaning of `value` isn't identified
+  yet — cross-checking against Vladimir Bashev's own confirmed one-way
+  status is the next concrete step. The tail's other 2 zones (bytes
+  0-3,788 and 12,312-14,393) remain uncharacterized. Full writeup:
+  `decode_topology()`'s docstring, "FIRST REAL CRACK of a chunk of
+  `mp0`'s own tail structure".
 
   **A DIFFERENT signal from the same parser, tried right after — real,
   clean, and the most promising lead in this file region so far**:

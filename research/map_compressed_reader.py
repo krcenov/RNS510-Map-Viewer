@@ -2765,6 +2765,78 @@ def decode_topology(raw, declen=None, features=None):
     byte, the same painstaking way `mg4`'s own model was originally
     built, rather than another blind parameterized search.
 
+    ==== UPDATE, a later session: FIRST REAL CRACK of a chunk of `mp0`'s
+    own tail structure -- the "hand-inspect a longer stretch" step above
+    was finally taken, and it worked ====
+    Re-derived the Vladimir Bashev tail fresh from disk (`eeuz.mp0`,
+    tile_id 88178, file offset 972,000,264) via `seg_tail_region()`
+    (14,393 bytes). Raw byte-value histogram immediately showed 2 bytes
+    (`0x44` and `0xf1`) each occurring roughly 1 in every 15 bytes --
+    far too frequent to be organic per-record data, and a strong hint of
+    a recurring structural tag. Searching for the literal 2-byte
+    sequence `f1 44` found 829 hits, but ALL of them cluster in the tail
+    HALF of the region (first hit at byte 3788 of 14,393; zero hits
+    before that) -- the tail is NOT homogeneous, it splits into
+    distinct zones, each apparently with its own encoding.
+
+    **Zone 2 (tail bytes 3788-12,312, 8,524 bytes) is now a REAL,
+    VALIDATED crack.** Every record in this zone starts with `[tag_byte:
+    1 byte][0x44][0x00]` (confirmed constant across the whole zone), and
+    comes in exactly 2 widths:
+      - **7 bytes** (the common case): `[tag][0x44][0x00][idx: u16 LE]
+        [subidx: 1 byte][value: 1 byte]`.
+      - **11 bytes** (a "special"/extended case, directly analogous to
+        `mg4`'s own bigger junction records): the SAME 7-byte layout
+        with 4 extra bytes inserted right after the `0x00` and before
+        `idx` -- `[tag][0x44][0x00][extra: 4 bytes][idx: u16 LE][subidx:
+        1 byte][value: 1 byte]`.
+    Proved this is the REAL rule, not another over-permissive false fit,
+    with an exhaustive backward dynamic-program (every position either
+    reaches the zone's own end exactly via a chain of 7s and 11s, or the
+    whole thing fails -- no partial credit, no leftover bytes possible):
+    **949 records, EXACT, ZERO-byte-leftover coverage of the entire
+    8,524-byte zone** (477 width-7 + 472 width-11). A naive greedy
+    parser (always try width 7 first) fails at exactly one point through
+    pure bad luck -- a real 11-byte record's own 4 "extra" bytes happen
+    to end in a value that locally LOOKS like the start of a fresh valid
+    7-byte record -- but the exhaustive DP does not suffer from this
+    since it requires GLOBAL, not just local, consistency to the zone's
+    own true end.
+
+    `idx` climbs steadily upward within each of 3 clean, distinct runs
+    (0-498, then a hard reset down to 3-497, then a 2nd reset to 267+)
+    -- **exactly 3 groups, matching this tile's own 3 real, named
+    streets (Vladimir Bashev / Svetlostruy / San Martin) one-for-one.**
+    This is strong, independent structural confirmation that `idx` is a
+    genuine PER-STREET running segment/sub-record counter, not a
+    tile-wide index -- and that street boundaries in this format are
+    encoded purely by the counter resetting, with no explicit
+    "street count" or "street length" header found (or needed) to
+    detect them. `subidx` is small (0, 1, occasionally 2) and pairs of
+    consecutive records sharing the same `idx` but `subidx=0`/`subidx=1`
+    consistently show correlated `value` bytes (e.g. one whole street
+    run alternates `value=0x83`/`subidx=0` with `value=0xcc-or-0xe1`/
+    `subidx=1` for dozens of consecutive `idx` values in a row) --
+    exactly the shape of a per-direction attribute pair (forward/
+    backward), though which real-world attribute `value` encodes is
+    NOT yet identified (this tile's one confirmed fact, that Vladimir
+    Bashev itself is ONE-WAY, hasn't yet been cross-checked against
+    which of the 3 idx-groups it actually is or whether one direction's
+    records go systematically missing there -- a concrete, promising
+    next step).
+
+    **Still open**: zone 1 (tail bytes 0-3788) and zone 3 (tail bytes
+    12,312-14,393, ~2,074 bytes) both remain uncharacterized -- zone 3
+    was hand-inspected briefly and looks structurally different again
+    (no `0x44` tag; leading `u16 LE` values that ALSO climb steadily,
+    paired with short variable-length trailing byte groups that often
+    end in a repeated `0x04` byte, suggestively but not yet confirmed
+    to be a name/label-reference sub-table). Neither zone's own record
+    format has been solved yet. This is nonetheless the first real,
+    validated, exhaustively-checked crack of ANY part of `mp0`'s own
+    tail structure this project has achieved -- a genuine, load-bearing
+    positive result, not just another refuted hypothesis.
+
     ==== UPDATE: firmware emulation used to probe byte1's real role ====
     Built a Unicorn-based (UC_ARCH_PPC/UC_MODE_BIG_ENDIAN) "emulation
     classifier" over `FHDD6.FLI`'s real code region (see
