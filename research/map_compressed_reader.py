@@ -2205,6 +2205,68 @@ def decode_topology(raw, declen=None, features=None):
     data, structurally never referenced by executing code, so no amount
     of code-side cross-referencing can locate them -- a real, structural
     dead end for this specific technique, not an unexplored gap.
+
+    **UPDATE, a still-later session: a fresh record-boundary attempt,
+    directly informed by the firmware's own field names -- suggestive
+    on one tile, but did NOT replicate cleanly across 3, so NOT a crack.**
+    `eeu.mod`'s schema names a `seginfoID_ext_count` field on the `seg`
+    record (0-2 extension IDs) -- a plausible, principled explanation for
+    the earlier "8 vs 11-byte record" contradiction that broke the naive
+    single-tag-length hypothesis (varying record length because of a
+    real variable extension count, not an inconsistent tag rule). Before
+    testing THAT directly, a cheaper, complementary idea was tried first:
+    if the tail's leading 2 bytes of each record are a real `seginfoID`
+    (bounded 0-24,352, `eeu.si`'s own real range), then on a tile
+    dominated by ONE real road, that same ID should recur across MOST
+    records, and different tiles/roads should show DIFFERENT dominant
+    values.
+
+    On the 83-point reference tile (`eeuz.mg4` offset 5,138,331): a
+    plain unaligned 2-byte sliding-window frequency count over the whole
+    878-byte tail finds `13708` (`0x358c`) as overwhelmingly dominant --
+    74 occurrences, vs. the next non-zero/non-artifact value far behind
+    -- and `13708 < 24,352` fits `eeu.si`'s bound. Looking up `eeu.si`
+    record #13708 directly (`research/si_reader.py`) gives real,
+    self-consistent field values (`rank=1, class=3, urban=True,
+    paved=True, ...`) -- plausible, not contradictory, for this tile's
+    real coordinates (~61.05N 16.96E, coastal Sweden near Sundsvall) but
+    NOT independently confirmed (no external ground truth for what this
+    specific road's real classification should be).
+
+    **Tested on 2 more independent reference tiles and did NOT
+    replicate as cleanly**: the 2-feature "Iasi" tile's own 392-point
+    feature (`eeuz.mg4` offset 11,298,518) shows NO single dominant
+    value at all -- several candidates (`19456`, `60416`, `29772`,
+    `59392`) each appear only 40-53 times out of 392 points (~10-13%
+    each), a plausible-but-unproven read being that a dense real urban
+    intersection area (Iasi is a real city) naturally has many
+    real, genuinely different street IDs rather than one dominant road
+    -- but this is NOT independently confirmed either, so it cannot be
+    used to rescue the hypothesis. More concerning: the 3rd reference
+    tile (`mg2` tile_id 20597, offset 69,486,644, 203 points) ALSO shows
+    no strong single dominant value (max 62/203, ~30%), AND its own
+    top candidates include `35840` (`0x8c00`) -- the SAME "ghost" value
+    that appeared as a sliding-window artifact on the FIRST tile (from
+    the same `0x8c` byte at a different alignment) -- raising real doubt
+    that `0x8c` is specifically "this road's own ID" rather than just a
+    common byte value/tag that recurs across many unrelated tiles for
+    an entirely different reason (e.g. a common flag byte, not an ID).
+
+    **Honest conclusion: suggestive on 1 of 3 tiles, does not replicate
+    cleanly, NOT a crack.** This is a real, new lead (the dominance
+    pattern on tile 1 is genuine and striking, and `seginfoID_ext_count`
+    remains an unexplored, principled candidate explanation for the
+    variable record length) but the cross-tile evidence is mixed enough
+    that treating `13708` as a confirmed `seginfoID` would be
+    overclaiming. A future session's most promising next step: actually
+    pursue the `seginfoID_ext_count`-driven variable-record-length
+    hypothesis directly (rather than the unaligned frequency-count
+    shortcut tried here), since a correctly-bounded record parse would
+    let the SAME leading-2-bytes-per-record test be re-run on cleanly
+    aligned data instead of an overlapping sliding window -- the tile-2
+    and tile-3 noise could plausibly be a real alignment/parsing
+    artifact of the shortcut, not evidence against the underlying field
+    itself.
     """
     if declen is None:
         declen = len(raw)

@@ -2352,7 +2352,26 @@ directly cross-referencing this schema**:
   `chain_count` formula, which both had an independent exact cross-check
   available. Left honestly as an open, real lead — see
   `map_compressed_reader.py`'s `decode_topology()` docstring for the
-  full writeup and the suggested next step.
+  full writeup and the suggested next step. **Confirmed real and
+  actively used, a later session, from the firmware side** (§2.6): real,
+  versioned accessor function names — `db_seg_rank_V004`/`_speed_V004`/
+  `_tunnel_V004`/`_node_V004`/`_unique_vid_V005`/`_plural_junction_V005`/
+  `_is_part_of_freeway_intersection_V005`, and an exact name match,
+  `db_seg_marker_left_V004`/`db_seg_marker_right_V004` — names only, no
+  byte offsets. **A fresh record-boundary attempt, directly informed by
+  this field list (`seginfoID_ext_count` as a principled explanation for
+  the variable record length), a still-later session**: suggestive but
+  NOT a crack. A plain unaligned-2-byte-window frequency scan of the
+  83-point reference tile's own tail found one value (`13708`) dominating
+  74/83 records — bounded within `eeu.si`'s own real range, and looking
+  that record up gives plausible (not contradictory) real field values —
+  but the SAME test on 2 more independent reference tiles did NOT
+  replicate cleanly (no single dominant value on either, and one shows
+  the same byte pattern as a likely artifact on the first tile). Honest
+  conclusion: a real, new lead, not a confirmed crack — see
+  `decode_topology()`'s own docstring for the full account, including why
+  the mixed result doesn't rule out the underlying hypothesis (the
+  shortcut used unaligned scanning, not a real record parse).
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style
