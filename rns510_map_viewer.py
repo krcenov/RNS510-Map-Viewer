@@ -1135,15 +1135,20 @@ _SEG_PREDICT_MIN_RECORDS = 15  # below this many 8-byte records, the
 def _predict_seg_divided(raw, declen, feature, features):
     """Real, EXPERIMENTAL prediction for one feature: parse its seg_list
     tail (research/map_compressed_reader.py's seg_tail_region()) and check
-    what fraction of its 8-byte records have byte2==0 or byte3==0 -- the
-    one signal that showed a real, clean divided/non-divided split on
-    real ground truth this session (see decode_topology()'s own
-    docstring). Returns a dict {"n8", "zero_rate", "prediction"} where
-    prediction is "divided" (zero_rate < 3%), "non-divided" (>= 3%), or
-    "unknown" (parse failed, or too few 8-byte records to trust the
-    rate) -- NEVER raises; any exception is treated the same as a parse
-    failure (real tile data is messy; a bad prediction must never crash
-    a redraw)."""
+    what fraction of its 8-byte records have byte1==0, byte2==0, or
+    byte3==0 -- REFINED (a later session) from the original byte2/3-only
+    check to also include byte1, and to DROP byte4 (its own small "leak"
+    on the A1 ground-truth tile turned out to be numeric coincidence --
+    byte4 is the low byte of the trailing numeric `value` field, not an
+    independent flag -- see decode_topology()'s own docstring, "byte4's
+    own small leak" section, for the full analysis). Bytes 1/2/3 each
+    individually showed an EXACT 0/163 and 0/110 rate on the 2 precisely-
+    matched CONFIRMED-divided ground-truth tiles. Returns a dict
+    {"n8", "zero_rate", "prediction"} where prediction is "divided"
+    (zero_rate < 3%), "non-divided" (>= 3%), or "unknown" (parse failed,
+    or too few 8-byte records to trust the rate) -- NEVER raises; any
+    exception is treated the same as a parse failure (real tile data is
+    messy; a bad prediction must never crash a redraw)."""
     try:
         tail = mcr.seg_tail_region(raw, declen, feature, features)
         ok, records, id_len, steps = mcr.parse_seg_tail_records(
@@ -1157,7 +1162,7 @@ def _predict_seg_divided(raw, declen, feature, features):
     for pos, idv, length in records:
         if length == 8:
             n8 += 1
-            if tail[pos + 2] == 0 or tail[pos + 3] == 0:
+            if tail[pos + 1] == 0 or tail[pos + 2] == 0 or tail[pos + 3] == 0:
                 zero_either += 1
     if n8 < _SEG_PREDICT_MIN_RECORDS:
         return {"n8": n8, "zero_rate": None, "prediction": "unknown"}
