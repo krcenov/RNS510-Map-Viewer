@@ -2502,6 +2502,47 @@ def decode_topology(raw, declen=None, features=None):
     separate reverse-engineering target for a future session, not
     started successfully here -- a wide-candidate-range attempt
     exhausted 15,000,000 search steps with no solution).
+
+    ============================================================================
+    A REAL, CLEAN, QUALITATIVE (not just statistical) signal found the SAME
+    session, right after the "divided" length-ratio refutation above --
+    `byte2==0 or byte3==0` on an 8-byte record. Promising, not yet a full
+    crack, but the strongest lead in this whole file region so far.
+    ============================================================================
+    Every 8-byte `seg_list` record decodes as `[id(2)][byte2(1)][byte3(1)]
+    [value(4)]`. Checking whether `byte2` or `byte3` is EXACTLY ZERO on any
+    8-byte record, across the SAME 3 precisely-matched ground-truth tiles
+    used for the (now-refuted) length-ratio test:
+
+        A1_2389   (CONFIRMED divided)      163 8-byte records, 0 with byte2/3==0  ( 0.0%)
+        Hemus/A2  (CONFIRMED divided)      110 8-byte records, 0 with byte2/3==0  ( 0.0%)
+        A6        (CONFIRMED non-divided)   89 8-byte records, 11 with byte2/3==0 (12.4%)
+
+    A 3rd, less certain sample (the `A2-west` coordinate, 22.23181,42.17325,
+    CONFIRMED non-divided by the user -- "single dual lane road, 1 lane
+    each direction" -- but its `mg4` tile match is a ~13km nearest-anchor
+    approximation, NOT a precise coordinate match like the other 3, so
+    treat this one as directionally-suggestive only, not fully trustworthy)
+    shows 96 of 137 8-byte records with `byte2/3==0` (70.1%) -- much
+    higher than A6's rate, but the SAME qualitative direction (nonzero,
+    unlike the 2 precisely-matched divided tiles' clean 0.0%).
+
+    **This is a real, qualitative (presence/absence, not just a magnitude
+    shift) pattern across 2 solid + 1 suggestive sample**: `byte2==0 or
+    byte3==0` NEVER happens on either precisely-confirmed divided road
+    (0/273 combined 8-byte records), but DOES happen on both non-divided
+    roads (11/89 and 96/137). Genuinely promising -- exactly the kind of
+    clean effect the earlier length-ratio test never produced -- but NOT
+    yet a crack: only 2 tiles have BOTH a precise coordinate match AND
+    confirmed divided status, and the magnitude varies a lot between the
+    2 non-divided samples (12.4% vs. 70.1%), so this needs at least 1-2
+    more precisely-matched samples (ideally another confirmed-divided
+    tile, to test whether 0.0% really holds as a hard rule rather than
+    "usually low") before it can be called cracked. A concrete next step
+    for a future session: get 1 more precise divided-road ground-truth
+    point and check whether `byte2/3==0` really stays at exactly 0%, or
+    whether A1/Hemus's own 0% was itself a (much less likely, but not
+    impossible) coincidence.
     """
     if declen is None:
         declen = len(raw)

@@ -2457,6 +2457,24 @@ directly cross-referencing this schema**:
   structure — a wide-range attempt exhausted 15M search steps with no
   solution) — a separate, not-yet-started reverse-engineering target.
 
+  **A DIFFERENT signal from the same parser, tried right after — real,
+  clean, and the most promising lead in this file region so far**:
+  whether an 8-byte record's `byte2` or `byte3` is EXACTLY ZERO. Across
+  the 2 precisely-matched tiles with known status: `A1` and `Hemus`
+  (both CONFIRMED divided) show `byte2/3==0` on 0 of 273 combined
+  8-byte records (0.0%, exactly); `A6` (CONFIRMED non-divided) shows it
+  on 11 of 89 (12.4%). A 3rd, less-certain sample (`A2-west`, confirmed
+  non-divided but with only an imprecise ~13km tile match) shows 96 of
+  137 (70.1%) — a much higher rate, but the SAME qualitative direction
+  (nonzero, unlike both precisely-matched divided tiles' clean 0.0%). A
+  real, qualitative presence/absence pattern, not just a magnitude
+  shift — genuinely promising, but NOT yet a crack: only 2 tiles have
+  both a precise match and confirmed status, and the non-divided rate
+  varies a lot between samples (12.4% vs. 70.1%). One more precisely-
+  matched divided-road ground-truth point would tell us whether 0.0%
+  really holds as a hard rule. Full writeup: `decode_topology()`'s own
+  docstring, "A REAL, CLEAN, QUALITATIVE signal" section.
+
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style
 per-field descriptor — e.g. `stamp`/`copyright`/`db_release`/`db_version`/
