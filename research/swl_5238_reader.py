@@ -523,7 +523,7 @@ file. As 16 big-endian uint32 words:
     word1  (off 4)   0x7d020100                 -- constant, format/version tag
     word2  (off 8)   36                         -- constant: this header's own
                                                     "overhead" size in bytes
-    word3  (off 12)  file-specific, small       -- NOT matched to anything yet
+    word3  (off 12)  CRC-CCITT (XModem) of payload -- CRACKED, see below
     word4  (off 16)  1                          -- constant
     word5  (off 20)  = (real file size) - 36    -- EXACT, all 5 files tested
     word6  (off 24)  99 (HOST files) / 160 (APPS)-- per-ECU-TARGET constant,
@@ -549,10 +549,24 @@ a genuinely different file/variant), and `H_SE_DAB.FRG` (994,140) --
 zero exceptions, confirming `word2`'s own constant `36` really is this
 header's own byte length and `word5` is a real, self-describing payload-
 size field (the container knows its own total size, useful for the SWL
-loader to validate a clean read/copy before installing). `word3`
-(off 12) was NOT matched to anything (checked against filesize,
-filesize-36, and a handful of simple transforms of both -- no hit);
-left open for a future session.
+loader to validate a clean read/copy before installing).
+
+**`word3` -- CRACKED, a later session (the header's last unresolved
+field): a standard CRC-CCITT (XModem variant -- `binascii.crc_hqx`,
+polynomial `0x1021`, initial value `0`) checksum of the payload starting
+at byte 36** (i.e. everything after the header's own declared 36-byte
+overhead, `word2`). Validated EXACTLY on all 5 files, no exceptions --
+first noticed because every observed `word3` value happened to fit in
+16 bits despite being stored in a 32-bit field (a real CRC32 wouldn't
+do that by chance across 5 independent files), which pointed directly
+at a 16-bit CRC. This completes the 64-byte `.FRG` header format 100%
+-- every field is now understood: magic, format/version tag, header-
+size constant, this CRC, a constant, the real payload size (stored
+twice), a per-ECU-target constant, and a fixed tail of format
+constants. Directly useful: any future session extracting/rebuilding a
+`.FRG` file can now validate its own header is well-formed and its
+payload hasn't been corrupted, the same way this project's own ISO
+read/write tooling already validates other checksummed structures.
 
 Immediately after this 64-byte header, the file's own readable
 sub-script begins (see below) -- i.e. bytes 64+ are NOT yet more binary

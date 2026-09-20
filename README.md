@@ -162,7 +162,12 @@ pair) = `(real file size) − 36`, exact with zero exceptions across all
 5 files**; `word6`=a per-ECU-TARGET constant (99 for every `HOST` file
 tested regardless of size, 160 for `APPS`'s `A_HDD.FRG`); `word9`=a
 `0x69696969` ("iiii") marker; `word10`-`word15`=6 more fixed constants.
-`word3` (offset 12) is the one field not yet matched to anything. Right
+**`word3` (offset 12) — CRACKED, a later session, completing this
+header 100%**: a standard CRC-CCITT (XModem variant, polynomial
+`0x1021`, initial value `0`) checksum of the payload starting at byte
+36, validated exactly on all 5 files (first spotted because every
+observed value fit in 16 bits despite the 32-bit field — not chance
+across 5 independent files, and a direct pointer at a 16-bit CRC). Right
 after this header, each `.FRG` embeds its own small real plain-text
 sub-script — genuinely new commands beyond `DLSCRIPT.TXT`'s own
 vocabulary: `INSTALL_IMAGE`/`INSTALL_ALL_LOG_DB`/`SET_LOG_DB_STATUS`/
