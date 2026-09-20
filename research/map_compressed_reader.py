@@ -2712,6 +2712,58 @@ def decode_topology(raw, declen=None, features=None):
     own simple, mostly-single-road tile) but varies more on a tile with
     more real sub-segments or cross-streets (`A6`) -- but this is
     speculation, not tested against anything independent yet.
+
+    ============================================================================
+    `mp0`'s OWN seg_list tail format -- a real, honest attempt, MULTIPLE
+    hypotheses tried, ALL FAILED. A genuine wall for this session, not a
+    quick-fix gap.
+    ============================================================================
+    `mp0` (the densest layer, real ground truth: the Vladimir Bashev/
+    Svetlostruy/San Martin one-way-street tile, tile_id 88178, offset
+    972,000,264) has a real ~13.8 bytes/point tail density (vs. `mg4`'s
+    ~8.95) and a visibly different raw byte character. `parse_seg_tail_records()`
+    (the `mg4`-validated model: 2-byte id, per-id-consistent length,
+    every record ends in exactly `00 00`) was tried directly against the
+    real 14,393-byte tail and TIMED OUT (15,000,000 steps) on the whole
+    tail. Narrowing to short PREFIXES isolated the real problem: a
+    50-byte prefix parses cleanly and fast (6 records, only 7 backtrack
+    steps -- an almost-unambiguous fit), but even a 100-byte prefix
+    fails to find ANY valid decomposition within budget. Inspecting the
+    50-byte "solution" directly shows it's GARBAGE, not real structure --
+    several of its own "records" start with a leading `0x00` byte,
+    producing implausible 2-byte ids like `0x4e00`/`0x4800`/`0x6800`
+    that don't look like anything seen in the real, validated `mg4`
+    records (which never showed this leading-zero-byte pattern in a
+    real id). This is the exact over-permissive trap this project has
+    hit before (see the much earlier "single-count-field" refutation
+    above): the `00 00`-terminator constraint that worked well for `mg4`
+    is NOT tight enough to prevent false-positive parses on `mp0`'s
+    different byte structure.
+
+    **3 terminator-width variants tried, all fail differently** (2-byte
+    `00 00`, 3-byte `00 00 00`, 4-byte `00 00 00 00`, each with a widened
+    candidate-length range 4-24, tested on several prefix lengths): the
+    2-byte terminator finds garbage (above); the 3-byte terminator
+    exhausts its ENTIRE search space in a tiny, constant 24 steps
+    regardless of prefix length (genuinely no valid decomposition
+    exists under that rule, not a timeout); the 4-byte terminator fails
+    IMMEDIATELY at step 1 (no candidate length even starting at position
+    0 satisfies it). None of these represent `mp0`'s real record
+    boundary rule.
+
+    **Honest conclusion**: `mp0`'s `seg_list` tail needs a genuinely
+    different structural model than `mg4`'s, not a parameter tweak on
+    the same one -- consistent with `mp0` being a separately-populated,
+    more detailed layer (per `eeu.mod`'s own schema, likely with MORE
+    real per-segment attributes active at this zoom level than `mg4`
+    ever populates, e.g. lane/ADAS/traffic-sign fields the schema names
+    but this project has never seen populated data for). This is a real
+    wall for this session -- multiple concrete hypotheses tried and
+    cleanly refuted, not an unexplored gap. A future session's most
+    promising next step: hand-inspect a much longer real stretch of this
+    SAME tail (the 50-byte "clean" prefix as a starting anchor) byte by
+    byte, the same painstaking way `mg4`'s own model was originally
+    built, rather than another blind parameterized search.
     """
     if declen is None:
         declen = len(raw)
