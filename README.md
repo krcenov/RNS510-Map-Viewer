@@ -2473,7 +2473,30 @@ directly cross-referencing this schema**:
   varies a lot between samples (12.4% vs. 70.1%). One more precisely-
   matched divided-road ground-truth point would tell us whether 0.0%
   really holds as a hard rule. Full writeup: `decode_topology()`'s own
-  docstring, "A REAL, CLEAN, QUALITATIVE signal" section.
+  docstring, "A REAL, CLEAN, QUALITATIVE signal" section. **Refined,
+  still the same session**: a systematic per-byte sweep found bytes 1,
+  2, and 3 (not just 2/3) each independently show this exact 0.0%
+  pattern; byte4's own small "leak" on `A1` turned out to be numeric
+  coincidence (its trailing `value` happening to be an exact multiple
+  of 256), not real signal — refined to bytes 1-3 specifically. A
+  specific semantic explanation (turn restrictions correlating with
+  real intersections) was tested against this project's OWN already-
+  cracked local topology/junction data and CLEANLY REFUTED — junction-
+  dense tiles showed LESS signal, not more.
+
+  **A genuine POSITIVE crack, not a refutation**: the trailing "value"
+  field (bytes 4-7) is very likely `eeu.mod`'s own named `length`
+  field — a real distance, in DECIMETERS. Confirmed by comparing its
+  distribution against REAL point-to-point distances computed from
+  this project's own already-cracked coordinate geometry (no new
+  ground truth needed): the MAXIMUM value matches tightly on both
+  tiles (`A1_2389`: 5709.0m vs. the real max 5754.2m, within 1%; `A6`:
+  6476.9m vs. 6821.3m, within 5%) — not the kind of agreement two
+  unrelated quantities produce by chance. The first field this project
+  can actually NAME in the `seg_list` record, even though bytes 1-3's
+  own divided-correlated meaning remains unnamed. The viewer's
+  "Show predicted divided" overlay (`rns510_map_viewer.py`) was updated
+  to the refined bytes 1-3 signal.
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style
