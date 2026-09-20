@@ -294,6 +294,23 @@ real `.debug_info` survived. Direct, structural confirmation — not just
 an absence-of-correlation inference — that no real DWARF info exists
 there, only a bare stripped string pool.
 
+**Confirmed a 3rd, independent way, a still-later session**: built and
+ran a pattern-based PowerPC function-prologue finder (the fixed 8-byte
+signature `stwu r1,-N(r1)` immediately followed by the byte-invariant
+`mflr r0`, confirmed against `WA/CTEST.OUT`'s own real disassembled
+function) — finds 7,757 real, low-false-positive candidate function
+starts across the 24MB region. This does NOT fix the correlation
+problem, but characterizes it precisely: match density drops from
+900-1,235/MB (offsets 1-9MB) to essentially zero from 9MB onward — the
+real code region is ~1.2MB-9MB, and the debug-string region (rich from
+~8.9MB onward) starts right where code ends. Checked distance from 5
+known accessor-name strings to their nearest real prologue: 194KB to
+2.3MB — code and debug strings are genuinely separate, non-adjacent
+regions by construction, not just unlucky. The prologue-finder works
+exactly as designed; without a surviving symbol table there's still no
+way to know WHICH of the 7,757 real functions is any specific named
+accessor. Full details: `research/swl_5238_reader.py`.
+
 **A complete, real, NAMED pipeline for the long-standing GLOBAL
 routing-graph "topology node-id↔coordinate mapping" problem** (§3.2's
 `vnodeID` lead, distinct from the ALREADY-CRACKED per-tile local vertex
