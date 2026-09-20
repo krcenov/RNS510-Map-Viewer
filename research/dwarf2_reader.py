@@ -70,11 +70,23 @@ the REAL runtime address applied later via `.rela.debug_info` at link
 time -- exactly the kind of structural fact this project needed to know
 before trying the same technique on a bigger, harder target (see below).
 
-`.debug_line`/`.debug_pubnames`/`.debug_aranges` were NOT parsed this
-session (would give real per-instruction source-line mapping) -- this
-module's `parse_cu()`/`iter_all_cus()` only cover `.debug_info`/
-`.debug_abbrev`; a future session wanting exact source lines would need
-to extend this with a DWARF2 line-number-program state machine.
+**`.debug_line` -- CRACKED, a later session**: `iter_line_program_units()`
+implements the real DWARF2 line-number-program state machine (standard
+opcodes 1-9, extended opcodes via a `0x00` prefix byte, and special
+opcodes `>= opcode_base` using this CU's own `line_base`/`line_range`),
+giving an exact address-to-(file,line) row table. Validated directly
+against `.debug_info`'s own function boundaries: address 0 (the start
+of `TestSDCRegister`, `.debug_info`'s own `low_pc`) maps to
+`CodingTest.c:45`; address 5736 (`RegServiceAvailableCB`'s own
+`low_pc`) maps to `RegTest.c:16`; address 9844
+(`ConfigTestShadowInit`'s own `low_pc`) maps to
+`ConfigFblockTest.c:57` -- every one of the 3 non-empty compilation
+units' own line-program starts exactly at its `.debug_info` function's
+own address, real cross-validation, not just internal self-consistency.
+`.debug_pubnames`/`.debug_aranges` were NOT parsed (lower priority --
+`.debug_pubnames` just indexes names already recoverable from
+`.debug_info` directly, and `.debug_aranges` is a coarser, redundant
+address-range index).
 
 ============================================================================
 Cross-check against FHDD6.FLI -- a DEFINITIVE 2nd, independent
@@ -121,6 +133,21 @@ recursively) -- add more `DW_TAG`/`DW_AT` names to the top-of-file
 dicts as needed; unknown codes fall back to `unk_<hex>` rather than
 raising, so parsing never silently misinterprets an unrecognized tag/
 attribute as a different one.
+
+For source lines:
+
+    debug_line = data[0x12bb7:0x12bb7+0x295]     # from the ELF section table
+    for unit_off, rows, file_names in dwarf2.iter_line_program_units(debug_line):
+        for row in rows:
+            address, file_idx, line, column, is_stmt = row[:5]
+            print(hex(address), file_names[file_idx-1][0], line)
+
+Each `rows` entry is `(address, file_idx, line, column, is_stmt)`, plus
+a 6th `'end_sequence'` marker element on the row that closes out a
+sequence (matches `DW_LNE_end_sequence`, GCC's own convention of
+emitting one extra row one byte past the last real instruction to mark
+where the sequence's valid address range ends -- don't treat it as a
+real source line).
 """
 import struct
 
@@ -299,3 +326,121 @@ def iter_all_cus(debug_info, debug_abbrev):
         dies, version, cu_end = parse_cu(debug_info, off, debug_abbrev)
         yield off, dies, version
         off = cu_end
+
+
+# ----------------------------------------------------------------------------
+# DWARF2 line-number program (.debug_line)
+# ----------------------------------------------------------------------------
+DW_LNS_copy = 1
+DW_LNS_advance_pc = 2
+DW_LNS_advance_line = 3
+DW_LNS_set_file = 4
+DW_LNS_set_column = 5
+DW_LNS_negate_stmt = 6
+DW_LNS_set_basic_block = 7
+DW_LNS_const_add_pc = 8
+DW_LNS_fixed_advance_pc = 9
+
+DW_LNE_end_sequence = 1
+DW_LNE_set_address = 2
+DW_LNE_define_file = 3
+
+
+def parse_line_program_unit(sec, off):
+    """Parse one line-number program starting at byte offset off in sec
+    (a .debug_line section). Returns (rows, file_names, unit_end)."""
+    unit_length = struct.unpack('>I', sec[off:off + 4])[0]
+    unit_end = off + 4 + unit_length
+    version = struct.unpack('>H', sec[off + 4:off + 6])[0]
+    header_length = struct.unpack('>I', sec[off + 6:off + 10])[0]
+    prog_start = off + 10 + header_length
+    p = off + 10
+    min_insn_len = sec[p]; p += 1
+    default_is_stmt = sec[p]; p += 1
+    line_base = struct.unpack('b', sec[p:p + 1])[0]; p += 1
+    line_range = sec[p]; p += 1
+    opcode_base = sec[p]; p += 1
+    std_opcode_lengths = list(sec[p:p + opcode_base - 1]); p += opcode_base - 1
+    include_dirs = []
+    while sec[p] != 0:
+        end = sec.index(0, p)
+        include_dirs.append(sec[p:end].decode('latin1'))
+        p = end + 1
+    p += 1
+    file_names = []
+    while sec[p] != 0:
+        end = sec.index(0, p)
+        name = sec[p:end].decode('latin1')
+        p = end + 1
+        dir_idx, p = read_uleb128(sec, p)
+        mtime, p = read_uleb128(sec, p)
+        length, p = read_uleb128(sec, p)
+        file_names.append((name, dir_idx))
+    p += 1
+
+    rows = []
+    address = 0
+    file_idx = 1
+    line = 1
+    column = 0
+    is_stmt = bool(default_is_stmt)
+
+    pc = prog_start
+    while pc < unit_end:
+        opcode = sec[pc]; pc += 1
+        if opcode >= opcode_base:
+            adj = opcode - opcode_base
+            address += (adj // line_range) * min_insn_len
+            line += line_base + (adj % line_range)
+            rows.append((address, file_idx, line, column, is_stmt))
+        elif opcode == 0:
+            ext_len, pc = read_uleb128(sec, pc)
+            ext_end = pc + ext_len
+            sub = sec[pc]
+            if sub == DW_LNE_end_sequence:
+                rows.append((address, file_idx, line, column, is_stmt, 'end_sequence'))
+                address, file_idx, line, column = 0, 1, 1, 0
+                is_stmt = bool(default_is_stmt)
+            elif sub == DW_LNE_set_address:
+                address = int.from_bytes(sec[pc + 1:ext_end], 'big')
+            pc = ext_end
+        elif opcode == DW_LNS_copy:
+            rows.append((address, file_idx, line, column, is_stmt))
+        elif opcode == DW_LNS_advance_pc:
+            adv, pc = read_uleb128(sec, pc)
+            address += adv * min_insn_len
+        elif opcode == DW_LNS_advance_line:
+            adv, pc = read_sleb128(sec, pc)
+            line += adv
+        elif opcode == DW_LNS_set_file:
+            file_idx, pc = read_uleb128(sec, pc)
+        elif opcode == DW_LNS_set_column:
+            column, pc = read_uleb128(sec, pc)
+        elif opcode == DW_LNS_negate_stmt:
+            is_stmt = not is_stmt
+        elif opcode == DW_LNS_set_basic_block:
+            pass
+        elif opcode == DW_LNS_const_add_pc:
+            adj = 255 - opcode_base
+            address += (adj // line_range) * min_insn_len
+        elif opcode == DW_LNS_fixed_advance_pc:
+            adv = struct.unpack('>H', sec[pc:pc + 2])[0]
+            pc += 2
+            address += adv
+        else:
+            # unrecognized standard opcode: skip its uleb128 args per the
+            # header's own std_opcode_lengths table (DWARF2's own forward-
+            # compatibility mechanism -- never guess, always trust the header)
+            nargs = std_opcode_lengths[opcode - 1]
+            for _ in range(nargs):
+                _, pc = read_uleb128(sec, pc)
+    return rows, file_names, unit_end
+
+
+def iter_line_program_units(debug_line):
+    """Yield (unit_start_offset, rows, file_names) for every unit in .debug_line."""
+    off = 0
+    while off < len(debug_line):
+        rows, file_names, unit_end = parse_line_program_unit(debug_line, off)
+        yield off, rows, file_names
+        off = unit_end

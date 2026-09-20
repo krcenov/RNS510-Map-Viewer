@@ -704,17 +704,22 @@ NOT done this session
   deep investigation. `HDD` itself was fully checked (no `.FLI`/`.FRG`
   payloads exist there at all -- confirmed, not just unexamined -- see
   above).
-- `CTEST.OUT`'s `.debug_info`/`.debug_abbrev` -- CRACKED, a later
-  session: see `research/dwarf2_reader.py`, a real, validated DWARF2
-  parser giving a complete function-name-to-byte-range map for all 35
-  real functions across its 4 compilation units, cross-validated exactly
-  against `.symtab`, plus the real compiler identity (`GNU C gcc-2.96
-  (2.96+ MW/LM) 19990621 AltiVec VxWorks 5.5`) and real internal build
-  path (`F:\Entwicklung\e60-tools\CodingTest\cp2\PPC603gnu` -- directly
-  extends README S2.1's already-known "navicore, codename e60" identity
-  to this factory-test module too). `.debug_line` (source-line mapping)
-  still NOT parsed -- `dwarf2_reader.py` only covers `.debug_info`/
-  `.debug_abbrev`.
+- `CTEST.OUT`'s `.debug_info`/`.debug_abbrev`/`.debug_line` -- ALL
+  CRACKED, a later session: see `research/dwarf2_reader.py`, a real,
+  validated DWARF2 parser giving a complete function-name-to-byte-range
+  map for all 35 real functions across its 4 compilation units,
+  cross-validated exactly against `.symtab`, plus the real compiler
+  identity (`GNU C gcc-2.96 (2.96+ MW/LM) 19990621 AltiVec VxWorks
+  5.5`) and real internal build path (`F:\Entwicklung\e60-tools\
+  CodingTest\cp2\PPC603gnu` -- directly extends README S2.1's already-
+  known "navicore, codename e60" identity to this factory-test module
+  too). `.debug_line`'s own real line-number-program state machine was
+  added too, giving an exact address-to-(file,line) map, validated
+  against `.debug_info`'s own function `low_pc` values (e.g. address
+  5736 maps to both `RegServiceAvailableCB`'s own `low_pc` AND to
+  `RegTest.c:16`, an independent cross-check). `.debug_pubnames`/
+  `.debug_aranges` remain unparsed (lower priority, largely redundant
+  with `.debug_info`/`.debug_line`).
 - The 0-24MB native-PowerPC region's rich debug-STRING table was mined
   (source paths, the `dbaLib` dynamic-loader log strings, 77 versioned
   `db_*_V0NN` accessor names -- see above). Locating or disassembling
