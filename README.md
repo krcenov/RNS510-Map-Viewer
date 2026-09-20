@@ -604,7 +604,16 @@ producing exactly 649,956 records.
 
 ### 3.6 MAP_COMPRESSED (`eeuz.mp0`, `.mg1`-`.mg4`) — MOSTLY CRACKED; `eeuz.fea` DIFFERENT, UNCRACKED
 These are the actual map-rendering tile layers (`mp0` = most detailed/primary,
-`mg1`→`mg4` = progressively generalized for lower zoom levels — plausible, not proven).
+`mg1`→`mg4` = progressively generalized for lower zoom levels). **CONFIRMED, a
+later session, directly from the real RNS510 unit's own on-screen behavior**
+(the user has the actual hardware running this exact disc): each layer is a
+real ROAD-CLASS tier, not just a generic "less detail" simplification —
+`mg4`=highways, `mg3`=main roads, `mg2`=boulevards, `mg1`=main streets,
+`mp0`=everything else (local/residential streets and smaller roads). Directly
+validated: a real A1/Trakia motorway segment near Sofia is present in `mg4`
+but a real local one-way street (Vladimir Bashev, Sofia) is NOT present
+anywhere near its own real coordinates in `mg4` (nearest anchor match was
+~6-7km away) — only found in `mp0`, exactly matching this hierarchy.
 Sizes on the reference disc: mp0 ≈ 2.14GB, mg1 ≈ 240MB, mg2 ≈ 113MB, mg3 ≈ 46MB,
 mg4 ≈ 16.5MB. `eeuz.fea` (≈553MB) is nominally the same family but is actually
 **compressionType 3 (FEATURE_COMPRESSED)**, not type 2 — it uses a genuinely different,

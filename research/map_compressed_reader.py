@@ -2,6 +2,17 @@
 Reader/scanner for RNS510 MAP_COMPRESSED (compressionType=2: eeuz.mp0,
 eeuz.mg1..mg4) and FEATURE_COMPRESSED (compressionType=3: eeuz.fea) files.
 
+**The 5 layers are real ROAD-CLASS tiers, not just generic zoom-level
+simplification -- CONFIRMED, a later session, directly from the real
+RNS510 unit's own on-screen behavior** (the user has the actual hardware
+running this exact disc, CD_8555): `mg4`=highways, `mg3`=main roads,
+`mg2`=boulevards, `mg1`=main streets, `mp0`=everything else (local/
+residential streets and smaller roads). Directly validated: a real
+A1/Trakia motorway segment near Sofia is present in `mg4`, but a real
+local one-way street (Vladimir Bashev, Sofia) is NOT present anywhere
+near its own real coordinates in `mg4` (nearest-anchor match landed
+~6-7km away) -- only found in `mp0`, exactly matching this hierarchy.
+
 CONFIRMED:
   - File-level header uses a distinct-but-recognizable 84-byte template
     (same slot layout/lengths as the plain 94-byte "SIEMENS" header used
