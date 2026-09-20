@@ -323,8 +323,17 @@ time conversion, a mode dispatcher). One candidate (VA `0x001f95d0`) is
 a stronger match — it reads `mg4`'s `id`/`byte1`/`length` fields and
 walks a multi-table lookup/linked-list chain, consistent with a
 name/junction resolver rather than a plain accessor, refining (not
-proving) what `byte1` feeds into. Full details, including why its own
-callers couldn't be statically located (indirect calling convention):
+proving) what `byte1` feeds into. **All 8 candidates this classifier
+ever surfaced were eventually disassembled**: 3 more confirmed
+unrelated (a 2nd mode dispatcher; a floating-point node/coordinate
+bounding-box test; a record-reset function whose offset-6/7 usage as 2
+separate bytes conflicts with the confirmed `length` field, so it's
+likely a different record type), 2 inconclusive. `0x1f95d0` remains the
+only real lead, and its own caller could not be found 3 independent
+static ways, nor could its lookup tables be read back from the file
+(they resolve to RAM addresses outside the file's own size) — a genuine,
+multi-angle dead end for this candidate, honestly documented rather than
+left implied-promising. Full details:
 `research/swl_5238_reader.py` and `research/map_compressed_reader.py`'s
 `decode_topology()` docstring.
 

@@ -489,6 +489,27 @@ also defeated static cross-reference search for at least one otherwise-
 promising candidate's own callers -- see the map_compressed_reader.py
 writeup for specifics).
 
+**UPDATE, same investigation, candidate pool exhausted**: disassembled
+all 8 candidates ever surfaced by this classifier's "reads a small byte
+at offset 1/2/3" filter. 3 were confirmed false positives on full
+disassembly (time conversion, mode dispatcher, and a floating-point
+node/coordinate bounding-box test), 2 were inconclusive/trivial, 1
+(offset 3,409,852) reads its own offsets 6-7 as 2 SEPARATE bytes --
+conflicting with the independently-confirmed 4-byte `length` field at
+those offsets, so it's most likely a different, similarly-shaped record
+type -- and only 1 (`0x1f95d0`, offset 2,069,968) remains a strong,
+unconfirmed match. That candidate's own caller could not be found by 3
+independent static methods (direct `bl` scan, `lis`/`addi` absolute-
+address scan, raw literal-pointer scan of the full 85MB image), and the
+3 lookup tables it indexes resolve to RAM addresses (~`0xf6a5xxxx`) this
+project has no file-offset mapping for. Full writeup:
+`research/map_compressed_reader.py`'s `decode_topology()` docstring.
+Honest conclusion: this candidate pool is exhausted for now; a future
+session's best next step is either a tighter/different emulation filter
+over a LARGER candidate set, or abandoning static/emulation analysis for
+this specific question in favor of more ground-truth-driven byte
+correlation on the map-data side.
+
 ============================================================================
 The GLOBAL routing-graph node problem (`vnodeID`, README's own long-
 standing "topology node-id<->coordinate mapping" open lead, wiki's

@@ -2823,6 +2823,61 @@ def decode_topology(raw, declen=None, features=None):
     be two different mid-function entry points of the SAME large,
     generic shared table utility (starting at `0x1f70c0`), not
     `seg_list`-specific code, so they were not traced further.
+
+    Tried to locate `0x1f95d0`'s own caller 3 independent ways, all
+    negative: (1) direct `bl` cross-reference scan of the 9MB code
+    region -- only finds its own 3 internal calls; (2) `lis`/`addi`
+    absolute-address-load scan (same region) -- zero matches; (3) raw
+    4-byte big-endian literal-pointer search across the ENTIRE 85MB
+    firmware image -- zero matches. A genuine, 3-way-confirmed dead end
+    for this specific candidate, not a lack of effort. Also tried to
+    read the real byte contents of the 3 lookup tables this function
+    itself indexes into (computed their absolute addresses from the
+    `lis`/`addi` pairs: ~`0xf6a51878`-`0xf6a5f3b8`) -- these fall far
+    outside the 85MB file's own size, confirming they're RAM/data
+    addresses in a completely different address range than the code
+    region (where file-offset-as-VA has worked reliably so far); this
+    project has no known file-offset-to-RAM-address mapping for static
+    data, so these tables' real contents remain unreadable from the
+    file. A 4th genuine wall for this specific lead.
+
+    Disassembled the other 5 remaining emulation-classifier candidates
+    from the same "1-byte read at offset 1/2/3" filter (see
+    `research/swl_5238_reader.py` for the technique) to completion:
+    - Offset 2,383,136: confirmed false positive, a magic-constant mode
+      dispatcher (already documented in swl_5238_reader.py).
+    - Offset 3,254,056: a tiny, inconclusive stack-buffer-init function;
+      no clear connection either way.
+    - Offset 3,496,552: only partially traced; inconclusive.
+    - Offset 3,409,852: reads bytes at arg1 offsets 0, 2, 3, 6, AND 7
+      individually (as single bytes, via separate `lbz`s) to reset a
+      112-byte (`0x70`) table record indexed by the offset-2 byte.
+      Reading offsets 6 and 7 as 2 SEPARATE bytes conflicts with this
+      project's already-confirmed, independently-cross-validated
+      `length` field occupying offsets 4-7 as ONE 4-byte value -- so
+      this function is most likely walking a DIFFERENT record type that
+      merely shares the same front-of-struct shape (id@0, category@2,
+      sub-category@3), not `seg_list` itself. A useful negative result,
+      not a threat to the `length`-field crack.
+    - Offset 3,482,796: uses FLOATING-POINT instructions (`lfd`, `frsp`,
+      `fadds`, `lfs`) and reads a 16-bit value at offset 6 (`lha`) fed
+      into a branchless `abs(a-b)`-style delta computation against a
+      44-byte-stride (`0x2c`) table, compared as a bounding-box-style
+      test (2 signed comparisons ANDed via condition-register tricks --
+      the same idiom this project's own coordinate-decoding work uses
+      elsewhere). This looks like NODE/COORDINATE geometry logic, not a
+      road-attribute accessor -- almost certainly another false
+      positive for this specific search, sharing only the same
+      "reads 2 small bytes near the front" shape that the classifier's
+      filter keys on.
+
+    **Overall conclusion for this candidate set**: of 8 total candidates
+    checked across 2 sessions, only `0x1f95d0` (offset 2,069,968) is a
+    strong, real match consuming `id`/`byte1`/`length` together in a way
+    consistent with `seg_list`, and even it could not be confirmed via a
+    real call site. The emulation-classifier technique is validated and
+    works, but this specific candidate pool is now exhausted without a
+    single-purpose, provably-`seg_list` accessor function identified.
     """
     if declen is None:
         declen = len(raw)
