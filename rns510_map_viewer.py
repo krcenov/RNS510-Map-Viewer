@@ -642,6 +642,17 @@ ROAD_COLOR_UNNAMED = "#d6cfba"   # unmatched/unlabeled connecting-roads LINES, b
 # fill color; connected-roads LINES (see "v9 -> v10") still use
 # ROAD_COLOR_MAJOR/ROAD_COLOR_UNNAMED by named/unnamed status, unaffected.
 DOT_COLOR = "#d32f2f"
+# "Show predicted divided (EXPERIMENTAL)" overlay colors (this session):
+# deliberately bright/saturated and unlike any other color already in use
+# on this screen, so a predicted-divided vs. predicted-non-divided road is
+# immediately, unambiguously distinguishable at a glance -- the whole point
+# of this overlay is to let a human visually spot a WRONG prediction, which
+# a subtle color difference would defeat.
+SEG_PREDICT_DIVIDED_COLOR = "#ff6f00"      # bright orange -- predicted divided
+SEG_PREDICT_NONDIVIDED_COLOR = "#1565c0"   # strong blue -- predicted non-divided
+SEG_PREDICT_UNKNOWN_COLOR = "#9e9e9e"      # neutral gray -- no prediction (parse
+# failed, too few 8-byte records, or not an mg4 tile) -- deliberately NOT one of
+# the 2 prediction colors, so "no opinion" is never mistaken for a real guess.
 ROAD_LABEL_COLOR = "#3a2f18"
 CITY_DOT_COLOR = "#20304a"       # dark navy square markers (photo #4 style, adapted to light bg)
 CITY_LABEL_COLOR = "#141c28"
@@ -1106,6 +1117,55 @@ def _feature_keep_indices(features, anchor):
     ]
 
 
+# seg_list divided/non-divided PREDICTION (this session, EXPERIMENTAL --
+# see MapData.seg_predict_caches's own comment in __init__ for the full
+# ground-truth/confidence writeup; this is a real signal from real human-
+# verified ground truth, NOT a confirmed byte-level crack). Only meaningful
+# for layer == "mg4" -- mp0 is a confirmed different byte structure.
+_SEG_PREDICT_MAX_STEPS = 200_000  # capped well below the module's own
+# 8,000,000-step default so a pathological tile can never stall a redraw
+# for long -- a tile that doesn't parse within this budget is reported as
+# "unknown" (see below), same as a tile with too few 8-byte records to
+# form an opinion; both render as the neutral/unknown color, never a guess.
+_SEG_PREDICT_MIN_RECORDS = 15  # below this many 8-byte records, the
+# zero_rate percentage is too noisy to trust (single-digit sample sizes
+# swing wildly) -- report "unknown" rather than a low-confidence guess.
+
+
+def _predict_seg_divided(raw, declen, feature, features):
+    """Real, EXPERIMENTAL prediction for one feature: parse its seg_list
+    tail (research/map_compressed_reader.py's seg_tail_region()) and check
+    what fraction of its 8-byte records have byte2==0 or byte3==0 -- the
+    one signal that showed a real, clean divided/non-divided split on
+    real ground truth this session (see decode_topology()'s own
+    docstring). Returns a dict {"n8", "zero_rate", "prediction"} where
+    prediction is "divided" (zero_rate < 3%), "non-divided" (>= 3%), or
+    "unknown" (parse failed, or too few 8-byte records to trust the
+    rate) -- NEVER raises; any exception is treated the same as a parse
+    failure (real tile data is messy; a bad prediction must never crash
+    a redraw)."""
+    try:
+        tail = mcr.seg_tail_region(raw, declen, feature, features)
+        ok, records, id_len, steps = mcr.parse_seg_tail_records(
+            tail, max_steps=_SEG_PREDICT_MAX_STEPS)
+    except Exception:
+        return {"n8": 0, "zero_rate": None, "prediction": "unknown"}
+    if not ok:
+        return {"n8": 0, "zero_rate": None, "prediction": "unknown"}
+    n8 = 0
+    zero_either = 0
+    for pos, idv, length in records:
+        if length == 8:
+            n8 += 1
+            if tail[pos + 2] == 0 or tail[pos + 3] == 0:
+                zero_either += 1
+    if n8 < _SEG_PREDICT_MIN_RECORDS:
+        return {"n8": n8, "zero_rate": None, "prediction": "unknown"}
+    zero_rate = zero_either / n8 * 100.0
+    prediction = "divided" if zero_rate < 3.0 else "non-divided"
+    return {"n8": n8, "zero_rate": zero_rate, "prediction": prediction}
+
+
 # No-adjacency placeholder (README §10 "v9 -> v10"): used wherever a tile's
 # topology couldn't be resolved (locate failure, decode exception, etc.) so
 # every entry in a topo_caches[layer][tile_id] list always has the same
@@ -1277,6 +1337,28 @@ class MapData:
         # spatial lookup) over the WHOLE pooled feature set on every single
         # pan/zoom reload, only tiles genuinely new to `self` pay that cost.
         self.name_caches = {layer: {} for layer in ALL_LAYERS}
+        # Per-layer seg_list divided/non-divided PREDICTION cache (this
+        # session, experimental): {layer: {tile_id: [per-feature dict or
+        # None, ...]}}, index-aligned with decode_tile()'s own
+        # "feature_index" tag, same lifetime policy as topo_caches. ONLY
+        # ever populated for layer == "mg4" (the only layer
+        # research/map_compressed_reader.py's parse_seg_tail_records()
+        # has been validated against this session -- mp0 is confirmed a
+        # different byte structure, and mg1-mg3 were never tried). Each
+        # per-feature dict is {"n8": int, "zero_rate": float,
+        # "prediction": "divided"|"non-divided"|"unknown"} or None if
+        # the feature's seg_list tail failed to parse within budget.
+        # This is a REAL, HUMAN-GROUND-TRUTH-DERIVED SIGNAL, NOT A
+        # CONFIRMED CRACK -- see map_compressed_reader.py's
+        # decode_topology() docstring, "A REAL, CLEAN, QUALITATIVE
+        # signal" section, for exactly what is and isn't validated (2
+        # precisely-matched ground-truth tiles show 0.0% zero_rate on
+        # CONFIRMED divided roads, nonzero on CONFIRMED non-divided
+        # roads -- promising, not yet proven as a general rule). Exposed
+        # in the GUI as an explicitly-labeled EXPERIMENTAL overlay so a
+        # human (who may have real local knowledge) can spot wrong
+        # predictions directly on the rendered map.
+        self.seg_predict_caches = {layer: {} for layer in ALL_LAYERS}
         self.covered_bbox = None    # (lon_min, lon_max, lat_min, lat_max)
         self.covered_layers = None  # list of layers covered_bbox's tiles were pooled from
         self.active_tile_ids = {}   # {layer: [tile_id, ...]} currently pooled for drawing
@@ -1572,7 +1654,7 @@ class MapData:
         )
         return [int(t) for t in tile_ids[mask]]
 
-    def decode_tile(self, layer, tile_id, want_adjacency=False):
+    def decode_tile(self, layer, tile_id, want_adjacency=False, want_seg_predict=False):
         """Decompress and decode_features() one tile by its geo-index/
         directory tile_id within the given layer, applying two independent
         defensive filters (see README §3.6/§10 for the full writeup of the
@@ -1643,6 +1725,10 @@ class MapData:
                 self.topo_caches[layer][tile_id] = [adj_full[i] for i in keep_idx]
             except Exception:
                 self.topo_caches[layer][tile_id] = [dict(_NO_ADJACENCY) for _ in kept]
+        if want_seg_predict and layer == "mg4":
+            self.seg_predict_caches[layer][tile_id] = [
+                _predict_seg_divided(raw, declen, feat, features) for feat in kept
+            ]
         return kept
 
     def get_tile_adjacency(self, layer, tile_id):
@@ -1712,6 +1798,45 @@ class MapData:
         cache[tile_id] = result
         return result
 
+    def get_tile_seg_prediction(self, layer, tile_id):
+        """Lazily compute + cache `_predict_seg_divided()` for one `mg4`
+        tile's KEPT features -- the exact same fallback pattern as
+        `get_tile_adjacency()` above (reuses `_predecode_caches` when
+        available, re-reads from disk only as a defensive last resort),
+        for a tile that was already decoded before the (experimental)
+        "Show predicted divided" checkbox was turned on. A no-op (returns
+        an empty list without touching the cache) for any layer other
+        than `mg4` -- see `MapData.seg_predict_caches`'s own comment in
+        `__init__` for why. Only ever called from inside
+        `ensure_area_loaded()`, i.e. inside a background `BackgroundTask`
+        thread, never on the Tk main thread during a redraw."""
+        if layer != "mg4":
+            return []
+        cache = self.seg_predict_caches[layer]
+        if tile_id in cache:
+            return cache[tile_id]
+        try:
+            pre = self._predecode_caches[layer].get(tile_id)
+            if pre is not None:
+                raw, declen, features, keep_idx = pre
+            else:
+                offset, declen, complen = self.directories[layer]["entries"][tile_id]
+                with open(self.layer_paths[layer], "rb") as f:
+                    f.seek(offset)
+                    raw = zlib.decompress(f.read(complen))
+                features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
+                geo_index = self.geo_indexes.get(layer)
+                anchor = geo_index.get(tile_id) if geo_index else None
+                keep_idx = _feature_keep_indices(features, anchor)
+                self._predecode_caches[layer][tile_id] = (raw, declen, features, keep_idx)
+            kept = [features[i] for i in keep_idx]
+            result = [_predict_seg_divided(raw, declen, feat, features) for feat in kept]
+        except Exception:
+            n_kept = len(self.tile_caches[layer].get(tile_id, ()))
+            result = [{"n8": 0, "zero_rate": None, "prediction": "unknown"} for _ in range(n_kept)]
+        cache[tile_id] = result
+        return result
+
     def set_trim_oscillation(self, value):
         """Toggle the oscillation-garbage filter (README S10 "v10 -> v11").
         A no-op if `value` already matches the current setting. Otherwise:
@@ -1732,6 +1857,7 @@ class MapData:
         self.topo_caches = {layer: {} for layer in ALL_LAYERS}
         self._predecode_caches = {layer: {} for layer in ALL_LAYERS}
         self.name_caches = {layer: {} for layer in ALL_LAYERS}
+        self.seg_predict_caches = {layer: {} for layer in ALL_LAYERS}
 
     # --------------------------------------------------------- road names
 
@@ -1845,7 +1971,8 @@ class MapData:
 
     def ensure_area_loaded(self, lon_min, lon_max, lat_min, lat_max, scale,
                             pad_frac=AREA_PAD_FRAC, name_tol_m=75, progress=None,
-                            allowed_layers=None, want_adjacency=False):
+                            allowed_layers=None, want_adjacency=False,
+                            want_seg_predict=False):
         """The single entry point for both the initial "jump to X" load and
         every pan/zoom-triggered reload: decode any tiles covering a padded
         version of the given bbox that aren't already cached (in that
@@ -1967,18 +2094,29 @@ class MapData:
             for tid in tile_ids:
                 if tid not in cache:
                     try:
-                        cache[tid] = self.decode_tile(layer, tid, want_adjacency=want_adjacency)
+                        cache[tid] = self.decode_tile(
+                            layer, tid, want_adjacency=want_adjacency,
+                            want_seg_predict=want_seg_predict)
                     except Exception:
                         cache[tid] = []
                     new_count += 1
-                elif want_adjacency and tid not in self.topo_caches[layer]:
-                    # Already decoded (e.g. by an earlier call before
-                    # connected-roads mode was on) but never got adjacency
-                    # computed -- fill the gap via the lazy fallback path.
-                    try:
-                        self.get_tile_adjacency(layer, tid)
-                    except Exception:
-                        pass
+                else:
+                    if want_adjacency and tid not in self.topo_caches[layer]:
+                        # Already decoded (e.g. by an earlier call before
+                        # connected-roads mode was on) but never got adjacency
+                        # computed -- fill the gap via the lazy fallback path.
+                        try:
+                            self.get_tile_adjacency(layer, tid)
+                        except Exception:
+                            pass
+                    if want_seg_predict and layer == "mg4" and tid not in self.seg_predict_caches[layer]:
+                        # Same lazy-fallback pattern as want_adjacency above,
+                        # for a tile decoded before the (experimental) "Show
+                        # predicted divided" checkbox was turned on.
+                        try:
+                            self.get_tile_seg_prediction(layer, tid)
+                        except Exception:
+                            pass
                 if cache.get(tid):
                     any_tiles_with_features = True
 
@@ -2670,6 +2808,29 @@ class App:
             font=("Segoe UI", 9), highlightthickness=0)
         self.connected_roads_cb.pack(side="left", padx=(10, 0))
 
+        # ---- "Show predicted divided (EXPERIMENTAL)" checkbox (this
+        # session) ---- mg4-only overlay coloring each connected-roads edge
+        # by MapData._predict_seg_divided()'s real-but-unconfirmed
+        # divided/non-divided signal (see that function's own docstring
+        # and MapData.seg_predict_caches's comment in __init__ for exactly
+        # what is and isn't validated). Explicitly labeled EXPERIMENTAL in
+        # the UI text itself -- this is a real signal from real ground
+        # truth, not a confirmed crack, and is meant to be LOOKED AT and
+        # challenged (a human with real local knowledge can directly spot
+        # a wrong-colored road on the map), not trusted blindly. OFF by
+        # default (unlike "Draw connected roads"): this is a debugging/
+        # investigation aid, not a normal viewing mode.
+        self.show_seg_predict_var = tk.BooleanVar(value=False)
+        self._status_divider(layers_row)
+        self.show_seg_predict_cb = tk.Checkbutton(
+            layers_row, text="Show predicted divided (EXPERIMENTAL, mg4 only)",
+            variable=self.show_seg_predict_var,
+            onvalue=True, offvalue=False, command=self._on_show_seg_predict_changed,
+            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
+            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
+            font=("Segoe UI", 9), highlightthickness=0)
+        self.show_seg_predict_cb.pack(side="left", padx=(10, 0))
+
         # ---- "Hide decode garbage" checkbox (README S10 "v10 -> v11") ----
         # User request (verbatim, after asking whether every real point was
         # being shown): "lets fix 2, add a checkbox that enables and
@@ -3287,11 +3448,13 @@ class App:
         # thread, for the same reason.
         allowed_layers = self._get_allowed_layers()
         want_adjacency = self.connected_roads_var.get()
+        want_seg_predict = self.show_seg_predict_var.get()
 
         def do_load_area(progress):
             return self.data.ensure_area_loaded(
                 lon_min, lon_max, lat_min, lat_max, est_scale, progress=progress,
-                allowed_layers=allowed_layers, want_adjacency=want_adjacency)
+                allowed_layers=allowed_layers, want_adjacency=want_adjacency,
+                want_seg_predict=want_seg_predict)
 
         def done(result, error):
             self._end_busy()
@@ -3546,6 +3709,7 @@ class App:
             return True
 
         connected_roads_on = self.connected_roads_var.get()
+        seg_predict_on = self.show_seg_predict_var.get()
 
         road_label_candidates = []
         for feat in self.features:
@@ -3576,6 +3740,7 @@ class App:
             # which apply this EXACT same found+confidence=="high" gate) so
             # an edge can only ever be picked if it's actually drawn here.
             adj = None
+            seg_pred = None
             if connected_roads_on and self.data is not None:
                 layer = feat.get("layer")
                 tile_id = feat.get("tile_id")
@@ -3586,23 +3751,56 @@ class App:
                         cand = tlist[f_idx]
                         if cand.get("found") and cand.get("confidence") == "high":
                             adj = cand
+                    # "Show predicted divided (EXPERIMENTAL)" (this session):
+                    # looked up the SAME way as `adj` above (by layer/tile_id/
+                    # feature_index), but independently of adjacency
+                    # confidence -- a prediction is either present (this tile
+                    # was decoded with want_seg_predict=True) or it isn't;
+                    # there's no separate "confidence" gate on it beyond the
+                    # "unknown" prediction value _predict_seg_divided() itself
+                    # already returns for a low-confidence/failed parse.
+                    if seg_predict_on and layer == "mg4":
+                        plist = self.data.seg_predict_caches.get(layer, {}).get(tile_id)
+                        if plist is not None and 0 <= f_idx < len(plist):
+                            seg_pred = plist[f_idx]
 
             if adj is not None:
                 # Real, derived connectivity -- iterate the graph's own
                 # unique edges (not a naive consecutive-index walk: a
                 # junction point can have 3+ real neighbors, so this is a
                 # general graph, not necessarily a simple path).
+                if seg_pred is not None:
+                    # EXPERIMENTAL override (this session): color every edge
+                    # of this feature by its own predicted divided status
+                    # instead of the usual named/unnamed scheme -- see
+                    # SEG_PREDICT_*_COLOR's own comment for why these are
+                    # deliberately loud, unmissable colors, unlike anything
+                    # else already on screen. `line_width` stays the normal
+                    # named-run width (1.6) so the overlay reads as "the same
+                    # roads, recolored", not a visually distinct new layer.
+                    pred = seg_pred.get("prediction")
+                    if pred == "divided":
+                        seg_line_color = SEG_PREDICT_DIVIDED_COLOR
+                    elif pred == "non-divided":
+                        seg_line_color = SEG_PREDICT_NONDIVIDED_COLOR
+                    else:
+                        seg_line_color = SEG_PREDICT_UNKNOWN_COLOR
+                else:
+                    seg_line_color = None
                 for a, b in adj["edges"]:
                     if a >= len(pts) or b >= len(pts):
                         continue  # defensive -- should not happen, never trust blindly
                     ax, ay = self._to_canvas(*pts[a])
                     bx, by = self._to_canvas(*pts[b])
-                    edge_name = _name_at_point(feat.get("named_ranges"), a) or \
-                        _name_at_point(feat.get("named_ranges"), b)
-                    if edge_name:
-                        line_color, line_width = ROAD_COLOR_MAJOR, 1.6
+                    if seg_line_color is not None:
+                        line_color, line_width = seg_line_color, 1.6
                     else:
-                        line_color, line_width = ROAD_COLOR_UNNAMED, 1.0
+                        edge_name = _name_at_point(feat.get("named_ranges"), a) or \
+                            _name_at_point(feat.get("named_ranges"), b)
+                        if edge_name:
+                            line_color, line_width = ROAD_COLOR_MAJOR, 1.6
+                        else:
+                            line_color, line_width = ROAD_COLOR_UNNAMED, 1.0
                     # Rasterized into `img` (README §10 "v17 -> v18"), not a
                     # real canvas item -- see _redraw()'s own docstring.
                     # PIL's line width is an int pixel count (no fractional
@@ -4239,6 +4437,20 @@ class App:
             return  # nothing loaded yet -- the checkbox state is remembered for when it is
         self._maybe_reload_viewport(force=True)
 
+    def _on_show_seg_predict_changed(self):
+        """Checkbutton command for "Show predicted divided (EXPERIMENTAL,
+        mg4 only)" (this session) -- exactly the same force-reload pattern
+        as `_on_connected_roads_changed()` above, for the same reason:
+        turning this on needs `MapData.ensure_area_loaded()`'s
+        `want_seg_predict` gate to actually run so any currently-pooled
+        `mg4` tile without a cached prediction gets one computed in the
+        background before the next redraw -- a plain redraw would just
+        fall back to the normal named/unnamed road coloring for every
+        tile whose prediction hasn't been resolved yet."""
+        if self.data is None or self.center_lon is None:
+            return  # nothing loaded yet -- the checkbox state is remembered for when it is
+        self._maybe_reload_viewport(force=True)
+
     # ------------------------------------------- oscillation filter (v10 -> v11)
 
     def _on_hide_garbage_changed(self):
@@ -4353,12 +4565,14 @@ class App:
         self.progress.start(12)
 
         want_adjacency = self.connected_roads_var.get()
+        want_seg_predict = self.show_seg_predict_var.get()
 
         def do_load(progress):
             lon_min, lon_max, lat_min, lat_max = vb
             return self.data.ensure_area_loaded(
                 lon_min, lon_max, lat_min, lat_max, scale, progress=progress,
-                allowed_layers=allowed_layers, want_adjacency=want_adjacency)
+                allowed_layers=allowed_layers, want_adjacency=want_adjacency,
+                want_seg_predict=want_seg_predict)
 
         def done(result, error):
             if my_token != self._load_token:
