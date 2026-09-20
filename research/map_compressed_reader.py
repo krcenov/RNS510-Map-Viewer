@@ -2764,6 +2764,65 @@ def decode_topology(raw, declen=None, features=None):
     SAME tail (the 50-byte "clean" prefix as a starting anchor) byte by
     byte, the same painstaking way `mg4`'s own model was originally
     built, rather than another blind parameterized search.
+
+    ==== UPDATE: firmware emulation used to probe byte1's real role ====
+    Built a Unicorn-based (UC_ARCH_PPC/UC_MODE_BIG_ENDIAN) "emulation
+    classifier" over `FHDD6.FLI`'s real code region (see
+    `research/swl_5238_reader.py` for the full prologue-scan/emulator
+    methodology). Fed a fake `seg_list`-record pointer (matching this
+    project's confirmed 8-byte layout: `id`@0-1, `byte1`@2, `byte2`@3,
+    `byte3`@4... -- see caveat below) as arg1 to thousands of real
+    candidate functions and logged which small-offset bytes each one
+    actually reads. Two close-looking candidates turned out to be
+    unrelated (a genuine H:M:S-to-milliseconds time conversion; a
+    magic-constant mode dispatcher) -- a real, useful negative result:
+    "reads a couple of small bytes near offset 0-4 of arg1" is a common
+    shape across this 9MB codebase and is NOT selective for `seg_list`
+    accessors on its own.
+
+    One candidate (firmware offset 2,069,968 / VA 0x001f95d0) is a much
+    stronger match: it reads the id (offset 0, halfword), `byte1`
+    (offset 2, byte) and the confirmed `length` field (offset 4, word)
+    from its arg1, then:
+      1. resolves `id` through a small lookup/insert table (0x54-byte
+         records),
+      2. resolves `length` (+0) through a second cache table (0x60-byte
+         records, linear-scan-then-fallback),
+      3. uses the resolved index to walk a THIRD table of 0x78-byte
+         records via a `-1`-terminated linked chain (`next` pointer at
+         record offset 0x74), testing two different bits (`&1`, `&2`)
+         of per-record flag fields at each step,
+      4. on a match, writes a halfword field (record offset 4) into the
+         function's OWN 2nd argument (its output parameter) and calls a
+         formatting/lookup routine tagged with a fixed constant
+         (0x6a140202).
+    This is consistent with a **name/label or junction-connectivity
+    resolver** that walks nearby segments sharing a junction and picks
+    one matching a reference byte (record offset 6) -- i.e. `byte1`
+    functions here as part of a LOOKUP KEY feeding a multi-table
+    resolution chain, not as a standalone boolean read directly off the
+    struct. This refines (does not overturn) the "divided-road signal"
+    correlation already established: it's still true that bytes1-3's
+    zero-rate correlates cleanly with divided/non-divided status on our
+    2 precisely-matched ground-truth tiles, but this trace suggests that
+    correlation may be a downstream EFFECT of whatever `byte1` actually
+    indexes into (its true identity is still unnamed), not a direct
+    "divided flag" bit read in isolation.
+
+    Important caveat: `0x1f95d0`'s own callers could not be located by
+    static `bl`/`lis`+`addi` cross-reference search inside the scanned
+    9MB region -- this codebase calls almost everything indirectly
+    (computed absolute address via `lis`/`addi` into `mtlr`+`blrl`), and
+    no matching load sequence for this address was found in-region, so
+    it is likely reached through a runtime function-pointer table this
+    project cannot yet locate. That means the assumption that arg1 here
+    IS a `seg_list` record pointer (rather than some structurally
+    similar but unrelated record) is plausible but NOT proven by a
+    confirmed real call site -- flagged here explicitly rather than
+    overstated. `0x1f70d0`/`0x1f7738` (2 of its 3 callees) turned out to
+    be two different mid-function entry points of the SAME large,
+    generic shared table utility (starting at `0x1f70c0`), not
+    `seg_list`-specific code, so they were not traced further.
     """
     if declen is None:
         declen = len(raw)

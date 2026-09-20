@@ -460,6 +460,35 @@ exists anywhere in this region -- only a bare, stripped string pool
 does. Closes the load-base question a 2nd, independent way; see
 `research/dwarf2_reader.py`'s own docstring for the full writeup.
 
+**UPDATE, a still-later session: built a real PowerPC instruction-level
+emulator (Unicorn, `UC_ARCH_PPC`/`UC_MODE_BIG_ENDIAN`) as a targeted
+"candidate classifier" over the 7,757 prologue-scan matches, to try to
+pick out `seg_list`-accessor-shaped functions without a symbol table.**
+Validated correctness against `CTEST.OUT`'s own known `TestCoding`
+function (exact match to manual disassembly) before trusting any result.
+Mapped the whole ~9MB code region once at a fixed base, pointed a fake
+"record pointer" argument (`r3`) at a recognizably-patterned scratch
+buffer, and used a `UC_HOOK_MEM_READ` hook to log which small offsets
+each candidate function actually reads from it -- a real, working
+technique (confirmed 3 separate times against correctly-decoded,
+sensible real logic: a H:M:S-to-milliseconds time conversion, a magic-
+constant mode dispatcher, and a genuine multi-table lookup/traversal
+routine, full writeup in `research/map_compressed_reader.py`'s
+`decode_topology()` docstring under "firmware emulation used to probe
+byte1's real role"). **Honest limitation found**: the read-offset
+heuristic alone is not selective enough on its own -- many unrelated
+record shapes across this 9MB codebase produce the same "reads a couple
+of small bytes near offset 0-4 of arg1" signature, so 2 of the
+strongest-looking candidates were confirmed false positives once fully
+disassembled. The technique correctly finds and lets us read REAL
+function logic (this is the useful, durable result); it does not by
+itself solve candidate SELECTION at scale without a much tighter filter
+or a way to confirm real call sites (this codebase calls almost
+everything indirectly via computed `lis`/`addi` + `mtlr`/`blrl`, which
+also defeated static cross-reference search for at least one otherwise-
+promising candidate's own callers -- see the map_compressed_reader.py
+writeup for specifics).
+
 ============================================================================
 The GLOBAL routing-graph node problem (`vnodeID`, README's own long-
 standing "topology node-id<->coordinate mapping" open lead, wiki's

@@ -311,6 +311,23 @@ exactly as designed; without a surviving symbol table there's still no
 way to know WHICH of the 7,757 real functions is any specific named
 accessor. Full details: `research/swl_5238_reader.py`.
 
+**A still-later session built a real PowerPC emulator (Unicorn) as a
+candidate classifier**, feeding a fake record pointer to thousands of
+the 7,757 prologue matches and logging which small offsets each one
+reads. Validated (matches `CTEST.OUT`'s known `TestCoding` exactly) and
+confirmed the technique finds real, correctly-decoded logic — but "reads
+a couple of small bytes near offset 0-4 of arg1" turned out to be too
+common a shape across this codebase to be selective on its own: 2
+strong-looking candidates were disassembled and confirmed unrelated (a
+time conversion, a mode dispatcher). One candidate (VA `0x001f95d0`) is
+a stronger match — it reads `mg4`'s `id`/`byte1`/`length` fields and
+walks a multi-table lookup/linked-list chain, consistent with a
+name/junction resolver rather than a plain accessor, refining (not
+proving) what `byte1` feeds into. Full details, including why its own
+callers couldn't be statically located (indirect calling convention):
+`research/swl_5238_reader.py` and `research/map_compressed_reader.py`'s
+`decode_topology()` docstring.
+
 **A complete, real, NAMED pipeline for the long-standing GLOBAL
 routing-graph "topology node-id↔coordinate mapping" problem** (§3.2's
 `vnodeID` lead, distinct from the ALREADY-CRACKED per-tile local vertex
@@ -2514,6 +2531,19 @@ directly cross-referencing this schema**:
   own divided-correlated meaning remains unnamed. The viewer's
   "Show predicted divided" overlay (`rns510_map_viewer.py`) was updated
   to the refined bytes 1-3 signal.
+
+  **Firmware-side emulation probe, a later session** (§2.6 has the full
+  technique writeup): a Unicorn PowerPC emulator used as a candidate
+  classifier over real firmware code found one function (VA `0x1f95d0`)
+  that genuinely reads `id`/`byte1`/`length` from a `seg_list`-shaped
+  pointer and feeds them through a 3-table lookup/linked-list-walk chain
+  before writing a resolved field into an output parameter — a real,
+  substantive trace, but its shape (junction-chain walk, reference-byte
+  match, output write) looks more like a name/label or junction resolver
+  than a direct "divided flag" read, and its own callers couldn't be
+  statically confirmed (indirect call convention), so this refines the
+  open question rather than closing it. `byte1`'s exact identity is
+  still unnamed.
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style
