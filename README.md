@@ -222,7 +222,27 @@ to every other string's. Most likely explanation: these are DWARF-
 `.debug_str`-like debug-only strings, structurally never referenced by
 executing code, so no code-side cross-referencing technique can locate
 them — a genuine, structural dead end for this line of attack, not an
-unexplored gap. Full details: `research/swl_5238_reader.py`.
+unexplored gap.
+
+**A complete, real, NAMED pipeline for the long-standing GLOBAL
+routing-graph "topology node-id↔coordinate mapping" problem** (§3.2's
+`vnodeID` lead, distinct from the ALREADY-CRACKED per-tile local vertex
+adjacency, §3.6/§8 item 5) was found the same way: `db_vid_get_
+map_id_V000`/`db_vid_get_pcl_id_V000` ("vid" = virtual id, i.e.
+`vnodeID`) resolve a virtual node id to its owning map/parcel;
+`db_find_node`/`db_node(i_toNode, &vNode)` then loads the real `VNode`
+struct (confirmed field `vsegIDs[]`); `readNodeMP0__9RoutePathUiR5VNode`
+reads a `VNode` directly from an `.mp0` MAP_COMPRESSED tile as part of
+building a `RoutePath`; a large real maneuver-generator subsystem
+(`mv_*`, source path `navicore/common/mnvr/mv_vnode.cpp`) consumes these
+VNodes for real turn-by-turn guidance. Names only, byte-level encoding
+still unrecovered — but this gives a concrete validation path (cross-
+check a guessed `vnodeID` bit-split against `eeuz.fea`'s own
+`ParcelHeader` directory or MAP_COMPRESSED's own tile directory) that
+didn't exist before. Also found: `db_fea_map_V000`/`db_fea_get_
+layer_range_V005`/`db_fea_read_parcels_V005`/etc, confirming `eeuz.fea`'s
+own `ParcelHeader`/layer/scale/subindex structure (§3.10) the same way.
+Full details: `research/swl_5238_reader.py`.
 
 ---
 

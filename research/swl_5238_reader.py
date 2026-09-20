@@ -401,6 +401,95 @@ Recorded here in detail so a future session doesn't repeat the same
 `lis`/`addi` correlation attempt expecting a different result.
 
 ============================================================================
+The GLOBAL routing-graph node problem (`vnodeID`, README's own long-
+standing "topology node-id<->coordinate mapping" open lead, wiki's
+`eeu-il`/`eeu-mod` pages) -- a real, complete PIPELINE confirmed by
+name, still not byte-offset cracked. Distinct from the ALREADY-CRACKED
+per-tile LOCAL vertex-adjacency problem (README's own `resolve_
+topology_adjacency()`, §3.6/§8 item 5) -- this is the cross-tile/
+cross-parcel graph used for actual route calculation, not single-tile
+rendering.
+============================================================================
+The same debug-string mining that found `db_seg_*`/`db_tmc_*` (above)
+also found a dense, real `VNode`/route-calculation subsystem, giving a
+complete, real, NAMED pipeline for exactly the problem `eeu.il`'s own
+`vnodeID` field pointed at (README S3.2, wiki `eeu-il-Name-
+Intersection-Index`, flagged as "a promising, not yet pursued lead"):
+
+  1. `db_find_node_V000` / `fp_db_find_node` / `fp_db_find_node_
+     from_draw_map` / `fp_db_find_node_from_complete_parcel` -- real
+     node-lookup accessors, one variant specifically for resolving a
+     node "from the drawn map" (i.e. from a currently-loaded/rendered
+     tile) and another "from the complete parcel" (a full, not
+     partially-loaded, tile) -- directly suggesting nodes are resolved
+     differently depending on whether their home tile is already in
+     memory.
+  2. `db_vid_get_map_id_V000` / `fp_db_vid_get_map_id` and `db_vid_
+     get_pcl_id_V000` / `fp_db_vid_get_pcl_id` -- "vid" = virtual id,
+     i.e. exactly `eeu.il`'s own `vnodeID` naming. These 2 accessors
+     are the REAL resolution step: given a virtual node id, get which
+     MAP and which PARCEL (tile) contains it -- the crucial "which tile
+     do I even need to open" step that has been entirely missing from
+     this project's own understanding.
+  3. `db_node(i_toNode, &vNode)` (real runtime error-log context:
+     `"g: db_node(i_toNode, &vNode) != ARR_SUCCESS"`) -- once the right
+     parcel is known, this loads the actual `VNode` structure. `VNode`
+     has a confirmed real field `vsegIDs[]` (an array of segment IDs
+     the node connects to, from `"db_seg(vNode.vsegIDs[i],&vSeg)"`) and
+     is used with `db_find_hand(&vNode, &vSeg, &fromHand)` (a real
+     "which hand/side" resolver, plausibly for divided-road/ramp
+     disambiguation).
+  4. `readNodeMP0__9RoutePathUiR5VNode` / `RoutePath_readNodeMP0__
+     FP9RoutePathUiP5VNode` / `RoutePath_readNodeArmMP0__
+     FP9RoutePathUiP5VNodePi` -- real functions reading a `VNode`
+     DIRECTLY FROM AN `.mp0` (MAP_COMPRESSED) TILE, as part of building
+     a `RoutePath`. This is the step that would actually surface a
+     node's real coordinate, since MAP_COMPRESSED tiles are where this
+     project's own already-cracked geometry/coordinate data lives
+     (`research/map_compressed_reader.py`).
+  5. A large real "maneuver generator" subsystem (`mv_*` functions,
+     `Mv_Vnode`/`Mv_Info_Struct`/`Mv_Turn_Data`/`Mv_Obar_Data` classes,
+     real source path `N:/siemens/source/navicore/common/mnvr/
+     mv_vnode.cpp`) consumes these VNodes to build real turn-by-turn
+     maneuvers (`mv_motorway_generate_keep`, `mv_roundabout_generate`,
+     `mv_uturn_detect`, `mv_houseNumberSide`, etc) -- confirms VNode is
+     genuinely THE cross-tile routing/guidance graph node, not a
+     rendering-only construct.
+  6. `resolveUnsetVNodeId__15LaneCalculationP4vsegi` -- a real function
+     literally named for resolving an UNSET vnode id from a segment,
+     in the lane-calculation module -- direct confirmation `vnodeID`
+     really is sometimes absent/needs resolution, consistent with
+     `eeu.il`'s own field not being populated for every entry.
+
+**Net effect**: this is a complete, real, NAMED pipeline
+(`vnodeID` -> `db_vid_get_map_id`/`db_vid_get_pcl_id` -> `db_node`/
+`db_find_node` -> `VNode{vsegIDs[]}` -> `readNodeMP0` against the
+correct `.mp0` parcel) -- but, same limitation as the `db_seg_*` catalog
+above, only the NAMES are confirmed, not the byte-level encoding of
+`vnodeID` itself or of `db_vid_get_map_id`/`get_pcl_id`'s own lookup
+table. No attempt was made this session to locate or disassemble any of
+this code (same structural wall as above -- no recoverable load base,
+and these strings are likely debug-only data too). Concrete next step
+for a future session: if `eeu.il`'s own already-cracked `vnodeID`
+prefix bytes (wiki `eeu-il-Name-Intersection-Index`) can be fed through
+a real `db_vid_get_map_id`/`get_pcl_id`-equivalent formula (even a
+guessed one, e.g. a simple bit-split of the 32-bit vid into a map-id
+field and a parcel-id field), the result could be cross-validated
+against `eeuz.fea`'s own already-cracked `ParcelHeader{offset,
+byteCnt,byteCntZip}` directory (wiki `eeu-mod-Database-Schema`) or
+MAP_COMPRESSED's own tile directory -- a real, concrete validation path
+that didn't exist before this session's firmware findings, even though
+it wasn't executed here.
+
+Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
+range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
+properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,
+`db_fea_get_scale_from_subindex_V005` -- real, versioned accessors for
+`eeuz.fea` confirming its `ParcelHeader`/layer/scale/subindex structure
+(README S3.10, wiki `eeuz-fea-Place-Name-Gazetteer`) is real and
+actively used, same pattern of confirmation as the `db_seg_*` catalog.
+
+============================================================================
 NOT done this session
 ============================================================================
 - `INFO/CDSTRUCT.CFG` (25,955 lines) was characterized (grammar, keyword
