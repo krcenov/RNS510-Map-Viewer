@@ -2684,6 +2684,34 @@ def decode_topology(raw, declen=None, features=None):
     FIRST semantic field name this project can attach to a specific byte
     range in this record, even though bytes 1-3's own meaning (the
     divided-status-correlated signal above) remains unnamed.
+
+    ============================================================================
+    A further attempt to NAME bytes 1-3: "local topology node id"
+    (`left_node`/`right_node`, real `eeu.mod` field names) -- CLEANLY
+    REFUTED, and a real structural difference found in `byte1`'s own
+    VALUE (not just its zero-rate) between the 2 test tiles.
+    ============================================================================
+    `eeu.mod` also names `left_node`/`right_node` on the `seg` record --
+    if `byte1` (a single byte, range 0-255) were a direct index into this
+    project's own already-cracked LOCAL topology graph, its value could
+    never exceed that tile's own real node count. On `A6`, `byte1` reaches
+    253 -- but `A6`'s own real topology graph has only 186 nodes (max
+    real node id 191). 253 > 191: `byte1` cannot be a direct local
+    topology node index. A real, sharp, cheap refutation (one inequality
+    check, no new ground truth needed).
+
+    A real, separate observation surfaced while testing this: `byte1`'s
+    own VALUE DISTRIBUTION has a genuinely different CHARACTER between
+    the 2 tiles, independent of the divided-status zero-rate question --
+    on `A1_2389` it is overwhelmingly dominated by just 2 close values
+    (61 and 62, together 159/163 = 97.5% of records), while on `A6` it is
+    spread across 14 distinct values up to 253 with no dominant value.
+    Not yet explained -- a plausible, untested guess is some kind of
+    per-road-run "chain"/grouping identifier that stays nearly constant
+    across many consecutive records of the SAME real road (matching `A1`'s
+    own simple, mostly-single-road tile) but varies more on a tile with
+    more real sub-segments or cross-streets (`A6`) -- but this is
+    speculation, not tested against anything independent yet.
     """
     if declen is None:
         declen = len(raw)
