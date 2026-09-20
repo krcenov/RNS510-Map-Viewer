@@ -2174,6 +2174,24 @@ def decode_topology(raw, declen=None, features=None):
     independent validation signal (real ground truth to match against,
     not just "the bytes add up") before trusting any candidate record
     shape here.
+
+    **UPDATE, a later session, from the FIRMWARE side (`research/
+    swl_5238_reader.py`)**: the user provided a separate factory firmware
+    disc; its `FHDD6.FLI` application image embeds a real, versioned
+    `db_seg_*` accessor-function-name catalog directly confirming this
+    exact field group is real and actively read at runtime: `db_seg_
+    rank_V004`, `db_seg_speed_V004`, `db_seg_tunnel_V004`, `db_seg_
+    node_V004`, `db_seg_unique_vid_V005`, `db_seg_plural_junction_V005`,
+    `db_seg_is_part_of_freeway_intersection_V005`, and -- an EXACT name
+    match -- `db_seg_marker_left_V004`/`db_seg_marker_right_V004` for
+    `eeu.mod`'s own `seg_marker_left`/`seg_marker_right` fields. This is
+    strong independent confirmation the field names are real (not an
+    authoring-tool-only convention), and narrows any future disassembly
+    attempt to specific, named functions instead of a blind search of
+    the whole tile-tail region -- but the functions' own CODE was not
+    located or disassembled this session (no recoverable load-base
+    address for that region, same wall as README S2.4), so this remains
+    a confirmed lead, not a byte-offset crack.
     """
     if declen is None:
         declen = len(raw)

@@ -19,8 +19,19 @@ disc. Cracked using ground truth found via `config/create_cd`
 conventions and gave the investigation a concrete target shape to test
 against, and `dbal/`'s own embedded source-file list
 (research/dbal_reader.py) independently confirms the real handler is
-named `db_tmc.cpp` (plus a `db_tmc_deprecated.cpp` twin, suggesting the
-format changed between DBAL versions).
+named `db_tmc.cpp` (plus a `db_tmc_deprecated.cpp` twin) -- **CORRECTED,
+a later session's 5-version diff of every `dbal/V0*/DBAL.OUT`**: both
+files coexist in ALL 5 DBAL versions, refuting the earlier guess that
+the on-disc TMC format changed between DBAL releases. **Independently
+confirmed a 2nd way, a still-later session, from the FIRMWARE side**
+(`research/swl_5238_reader.py`, a separate factory firmware disc the
+user provided): the firmware's own embedded debug strings name the real
+versioned accessor pair directly, `db_tmc_all_headers_V003` (current)
+and `db_tmc_all_headers_deprecated_V005` (deprecated) plus `db_tmc_
+seg_V003` -- i.e. `_V003`/`_V005` are real ON-DISC TMC FORMAT VERSION
+numbers the firmware's `dbaLib` code branches on per-disc, not DBAL
+BUILD versions -- the same conclusion the 5-version diff already
+reached, now confirmed directly from the accessor names themselves.
 
 ============================================================================
 eeu.mod's real schema for this table (README S3.16/S3.24)

@@ -186,6 +186,37 @@ relocated external call sequence, confirming both the disassembler and
 this project's understanding of the platform's PowerPC ABI are correct
 — a real, reusable capability for any future session that wants to read
 compiled logic on this platform directly, not just embedded strings.
+**`FHDD6.FLI`'s own 0-24MB native region — mined for debug strings (not
+disassembled), an enormous, load-bearing payoff**: 1,476 distinct real
+`.cpp`/`.h` source basenames found in a single representative 5.3MB
+slice alone (far beyond `dbal/`'s own ~330-path inventory). **The
+complete, real, end-to-end `dbal/` dynamic-loading mechanism is
+directly confirmed from the firmware's own runtime log strings**
+(`"dbaLib: best matching dbal.out version on DVD: V%03d_%03d"`,
+`"now unload DBAL version: V%03d_%03d"`, etc.) — the firmware detects
+which DBAL version the inserted disc requires, searches `dbal/` for a
+matching (or best-compatible) `V0NN_0MM/DBAL.OUT`, and dynamically
+loads/unloads it as discs are swapped — explaining exactly why 5
+separate builds ship side by side (§2.6's `dbal/` cross-reference,
+§3's own `dbal/` bullet). **A catalog of 77 real, versioned `db_*_V0NN`
+accessor function names** was extracted, independently confirming field
+names this project had only inferred from `eeu.mod`'s own authoring-tool
+schema: `db_seg_marker_left_V004`/`db_seg_marker_right_V004` (an exact
+name match to `eeu.mod`'s own fields), `db_seg_rank_V004`/`_speed_V004`/
+`_tunnel_V004`/`_node_V004`/`_unique_vid_V005` (the still-open
+MAP_COMPRESSED `seg_list` wall, §3.16), `db_tmc_all_headers_V003`/
+`_deprecated_V005` (independently re-confirming the `db_tmc_deprecated`
+correction above, this time from the accessor names themselves, not
+just file coexistence), `db_get_parcel_dir_V005`/`db_load_pcl_dir_V005`
+(the `eeuz.fea` parcel directory), `db_check_junction_view_V006` (the
+V009_038-added junction-view schema), and `db_us_state_from_segment_
+V008` (independent evidence of a real NA-specific map-data code path,
+alongside the already-found `CPhonemeNA*Handler` split). **Not done**:
+locating or disassembling the actual CODE behind any of these names —
+their strings are found, but README S2.4's own documented wall (no
+recoverable load-base address for this region) still applies; a
+pattern-based heuristic function-finder (confirmed to work on
+`WA/CTEST.OUT`) is the concrete, well-scoped next step, not yet built.
 Full details: `research/swl_5238_reader.py`.
 
 ---

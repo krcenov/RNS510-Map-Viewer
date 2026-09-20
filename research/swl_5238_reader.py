@@ -229,6 +229,134 @@ any future session wanting to read compiled logic on this platform
 directly, not just its embedded strings.
 
 ============================================================================
+`FHDD6.FLI`'s own 0-24MB native-PowerPC region -- CRACKED at the debug-
+string level: a MASSIVE, genuinely load-bearing inventory directly
+confirming (and extending) this project's own schema/format guesses
+from the ACTUAL RUNNING CODE's own names, not just an authoring tool's
+schema dictionary
+============================================================================
+A LATER session within this same investigation: rather than trying to
+disassemble the 0-24MB native region (README S2.4's own documented wall
+-- no recoverable load-base address for a proper relocation-aware
+disassembly), a plain printable-string scan of that SAME region (no ELF/
+load-base knowledge needed for this) finds an enormous, dense debug-
+string table -- 129,870 printable-ASCII runs of length >=5 in just the
+first 24MB, including **1,476 distinct real `.cpp`/`.h` source
+basenames in a single representative 5.3MB slice alone** (far exceeding
+`dbal/`'s own ~330-path inventory from its much smaller 1.19-1.33MB
+relocatable objects). This is effectively the debug-string table for
+the WHOLE compiled navicore application, not just the swappable DBAL
+plugin.
+
+**The complete, real, end-to-end `dbal/` DYNAMIC-LOADING mechanism --
+CONFIRMED from the firmware's own runtime log strings**, closing the
+loop between this project's map-disc-side `dbal/` findings
+(`research/dbal_reader.py`) and how the firmware actually uses them:
+
+    dbaLib: DBAL version is dynamic linked
+    dbaLib: determine loaded dbal version
+    dbaLib: loaded dbal version: V_%03d_%03d
+    dbaLib: no file %s on DVD ==> use version %03d.%03d from
+    dbaLib: best matching dbal.out version on DVD: V%03d_%03d
+    compatible dbal.out version on DVD: V%03d_%03d
+    FATAL!!! No matching dbal.out version on DVD!!! Invalid
+    dbaLib: try to load %s
+    loadModule for dbal.out
+    dbal_link_symbols failed!
+    dbaLib: actual: V%03d_%03d - requested: ...
+    now unload DBAL version: V%03d_%03d
+    dbaLib: unload current dbal.out
+    dbaLib: ERROR!! Loaded %s version does not match DVD; %s
+    The current implementation cannot exchange a loaded DBAL_NAME !!!
+
+The `V%03d_%03d` format string is an EXACT match for the map disc's own
+`dbal/V006_047`/`V007_038`/.../`V010_015` folder-naming convention
+(3-digit major, underscore, 3-digit minor) -- confirming, from the
+firmware side, that: the firmware reads whichever map disc is inserted,
+determines its own required DBAL version, searches the disc's `dbal/`
+folder for a matching (or "best compatible") `V0NN_0MM/DBAL.OUT`,
+dynamically `loadModule`s it (real PowerPC dynamic linking --
+`dbal_link_symbols`), and can later `unload` and swap to a DIFFERENT
+version if a different disc is inserted. This directly explains WHY the
+map disc ships 5 separate DBAL builds side by side (README's own
+`dbal/` bullet) — it's not redundancy, it's real forward/backward
+compatibility infrastructure, matching multiple possible disc
+generations against one firmware build. Real function names:
+`dbal_load__Fv`, `dbal_unload__Fv`, `dbal_get_compatible_version__FPiT0`,
+`dbal_get_minor_version_1__Fv`, `initializeDBAL__9MapLoader`,
+`cleanupDBAL__9MapLoader`.
+
+**A catalog of 77 distinct, real, VERSIONED `db_*_V0NN` accessor
+function names** was extracted (regex `db_[A-Za-z_]+_V\d{3}` over the
+same region) — direct, compiled-code confirmation of exactly the kind
+of per-field accessor this project has inferred only from `eeu.mod`'s
+own authoring-tool schema dictionary (README S3.16) until now. Most
+directly relevant to this project's own open walls:
+
+  - **MAP_COMPRESSED segment record** (the still-open `seg_list`/
+    `seginfoID` wall, README S3.16's own `eeu.mod` bullet): `db_seg_
+    rank_V004`, `db_seg_speed_V004`, `db_seg_tunnel_V004`, `db_seg_
+    node_V004`, `db_seg_unique_vid_V005`, `db_seg_plural_junction_V005`,
+    `db_seg_is_part_of_freeway_intersection_V005`, `db_seg_marker_
+    left_V004`/`db_seg_marker_right_V004` (the latter pair an EXACT
+    name match for `eeu.mod`'s own already-found `seg_marker_left`/
+    `seg_marker_right` fields) — real, compiled, versioned accessors
+    for exactly the segment fields this project has been trying to
+    locate a byte offset for. Does NOT by itself give the byte offset
+    (no disassembly of the function bodies was attempted — see below)
+    but is strong, independent confirmation the field names are real
+    and actively used at runtime, and gives exact function names a
+    future disassembly-based attempt could search for specifically
+    (much narrower than blindly hunting the whole 24MB region).
+  - **`eeuz.fea`/MAP_COMPRESSED parcel directory**: `db_get_parcel_
+    dir_V005`, `db_load_pcl_dir_V005`, `db_remove_pcl_list_V005`,
+    `db_page_pcl_V000`, `db_page_releaseParcel_V003`, `db_map_dir_V000`,
+    `db_rd_fea_pdir_uncached_V000`, `db_get_fea_file_header_V000`,
+    `db_fea_map_V000`, `db_fea_get_layer_range_V005`.
+  - **`eeu.tmc`**: `db_tmc_all_headers_V003` and `db_tmc_all_headers_
+    deprecated_V005`, `db_tmc_seg_V003` — direct, compiled-code
+    confirmation these are REAL, versioned per-disc-format readers
+    (found immediately adjacent to each other in the string table, and
+    to `db_page_releaseParcel_V003`/`db_road_NameListDataByIndex_V004`
+    — consistent with alphabetically/table-grouped debug info, not
+    randomly scattered). **This independently confirms, from a
+    completely different angle, this project's own earlier correction**
+    (README S3.25 / `dbal_reader.py`'s own db_tmc_deprecated note): the
+    "V003" vs "deprecated_V005" split is a real ON-DISC-FORMAT-VERSION
+    distinction the firmware's `dbaLib` code handles by calling a
+    DIFFERENT accessor depending on which version the inserted disc
+    actually has — not evidence the format changed between DBAL BUILD
+    versions.
+  - **Junction views** (added at DBAL V009_038 per this project's own
+    5-version diff, `dbal_reader.py`): `db_check_junction_view_V006`,
+    `db_get_junction_view_V006`.
+  - **North America**: `db_us_state_from_segment_V008` — confirms a
+    real, distinct NA-specific map-data code path exists in this exact
+    codebase, independent evidence alongside the already-found
+    `CPhonemeNA*Handler` phoneme split (`dbal_reader.py`).
+  - Two literal PLACEHOLDER-named entries, `db_xxxx_V003`/`db_xxxx_
+    adaptor_V000..V002` and `db_zzzz_V002` — real evidence these `db_*`
+    accessors are machine-generated from a common template (a code
+    generator or macro producing one `db_<table>_V<N>` function per
+    real table), consistent with `eeu.mod`'s own "authoring tool
+    dictionary" nature (README S3.16) — the runtime accessor layer and
+    the authoring-tool schema dictionary are almost certainly generated
+    from the SAME underlying table definitions.
+
+**Not attempted**: disassembling any of these named functions'
+actual code bodies. Their STRING locations are known (offsets within
+`FHDD6.FLI`), but their CODE addresses are not directly recoverable
+without either (a) parsing this region's own `.debug_info`/symbol table
+properly (README S2.4's documented wall — no recoverable load base for
+the whole 24MB region) or (b) a pattern-based heuristic function-finder
+(searching for real PowerPC prologue bytes, as confirmed working on
+`WA/CTEST.OUT` above, then trying to correlate candidates to these
+known names by cross-referencing string-table/`.rodata` proximity) —
+neither was built this session. This is the concrete, well-scoped next
+step for a future session wanting exact byte offsets rather than just
+confirmed field names.
+
+============================================================================
 NOT done this session
 ============================================================================
 - `INFO/CDSTRUCT.CFG` (25,955 lines) was characterized (grammar, keyword
@@ -244,12 +372,18 @@ NOT done this session
   confirmed present but not parsed (no DWARF parser was written this
   session -- would give real source-line-level detail if a future
   session wants it).
-- No attempt was made to locate the actual navigation/DBAL-linked code
-  INSIDE `FHDD6.FLI`'s own 0-24MB native-PowerPC region -- README S2.4
-  already documents why that's hard (no recoverable load-base address)
-  and this session's own ELF-magic-scan attempt (in the DIFFERENT
-  76-85.6MB VxWorks region) was a real, refuted negative result, not a
-  new angle on the S2.4 wall itself.
+- The 0-24MB native-PowerPC region's rich debug-STRING table was mined
+  (source paths, the `dbaLib` dynamic-loader log strings, 77 versioned
+  `db_*_V0NN` accessor names -- see above), but no attempt was made to
+  locate or disassemble the actual CODE behind any of those names --
+  README S2.4 already documents why that's hard in general (no
+  recoverable load-base address for the whole region) and this
+  session's own ELF-magic-scan attempt (in the DIFFERENT 76-85.6MB
+  VxWorks region, not the native-code region) was a real, refuted
+  negative result, not a new angle on the S2.4 wall itself. A pattern-
+  based heuristic function-finder (real PowerPC prologue bytes,
+  confirmed to work on `WA/CTEST.OUT`) was identified as the concrete
+  next step but not built.
 
 ============================================================================
 Practical use

@@ -15,6 +15,21 @@ VERSIONS.CFG` lists the 5 version folders present (`V006_047`,
 one `DBAL.OUT` (1.19-1.33MB) -- one build per supported head-unit
 software generation, all reading the SAME on-disc map format.
 
+**CONFIRMED from the FIRMWARE side, a later session** (the user
+provided a separate factory firmware disc, `research/
+swl_5238_reader.py`): the exact dynamic-loading mechanism this implies
+is real and directly readable in the firmware's own `dbaLib` runtime
+log strings (`"dbaLib: best matching dbal.out version on DVD:
+V%03d_%03d"`, `"now unload DBAL version: V%03d_%03d"`, etc, embedded in
+`FHDD6.FLI`) -- the firmware determines which DBAL version the inserted
+disc requires, searches `dbal/` for a matching (or best-compatible)
+`V0NN_0MM/DBAL.OUT`, and dynamically loads/unloads it as discs are
+swapped. This is WHY 5 separate builds ship side by side: real forward/
+backward compatibility infrastructure, not redundancy. See that module
+for the full picture, including a 77-function catalog of real, versioned
+`db_*_V0NN` accessor names (e.g. `db_seg_rank_V004`, `db_tmc_all_
+headers_V003`/`_deprecated_V005`) found in the same firmware image.
+
 ============================================================================
 Container -- CRACKED: 32-bit big-endian PowerPC ELF relocatable objects
 ============================================================================
