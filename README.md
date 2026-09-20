@@ -116,6 +116,78 @@ satellite-radio song tagging, weather/traffic tile caching. Schema is point data
 (name/lat/lon) — **no road geometry or routing fields**, so this cannot be used to add
 roads, only custom POIs ("Personal POI" is an explicit, supported list type).
 
+### 2.6 `5238_ALL` — the real factory Software-Loading (SWL) CD, found and extracted this session
+A later session, at the user's direct prompt (`C:\Users\krcenov\Desktop\
+rns510\5238_ALL`), found and extracted a SEPARATE disc from the map disc
+`CD_8555`: a real Continental/VW factory "Software Loading" CD (VwSwIndex
+5238, matching this section's own already-known firmware generation) —
+`VERSION.TXT` confirms `CdTreeBuilder version 3.06`, `#VwSwPartNumber:`
+lists 15 real VW part numbers, `#Steckbrief: C_EU_13.236_t3 C3/C4A/C5C/
+C6/C10/C12` names 6 real platform codes, and discloses this exact image
+is `"an unofficial SWL CD by josi"` (a community repack, not verified
+byte-identical to the original factory CD, though CRC.16 files
+throughout the tree would make tampering detectable). **`ECUORDER.TXT`
++ `INFO/CDSTRUCT.CFG`** (25,955-line `#ifdef`-guarded flashing script,
+with a real, dated 2006-2008+ internal Continental/VW engineering
+changelog as its own leading comment block — named engineers, real
+`TlaWtz#`-numbered bug IDs, real project-line codenames) confirm the
+real ECU flashing order: `APPS`/`HOST`/`HDD`/`RADIO`/`MPEG`/`SPEECH`/
+`DAB`/`VUCI`, one top-level folder per target (`VUCI` = the already-
+identified MOST-bus/CAN gateway, §2.2). `HWIDMAP.TXT`/`PRJCTMAP.TXT`
+(plain text) are real hardware-ID→revision (`SILVER_1`/`SILVER_6`) and
+per-vehicle-config-ID→project-variant lookup tables.
+
+**`DLSCRIPT.TXT` — CRACKED, genuinely new**: each project variant's own
+`CONFIG/DLSCRIPT.TXT` is a real, plain-text, line-oriented flash-
+programming script (`INSTALL_FRAGMENT`/`LOAD_FIB`/`LOAD_LIBRARY`/
+`RUN_SHELL_SCRIPT`/`COMPARE_REG_ID ... GOTO <label>`/`UPDATE_SYS_CONFIG`/
+`FINISHED_ECU`) — every declared byte-size argument matches its real
+on-disc file's exact size. This directly shows how `APPS\SILVER_1\
+RNSMIDEC\PROG\FHDD6.FLI` (§2.1's already-examined 85.6MB application
+image) actually reaches the unit: `INSTALL_FRAGMENT` first applies
+`A_HDD.FRG` (85,254,064 bytes, real magic `"ZZZZ"`, a distinct,
+not-yet-decoded container — plausibly a delta/patch given its size is
+within 0.5% of `FHDD6.FLI`'s own), then `LOAD_FIB` writes `FHDD6.FLI`
+itself. `COMPARE_REG_ID 0x091C 0x09 <lang> ...` is a real per-language
+branch chain confirming register `0x091C` is the on-unit language-
+selection value the factory tool reads before installing the matching
+`SPEECH/FRG/LANG_*.FRG`+`RECOG_*.FRG` pair.
+
+**`FHDD6.FLI` re-examined — one refutation, no new crack**: a raw ELF-
+magic scan over the whole 85.6MB file finds 4 hits inside the
+already-identified 76-85.6MB VxWorks-kernel region (§2.1) — all 4 are
+FALSE POSITIVES (each one's own `e_shoff`, followed as if real, points
+at incoherent garbage, unlike a genuinely valid ELF). Documented so a
+future session doesn't repeat the same naive scan expecting a hit; does
+not affect or extend §2.4's own separate, already-documented
+disassembly wall on the 0-24MB native region.
+
+**`WA/CTEST.OUT` — CRACKED, genuinely new**: a small (89,576-byte),
+COMPLETE, standalone 32-bit BE PowerPC `ET_REL` ELF object — same
+container family as `dbal/*.OUT` (§3's `dbal/` bullet) but, unlike
+those, small enough that its own section-header table parses cleanly,
+exposing a full `.symtab`/`.strtab` (102 real symbols) AND real DWARF
+debug sections (`.debug_info`/`.debug_line`/`.debug_abbrev`, not
+parsed). Real source files: `CodingTest.c`/`RegTest.c`/
+`ConfigFblockTest.c`/`ctdt.c` — a factory ECU CODING/diagnostics test
+utility (`TestCoding`/`SetCodingHex`/`ResetEcu`/`configLogin`), NOT part
+of the navigation core. Real imported API surface reveals a genuine,
+named application lifecycle framework on this platform —
+`bootMgrNotifyStartupAchieved`/`RunupAchieved`/`RundownAchieved`/
+`ShutdownAchieved`, `bootMgrAddShutdownConsumer`,
+`svcb_addServiceListener` — plus direct MOST-bus calls
+(`cc_tla_most_addSink`/`cc_tla_most_send`/
+`cc_tla_most_getLocalDeviceId`), confirming §2.2's inferred MOST-bus
+gateway chip from the actual call-site side. **Successfully
+disassembled** with `capstone` (newly installed this session, not
+previously used in this project) — a real function (`TestCoding`)
+decodes to a textbook GCC-PowerPC-ELF prologue and a `.rela.text`-
+relocated external call sequence, confirming both the disassembler and
+this project's understanding of the platform's PowerPC ABI are correct
+— a real, reusable capability for any future session that wants to read
+compiled logic on this platform directly, not just embedded strings.
+Full details: `research/swl_5238_reader.py`.
+
 ---
 
 ## 3. Map database findings
