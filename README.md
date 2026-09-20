@@ -2891,7 +2891,27 @@ extensively-investigated `db/`):
   gzip, or bz2 — exhaustively scanned at every byte position in a small,
   fully-scanned `.IDX` file, zero real hits in any of these formats
   despite the file's own `compr-type=Z` label — a real but still
-  unidentified proprietary encoding. `<LAN>.LSC` files are
+  unidentified proprietary encoding. **A later session, prompted by a
+  direct re-check of this whole folder's contents, found a 2nd real
+  embedded CGI host and the actual "navigate here" action**:
+  `ST_DETAIL.HTM` (1 per language, real content identical except the
+  `LAN` tag/translated text) is the single POI-detail screen shown after
+  picking a result — and it's the only file anywhere in `tpd/`
+  referencing `ctrlhost` (distinct from `tpdhost`, which only ever
+  handles `cgi/search`/`cgi/form`/`cgi/StartTPD`, the DATA-fetching
+  endpoints). `ctrlhost` handles 3 CONTROL/ACTION endpoints instead:
+  `cgi/menu?option=tpd_prev_page` ("back"), `cgi/phone?NR=...`
+  (click-to-call), and — the real payoff —
+  `cgi/setdest?NAME=...&PHONE=...&LOC=...&ENTRY=...` (up to 9 real
+  `ENTRY` parameters, plausibly one per usable building entrance) — the
+  concrete "set this POI as my destination" action §2.5's firmware
+  investigation had only inferred existed, now with its real endpoint
+  and parameter shape. **Also corrected 2 stale file-count claims found
+  while investigating this**: exactly 59 real numbered `SF_<FORMID>.HTM`
+  search forms per language (not 60) with a byte-exact matching 59
+  numbered `TABLES/0/<NNNN>.IDX` files (also not 60 — that count was
+  actually this directory's `ST_*.HTM` total, 59 numbered +
+  `ST_DETAIL.HTM`). `<LAN>.LSC` files are
   plain, self-documenting text naming a real category-group hierarchy
   (`TPD-GRP <group-id> <child ids>`) feeding the category picker;
   `ICONS`/`ICONS810` (381 real PNG files, self-explanatory POI-category

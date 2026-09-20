@@ -10,7 +10,13 @@ session additionally cracked the per-block `(offset, lambda_hash)` index
 table sitting between the header and the data (previously assumed to
 just be part of "the compressed body") -- the compressed block BODIES
 themselves remain unidentified (tested and refuted as standard zlib/
-deflate/gzip/bz2, despite the file's own `compr-type=Z` label).
+deflate/gzip/bz2, despite the file's own `compr-type=Z` label). A LATER
+session, prompted by a direct re-check of this whole folder's contents,
+found a 2nd real embedded CGI host (`ctrlhost`, distinct from `tpdhost`)
+and the real "set destination" action (`cgi/setdest`) hiding in one
+previously-uncalled-out file, `ST_DETAIL.HTM` -- and corrected 2 earlier
+file-count claims in the process (59 real numbered `.IDX`/`SF_*.HTM`
+files, not 60 -- see the dedicated sections below for both).
 
 Found via `config/create_cd` (research/create_cd_reader.py).
 
@@ -76,12 +82,44 @@ and a real conditional/substitution template language (`<%if_defined
 CITYNAME>...<%CITYNAME>...<%endif>`, `<%unit>`) are both used
 throughout.
 
-`ST_<FORMID>.HTM` (the matching results page, 60 files, one per SF_
-form minus a few shared ones) links back to its own `SF_` form (`<A
-HREF="http://tpdhost/cgi/form?templ=/ENG/SF_11000.HTM&...">`), shows
-paged results (`<%if_previous>`/`<%if_result>`/`<%INDEX_FIRST>`-
-`<%INDEX_LAST>`), and references real icon images (`/IMAGES/
-vw_search.gif`, `/IMAGES/vw_prev.gif`).
+`ST_<FORMID>.HTM` (the matching results page, 60 files per language --
+CORRECTED, a later session: exactly 59 numbered `ST_<FORMID>.HTM`
+files, one per `SF_<FORMID>.HTM` (byte-exact 1:1 FORMID set, verified
+directly), PLUS 1 more, specially-named `ST_DETAIL.HTM` shared across
+every search type -- see its own section below) links back to its own
+`SF_` form (`<A HREF="http://tpdhost/cgi/form?templ=/ENG/SF_11000.HTM
+&...">`), shows paged results (`<%if_previous>`/`<%if_result>`/
+`<%INDEX_FIRST>`-`<%INDEX_LAST>`), and references real icon images
+(`/IMAGES/vw_search.gif`, `/IMAGES/vw_prev.gif`).
+
+============================================================================
+`ST_DETAIL.HTM` and `ctrlhost` -- CRACKED (a later session): a 2nd real
+embedded CGI host, and the actual "navigate here" action
+============================================================================
+`ST_DETAIL.HTM` (1 per language, `<!--TPD TYPE=3 LAN=ENG-->`, real
+content identical across all 8 languages except the `LAN` tag and
+translated title text) is the one `ST_*` file that ISN'T a numbered
+search-results page -- it's the single POI DETAIL screen shown after
+picking one result, real fields `STR`/`NR` (street/number), `VIL`/`CTY`/
+`CTRY` (village/city/country), `TEL` (phone), and `POI` (name).
+
+**A 2nd real local CGI host, `ctrlhost` (distinct from `tpdhost`), found
+only in this one file** -- confirms this session's already-known
+`tpdhost` (which only ever appears with `cgi/search`/`cgi/form`/
+`cgi/StartTPD`, the DATA-fetching endpoints) is not the whole picture:
+`ctrlhost` handles 3 real CONTROL/ACTION endpoints instead --
+`cgi/menu?option=tpd_prev_page` (the "back" button), `cgi/phone?NR=
+<%TEL!CGI>` (click-to-call), and, most importantly,
+`cgi/setdest?NAME=<%POI!CGI>&PHONE=<%TEL!CGI>&LOC=<%LOC!CGI>&ENTRY=
+<%EP1!CGI>&ENTRY=<%EP2!CGI>&...&ENTRY=<%EP9!CGI>` -- **the real "set
+this POI as my navigation destination" action**, with up to 9 real
+`ENTRY` parameters (plausibly one per real building entry point, for a
+POI with more than one usable entrance/driveway). This is the concrete
+mechanism (§2.5's firmware investigation had already inferred a
+CGI-style client existed, but not this specific endpoint/parameter
+shape) connecting a TPD search result to this disc's own real routing
+engine. Not cross-referenced against `EDB/POI/POI.DB3`'s own multi-
+entry-point-capable schema this session.
 
 `CATTEMPLATE.HTM` (1 per language) is the category-picker screen: a
 `<select name="CAT">` populated at runtime ("Options will be inserted
@@ -120,8 +158,12 @@ directly from the `ST_*.HTM` templates above.
 `TABLES/` -- search index tables: CRACKED (self-describing header),
 compressed body NOT decoded
 ============================================================================
-`TABLES/GENERIC.IDX`/`GENERIC.URL` plus `TABLES/0/<NNNN>.IDX` (60 real
-numbered index files, referenced directly by the `SF_*.HTM` forms
+`TABLES/GENERIC.IDX`/`GENERIC.URL` plus `TABLES/0/<NNNN>.IDX` (59 real
+numbered index files -- CORRECTED, a later session, from an earlier
+miscount of 60; verified directly: exactly 59 files, odd-numbered
+`0001.IDX` through `0117.IDX`, byte-exact 1:1 with the 59 real
+`SF_<FORMID>.HTM` search forms above -- not 60, which was this
+directory's `ST_*.HTM` count, itself 59 numbered + `ST_DETAIL.HTM`, see
 above). Each `.IDX` file's own header is plain, self-documenting ASCII:
 
     block-offset=428?compr-max-size=1860?compr-type=Z?order-type=lambda?
