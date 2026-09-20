@@ -2619,6 +2619,33 @@ def decode_topology(raw, declen=None, features=None):
     correlation with divided status (from real human ground truth) still
     stands; only this one candidate SEMANTIC explanation for it is ruled
     out.
+
+    ============================================================================
+    UPDATE: byte4's own small "leak" on A1 (2/163) is explained away as
+    numeric coincidence, not signal -- REFINES the finding to bytes 1-3
+    specifically, not 1-4.
+    ============================================================================
+    Checked A1_2389's own 2 exception records directly: both are ordinary
+    recurring road ids already seen elsewhere in this tile (15660, 15948,
+    each appearing multiple times with DIFFERENT byte4 values in their
+    other occurrences) -- and both have a trailing "value" field of
+    exactly 256 (`0x0100`). Since `value` is parsed as a 4-byte
+    little-endian integer with byte4 as its LOWEST-order byte, `value ==
+    256` makes byte4 zero purely because 256 is an exact multiple of 256
+    -- a real but numerically INCIDENTAL zero, not a separate meaningful
+    flag. Under a rough uniform/Poisson estimate (~1/256 chance per
+    record for the low byte to land on exactly zero), 2 such coincidences
+    across 163 records is unsurprising (order ~0.4 expected). By
+    contrast, `A6`'s own 17/89 (19.1%) zero-rate is far too high to be
+    this same coincidence (expected ~0.35 by chance) -- `A6`'s zero
+    records really are systematically different, not luck.
+
+    **Refined conclusion: the real, clean signal is bytes 1, 2, and 3
+    specifically** (each individually EXACTLY 0/163 and 0/110 on both
+    divided tiles, `A6` nonzero on all three) -- `byte4` should be
+    treated as part of the continuous trailing numeric `value` field, not
+    a 3rd independent flag byte, and its own apparent near-agreement with
+    the pattern was mostly coincidental magnitude, not real structure.
     """
     if declen is None:
         declen = len(raw)
