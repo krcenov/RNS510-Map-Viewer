@@ -2543,6 +2543,50 @@ def decode_topology(raw, declen=None, features=None):
     point and check whether `byte2/3==0` really stays at exactly 0%, or
     whether A1/Hemus's own 0% was itself a (much less likely, but not
     impossible) coincidence.
+
+    ============================================================================
+    UPDATE, immediately following, same session: a systematic per-byte-
+    position sweep (all 8 byte offsets, not just byte2/byte3 chosen ad hoc)
+    STRENGTHENS this signal -- 4 independent byte positions agree, not 2.
+    ============================================================================
+    Checked `==0` at EVERY byte offset 0-7 of an 8-byte record, across the
+    same 3 tiles (`A1_2389`=163, `Hemus`=110 divided records;
+    `A6`=89 non-divided records):
+
+        byte0: A1=2.5%   Hemus=2.7%   A6=10.1%   (nonzero on all 3 -- noisy)
+        byte1: A1=0.0%   Hemus=0.0%   A6=2.2%    (clean)
+        byte2: A1=0.0%   Hemus=0.0%   A6=4.5%    (clean -- already known)
+        byte3: A1=0.0%   Hemus=0.0%   A6=7.9%    (clean -- already known)
+        byte4: A1=1.2%   Hemus=0.0%   A6=7.9%    (nearly clean)
+        byte5: A1=28.2%  Hemus=40.9%  A6=51.7%   (no clean split at all)
+        byte6: A1=100%   Hemus=100%   A6=100%    (ALWAYS zero -- but this is
+                                                    TAUTOLOGICAL, not a finding:
+                                                    the parser's own `00 00`
+                                                    terminator constraint
+                                                    REQUIRES bytes[6:8]==0 for
+                                                    a record to be accepted at
+                                                    all -- byte6/7 prove
+                                                    nothing about content)
+        byte7: same tautology as byte6.
+
+    **Bytes 1, 2, 3, and 4 are NOT constrained by the parser's own rules**
+    (only bytes 6-7 are required to be zero to accept a record) -- so their
+    agreement is real, independent evidence, not another instance of the
+    same tautology. Checking ANY of byte1/2/3/4 `==0` together: `A1`=1.2%
+    (2/163, both attributable to byte4 alone -- byte1/2/3 individually stay
+    at a clean 0/163), `Hemus`=0.0% (0/110, perfectly clean), `A6`=19.1%
+    (17/89). Still a real, strong separation -- but honestly NOT a
+    mathematically perfect hard rule once byte4 is folded in (A1's 1.2% is
+    a real, small leak, not zero). The cleanest single positions remain
+    byte2/byte3 (each individually exactly 0/163 and 0/110 on both divided
+    tiles). Byte5 shows no divided/non-divided split at all (28-52% across
+    all 3, monotonically increasing but present everywhere) -- whatever it
+    encodes, it isn't this. Still NOT a byte-by-byte semantic crack (no
+    field NAME is attached to any of these positions -- this is purely "X
+    correlates with divided status", not "byte N is the `divided` bit"),
+    but meaningfully stronger evidence than the original byte2/3-only
+    finding: 4 independent positions, not 2, converge on the same
+    qualitative pattern.
     """
     if declen is None:
         declen = len(raw)
