@@ -2139,6 +2139,41 @@ def decode_topology(raw, declen=None, features=None):
     (rank 0-4, class 0-12, paved's ~94.6% true rate, etc.) as ground
     truth, the same cross-validation technique that cracked `eeu.si`
     itself (README §3.20).
+
+    **UPDATE, same later session, record-boundary search attempted and
+    inconclusive -- a real methodological trap documented here so a
+    future session doesn't repeat it.** Hand-inspecting the first ~7
+    records of the 83-point tile's own tail (above) initially looked like
+    a clean `[uint16 LE id][byte][byte][uint32 LE value]` 8-byte shape
+    for several consecutive records -- but the very next record
+    (`b5 bd 01 01 05 03 00 da 01 00 00`) shares the SAME 3rd byte (`01`)
+    two 8-byte records used as their own "tag" while itself needing 11
+    bytes to hold a plausible trailing value, directly refuting "3rd byte
+    alone determines record length" as a rule. **A backtracking
+    constraint search** (find a `tag -> length` mapping, tag = the 3rd
+    byte of each record, that consumes the WHOLE 878-byte tail with zero
+    leftover) was tried next -- and is a real, documented CAUTIONARY
+    result: an unconstrained search (candidate lengths 3-42) trivially
+    "succeeds" by mostly picking the smallest possible length at every
+    step (a degenerate, meaningless decomposition -- total-byte-
+    consumption alone is FAR too weak a validation criterion, since many
+    different partitions of 878 bytes exist). A more constrained search
+    (candidate lengths restricted to {8,9,10,11}, longest-first) found a
+    DIFFERENT "successful" decomposition -- uniform 8-byte records
+    almost everywhere -- but printing out the resulting fields shows
+    values that are plausible for the first 2-3 records and then become
+    obvious garbage (huge, effectively-random uint32 values with no
+    plausible interpretation) from record 4 onward, i.e. this
+    "successful" consumption is ALSO a false positive, not the real
+    structure -- it just happens to sum to the right total length.
+    **Conclusion: exact total-byte-consumption is a NECESSARY but nowhere
+    near SUFFICIENT test for a candidate record-boundary rule in this
+    region** (unlike, e.g., `eeuz.fea`'s directory-table crack or
+    `eeu.tmc`'s `chain_count` formula, both of which had an independent,
+    exact cross-check available) -- a future attempt needs a genuinely
+    independent validation signal (real ground truth to match against,
+    not just "the bytes add up") before trusting any candidate record
+    shape here.
     """
     if declen is None:
         declen = len(raw)

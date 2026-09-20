@@ -2141,10 +2141,20 @@ directly cross-referencing this schema**:
   but the exact per-record boundary and field layout weren't pinned down
   precisely enough to test a specific byte position against `eeu.si`'s
   own real value ranges as ground truth, and a quick every-byte-position
-  scan across several tiles was too noisy for a clean answer. Left
-  honestly as an open, real lead — see `map_compressed_reader.py`'s
-  `decode_topology()` docstring for the full writeup and the suggested
-  next step.
+  scan across several tiles was too noisy for a clean answer. **A
+  record-boundary search was then attempted directly and found
+  inconclusive** — a documented methodological trap: an unconstrained
+  backtracking search for a `tag → record-length` rule that consumes a
+  tile's tail with zero leftover "succeeds" trivially (many byte
+  partitions sum to the right total), and even a more constrained search
+  (uniform 8-byte records) that also "succeeds" numerically produces
+  obvious garbage values after the first few records when actually
+  decoded — exact total-byte-consumption is necessary but nowhere near
+  sufficient here, unlike `eeuz.fea`'s directory crack or `eeu.tmc`'s
+  `chain_count` formula, which both had an independent exact cross-check
+  available. Left honestly as an open, real lead — see
+  `map_compressed_reader.py`'s `decode_topology()` docstring for the
+  full writeup and the suggested next step.
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style
