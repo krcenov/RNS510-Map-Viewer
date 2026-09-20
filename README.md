@@ -3003,7 +3003,16 @@ and byte 6 as "always 0"; both corrected below at true full scale):
 byte 0 has only 2 distinct values (1, 17 — low nibble=`chain_count`,
 bit 4 a 2nd flag set on 72.1% of records); bytes 1-4 are all high-entropy
 (candidate: `start`/`vseg_id`, byte 4's own bit 7 a real ~50/50 flag,
-candidate `side`); byte 5 is power-law distributed, 78.6% == 1 (robust
+candidate `side`). **Tested and REFUTED (a later session), 2 more
+hypotheses for bytes[1:4]**: as a plain within-table location index
+(`r ≈ 0.012` against the real index, essentially zero correlation), and
+as a cross-reference (big-endian, matching the directory's own
+convention) to another location's own offset-table boundary elsewhere
+in the file (only 2.86% of 74,848 real records land on one of the
+1,218,695 real boundary offsets across all 44 tables — below the ~7%
+rate pure chance alone would predict given that set's own density,
+i.e. coincidental collisions, not a signal). bytes[1:4]'s real meaning
+remains open. byte 5 is power-law distributed, 78.6% == 1 (robust
 at full scale, matches real-world `no_of_segments` — most chains cover
 exactly 1 segment); byte 6 is 99.955% == 0 but has a real, rare
 (325/724,059) nonzero signal (values 1-4) that correlates STRONGLY and

@@ -228,7 +228,29 @@ trusting a "mostly constant" finding on this disc):
                                matches eeu.mod's next field, not confirmed)
     bytes[1:4] (3 bytes)   -- high entropy (256/48/256 distinct values
                                respectively) -- candidate: `start` and/or
-                               `vseg_id`, not individually split
+                               `vseg_id`, not individually split. **Tested
+                               and REFUTED (a later session), 2 hypotheses**:
+                               (a) as a plain within-table LOCATION INDEX
+                               (i.e. this location's own position, matching
+                               the directory's own `start_location` field
+                               naming) -- checked directly against the real
+                               location index for 2,000 real records in
+                               table `117`: `r ~ 0.012`, essentially zero
+                               correlation. (b) as a cross-reference (BE
+                               uint24, matching the directory's own
+                               big-endian offset convention) to ANOTHER
+                               location's own `location_offset_table_p`/`_n`
+                               boundary elsewhere in the file -- checked
+                               against the full set of 1,218,695 real
+                               boundary offsets across all 44 tables: only
+                               2.86% of 74,848 real records' own bytes[1:4]
+                               landed on a real boundary, BELOW the
+                               ~7% rate expected from pure chance alone
+                               given that set's own density over the
+                               value range actually observed -- not a real
+                               signal, just coincidental collisions. Neither
+                               hypothesis holds; bytes[1:4]'s real meaning
+                               remains open.
     byte[4]                -- ALSO high entropy (96 distinct values, top
                                value only 5.3% of records) -- CORRECTED:
                                NOT mostly-constant (see note above). Bit 7
