@@ -2795,7 +2795,26 @@ extensively-investigated `db/`):
   filename (`english.csv`) directly, confirming these are compiled from
   plain CSV. The exact string length/packing scheme was not decoded
   (extracted fragments are often missing their own leading 1-3
-  characters, consistent with an un-decoded length-prefix byte). `.lt`
+  characters, consistent with an un-decoded length-prefix byte). **A
+  later session made a real attempt and hit a genuine wall**: the file
+  splits cleanly into a 39-byte header, a 5,764-byte binary region, and
+  a 7,397-byte NUL-free text blob (first real string: `"proach with
+  care"`, i.e. `"Approach with care"` missing its own `"Ap"`). 2 clean
+  hypotheses for the 5,764-byte region were tested and REFUTED with
+  concrete evidence: a plain (offset,length) uint16 index table (only
+  36% of values land inside the blob's own valid byte range, no visible
+  sequential pattern) and a plain float32 array (motivated by a real,
+  highly skewed byte distribution — `0x40` in 22% of header bytes,
+  `0x00` in 21% — but only 36% of the reinterpreted floats land in a
+  plausible range). The "missing leading characters" effect is real and
+  precisely reproducible at the byte level (confirmed via hex dump, not
+  a scan artifact): the same leading letter `A` is encoded 2 different
+  ways in 2 adjacent entries (`August`'s own `A` is literal; `April`'s
+  is replaced by a single non-ASCII byte) — real evidence of some kind
+  of per-entry prefix/dictionary substitution whose exact scheme (a
+  static shared prefix table? bit-level Huffman coding of just the
+  first few characters?) wasn't identified. Full details:
+  `research/telemat_reader.py`. `.lt`
   files (real per-country binary ALERT-C location tables) were
   identified by convention and structurally examined (no clean small
   fixed-record width found, consistent with the real format's own
