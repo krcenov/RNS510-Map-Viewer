@@ -538,6 +538,36 @@ sub-script begins (see below) -- i.e. bytes 64+ are NOT yet more binary
 header, they're the next real content.
 
 ============================================================================
+`HDD/` -- 2 more real `DLSCRIPT.TXT` commands, and confirmed real
+on-unit filesystem paths (a later session, direct follow-up)
+============================================================================
+`HDD/` has no `.FLI`/`.FRG` payloads of its own -- just 2 variant
+`DLSCRIPT.TXT`s (`HDD_20GB`/`NO_HDD`, matching the 2 real hardware
+configs `HWIDMAP.TXT`/`PRJCTMAP.TXT` already showed exist elsewhere).
+`NO_HDD/RNSMIDEC/CONFIG/DLSCRIPT.TXT` is a trivial no-op (`BOOTMODE_SWL`
+/ `SHOW_SCREEN` / `EXPECTED_TIME 240` / `FINISHED_ECU`, nothing
+installed). `HDD_20GB`'s own script is real and substantive: a
+`MULTI_VERIFY_HDD 3 3 50 2 25 3 25 0 0` integrity-check step (real
+command, numeric parameters not decoded), then 22 `FILE_UPDATE <dest>
+<byte-size> <src>` commands (a 3rd, genuinely new `DLSCRIPT.TXT`
+command beyond `INSTALL_FRAGMENT`/`LOAD_FIB`/`LOAD_LIBRARY`) copying
+every `SPEECH/*.ZIP`/`SpeechRes.xml`/`LanguagePackage_version.txt` file
+onto the unit's own internal hard disk, e.g.:
+
+    FILE_UPDATE /hdb2/speech/parts/uvo_csCZ_01.zip 16746861 /cddos/SPEECH/UVO_CZ.ZIP
+
+Confirms a REAL on-unit filesystem mount point, `/hdb2/speech/...`
+("hdb2", plausibly "hard disk B, partition 2"), and gives the real
+locale-code-to-disc-filename mapping for every one of the 14 `UVO_*.ZIP`
+voice packs (`csCZ`=Czech, `deDE`=German, `enGB`=British English,
+`enGM`=a 2nd English variant, `esES`=Spanish, `frFR`=French,
+`itIT`=Italian, `nlNL`=Dutch, `ptPT`=Portuguese, `svSV`=Swedish,
+`trTR`=Turkish, `plPL`=Polish, `noNO`=Norwegian, `ruRU`=Russian,
+`arAE`=Arabic) -- this disc's own real byte-size arguments match the
+real on-disc `SPEECH/*.ZIP` file sizes exactly (same convention
+already confirmed for `DLSCRIPT.TXT`'s other commands, above).
+
+============================================================================
 `.FRG`'s own embedded sub-script -- a genuinely new, small command
 vocabulary, extending `DLSCRIPT.TXT`'s own (both found this session)
 ============================================================================
@@ -632,10 +662,13 @@ NOT done this session
 - `INFO/CDSTRUCT.CFG` (25,955 lines) was characterized (grammar, keyword
   set, the real dated comment header) but not fully parsed line-by-line.
 - `WA/*.WSH` shell scripts, `SPEECH/FRG/*.FRG` (44 files) and
-  `SPEECH/*.ZIP` (24 files) were enumerated by name/size only, not
-  opened. `HOST`/`RADIO`/`MPEG`/`DAB`/`VUCI` got only a first-pass
-  string scan (above), not a deep investigation; `HDD` wasn't checked
-  for any `.FLI`/`.FRG` payloads at all.
+  `SPEECH/*.ZIP` (24 files, though `HDD/HDD_20GB`'s own `DLSCRIPT.TXT`
+  now confirms their real on-unit destination paths and locale codes,
+  above) were enumerated by name/size only, not opened. `HOST`/`RADIO`/
+  `MPEG`/`DAB`/`VUCI` got only a first-pass string scan (above), not a
+  deep investigation. `HDD` itself was fully checked (no `.FLI`/`.FRG`
+  payloads exist there at all -- confirmed, not just unexamined -- see
+  above).
 - `CTEST.OUT`'s real DWARF `.debug_info`/`.debug_line` sections were
   confirmed present but not parsed (no DWARF parser was written this
   session -- would give real source-line-level detail if a future

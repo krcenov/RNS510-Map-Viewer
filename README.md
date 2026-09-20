@@ -192,6 +192,17 @@ any `.cpp`/`.h` debug-string paths at all, unlike `FHDD6.FLI`/
 codebases or debug-stripped builds. Not investigated further; real,
 open, low-priority leads for a future session.
 
+**`HDD/` has no `.FLI`/`.FRG` payloads of its own — just 2 variant
+`DLSCRIPT.TXT`s.** `NO_HDD`'s is a trivial no-op; `HDD_20GB`'s is real
+and substantive: a `MULTI_VERIFY_HDD` integrity-check step, then 22
+`FILE_UPDATE <dest> <size> <src>` commands (a 3rd genuinely new
+`DLSCRIPT.TXT` command) copying every `SPEECH/*.ZIP` voice pack onto
+the unit's own internal hard disk — confirming a real on-unit
+filesystem mount point (`/hdb2/speech/...`) and the real locale-code-
+to-disc-filename mapping for all 14 `UVO_*.ZIP` packs (e.g.
+`FILE_UPDATE /hdb2/speech/parts/uvo_csCZ_01.zip 16746861 /cddos/
+SPEECH/UVO_CZ.ZIP`).
+
 **`FHDD6.FLI` re-examined — one refutation, no new crack**: a raw ELF-
 magic scan over the whole 85.6MB file finds 4 hits inside the
 already-identified 76-85.6MB VxWorks-kernel region (§2.1) — all 4 are
