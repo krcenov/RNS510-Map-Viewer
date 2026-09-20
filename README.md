@@ -272,7 +272,22 @@ to every other string's. Most likely explanation: these are DWARF-
 `.debug_str`-like debug-only strings, structurally never referenced by
 executing code, so no code-side cross-referencing technique can locate
 them — a genuine, structural dead end for this line of attack, not an
-unexplored gap.
+unexplored gap. **Confirmed a 2nd, independent way, a still-later
+session**: built and validated a real DWARF2 parser
+(`research/dwarf2_reader.py`) against `WA/CTEST.OUT`'s own
+`.debug_info` (a complete, correct 35-function map, exactly cross-
+checked against that file's `.symtab`, plus the real compiler identity
+`GNU C gcc-2.96 (2.96+ MW/LM) 19990621 AltiVec VxWorks 5.5` and a real
+internal build path `F:\Entwicklung\e60-tools\CodingTest\cp2\PPC603gnu`
+— "e60" directly extends §2.1's own already-known navicore codename to
+this factory-test module too). Every one of that file's compilation
+units carries this exact producer string — searching for it (and
+related build-path fragments) across the whole 24MB `FHDD6.FLI` region
+found **zero hits**, despite 1,476+ distinct source-file basenames
+implying hundreds of compilation units that would each carry one if
+real `.debug_info` survived. Direct, structural confirmation — not just
+an absence-of-correlation inference — that no real DWARF info exists
+there, only a bare stripped string pool.
 
 **A complete, real, NAMED pipeline for the long-standing GLOBAL
 routing-graph "topology node-id↔coordinate mapping" problem** (§3.2's

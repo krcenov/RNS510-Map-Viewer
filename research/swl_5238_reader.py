@@ -399,6 +399,27 @@ real hardware, or the original build's own unstripped object files).
 Recorded here in detail so a future session doesn't repeat the same
 `lis`/`addi` correlation attempt expecting a different result.
 
+**UPDATE, a still-later session: this DWARF-debug-only-data hypothesis
+was tested a 2nd, independent, more DIRECT way and CONFIRMED.** Built a
+real DWARF2 parser (`research/dwarf2_reader.py`) and validated it
+against `WA/CTEST.OUT`'s own `.debug_info` (a complete, correct 35-
+function map, cross-checked exactly against that file's `.symtab`) --
+confirming real DWARF `.debug_info` from THIS SAME GCC 2.96 toolchain
+always carries a `DW_AT_producer` string (`"GNU C gcc-2.96 (2.96+
+MW/LM) 19990621 AltiVec VxWorks 5.5"`) and a `DW_AT_comp_dir` build path
+(`"F:\Entwicklung\e60-tools\CodingTest\cp2\PPC603gnu"`) on EVERY single
+compilation unit. Searched the whole 24MB `FHDD6.FLI` region directly
+for this exact producer string and build-path fragments (`"gcc-2.96"`,
+`"GNU C"`, `"AltiVec VxWorks"`, `"PPC603gnu"`, `"e60-tools"`,
+`"Entwicklung"`): **zero hits for every one**, despite 1,476+ distinct
+source-file basenames implying hundreds of compilation units that WOULD
+each carry one of these strings if real `.debug_info` survived. This is
+direct, structural confirmation (not just an absence-of-correlation
+inference from the `lis`/`addi` test) that no real DWARF `.debug_info`
+exists anywhere in this region -- only a bare, stripped string pool
+does. Closes the load-base question a 2nd, independent way; see
+`research/dwarf2_reader.py`'s own docstring for the full writeup.
+
 ============================================================================
 The GLOBAL routing-graph node problem (`vnodeID`, README's own long-
 standing "topology node-id<->coordinate mapping" open lead, wiki's
@@ -669,10 +690,17 @@ NOT done this session
   deep investigation. `HDD` itself was fully checked (no `.FLI`/`.FRG`
   payloads exist there at all -- confirmed, not just unexamined -- see
   above).
-- `CTEST.OUT`'s real DWARF `.debug_info`/`.debug_line` sections were
-  confirmed present but not parsed (no DWARF parser was written this
-  session -- would give real source-line-level detail if a future
-  session wants it).
+- `CTEST.OUT`'s `.debug_info`/`.debug_abbrev` -- CRACKED, a later
+  session: see `research/dwarf2_reader.py`, a real, validated DWARF2
+  parser giving a complete function-name-to-byte-range map for all 35
+  real functions across its 4 compilation units, cross-validated exactly
+  against `.symtab`, plus the real compiler identity (`GNU C gcc-2.96
+  (2.96+ MW/LM) 19990621 AltiVec VxWorks 5.5`) and real internal build
+  path (`F:\Entwicklung\e60-tools\CodingTest\cp2\PPC603gnu` -- directly
+  extends README S2.1's already-known "navicore, codename e60" identity
+  to this factory-test module too). `.debug_line` (source-line mapping)
+  still NOT parsed -- `dwarf2_reader.py` only covers `.debug_info`/
+  `.debug_abbrev`.
 - The 0-24MB native-PowerPC region's rich debug-STRING table was mined
   (source paths, the `dbaLib` dynamic-loader log strings, 77 versioned
   `db_*_V0NN` accessor names -- see above). Locating or disassembling
