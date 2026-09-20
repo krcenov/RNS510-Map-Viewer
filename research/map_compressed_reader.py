@@ -2404,6 +2404,104 @@ def decode_topology(raw, declen=None, features=None):
     street segment -- a genuine, human-verified acceptance test that no
     prior candidate in this project has ever had for this specific file
     region.
+
+    ============================================================================
+    A REAL PER-ID-LENGTH PARSER, a still-later session: genuine structural
+    progress on `mg4`-format tiles, PLUS 6 more real, human-verified ground-
+    truth points from the user's own RNS510 unit -- but the "divided road"
+    hypothesis this parser initially suggested is now CLEANLY REFUTED with
+    2 more confirmed non-divided highways. Real structure was found; it
+    just isn't "divided" that it encodes.
+    ============================================================================
+    **The parser, built from scratch by hand (not blind search)**: careful
+    byte-level inspection of the CONFIRMED-divided `A1_2389` tile's own tail
+    found that the SAME 2-byte leading value at a record's start ALWAYS
+    implies the SAME record length across every occurrence (e.g. id 42509
+    is always 10 bytes, id 15660 is always 8 bytes, id 5204 is always 9
+    bytes -- verified by hand across a dozen+ records before automating).
+    Crucially, EVERY verified record also ends in exactly 2 zero bytes
+    (`00 00`) -- a real, semantically meaningful terminator, not just a
+    consumption artifact. Automating this as a constraint-propagation
+    backtracking parser (`id -> length` map, built on the fly, requiring
+    every candidate length to end in `00 00`) converges FAST and
+    deterministically on `A1_2389` (2,068 steps, unseeded) to a stable
+    229-record/196-point solution (~1.17 records/point) whose length
+    distribution (71% plain 8-byte records, the rest 9-14-byte "special"
+    records) matches the ALREADY-established "junctions get bigger records
+    than through-points" pattern from the LOCAL topology crack -- real,
+    independent corroboration, not just self-consistency.
+
+    **6 more real, human-verified ground-truth points, all from the user's
+    own RNS510 unit** (preserved here in full, extending the 3 already
+    logged above):
+      4. **Hemus/A2 motorway, Sofia** -- `eeuz.mg4`, tile_id 2388, file
+         offset 6,553,798, feature 0 (196... actually 226 points), edge
+         points #177<->#179 (23.46552,42.70888 / 23.46688,42.70935).
+         Initially thought to be a contrast (non-divided) case; the user
+         later CONFIRMED this specific point IS on a newer DIVIDED
+         motorway section.
+      5. **A6, near Sofia** -- `eeuz.mg4`, tile_id 2380, file offset
+         6,533,304, point 65 of feature 0 (192 points), EXACT coordinate
+         match (23.14611,42.66354 vs. the user's own 23.14609,42.66354).
+         CONFIRMED by the user: single carriageway, still under
+         construction toward eventual motorway status -- i.e. real,
+         current NON-divided status.
+      6. **A2, western Bulgaria** -- named coordinate 22.23181,42.17325 in
+         `eeu.rd`; the nearest-anchor `mg4` tile match was ~13km off (not
+         trustworthy, not used further). CONFIRMED by the user: "single
+         dual lane road, 1 lane in one direction and another single lane
+         in the other direction" -- i.e. also real NON-divided status,
+         just not tied to a precisely-verified tile/byte position here.
+      7-9. Also checked and RULED OUT as unusable: a 2nd `eeuz.mg4`
+         coordinate on the real A2 corridor near Varna (27.86042,43.22266)
+         turned out not to be on the A2 at all (confirmed via the disc's
+         own `nearby_streets_for_point` output, matching a real Varna
+         street context instead); a coordinate near the real A3/Maritsa
+         motorway (22.76347,41.95991) turned out to be an unrelated
+         village street/dirt road, not the motorway. Both correctly
+         identified as bad data points by the user's own real-world
+         knowledge before being used for anything -- exactly the kind of
+         check that keeps ground truth trustworthy.
+
+    **The "divided" hypothesis this parser's own length-distribution
+    signal initially suggested is now CLEANLY REFUTED.** Testing the
+    length-distribution split (percentage of plain 8-byte vs. 9-byte
+    records) across all 3 tiles with KNOWN, PRECISE ground truth:
+
+        A1_2389   (CONFIRMED divided)    8-byte=71%  9-byte=14%
+        Hemus/A2  (CONFIRMED divided)    8-byte=40%  9-byte=46%
+        A6        (CONFIRMED NON-divided) 8-byte=41%  9-byte=49%
+
+    `A6` (non-divided) and `Hemus` (divided) show NEARLY IDENTICAL
+    length-distribution signatures (~40%/~46-49%), while `A1` (also
+    divided) shows a COMPLETELY DIFFERENT one (71%/14%) from BOTH of
+    them. This directly rules out "divided status" as what the 8-vs-9-
+    byte record-length split encodes -- two roads with OPPOSITE divided
+    status look alike, while two roads with the SAME divided status look
+    different. A real, honest refutation using precise ground truth, not
+    a discouraging outcome to hide: the underlying PARSER (per-ID-
+    consistent length, `00 00`-terminated records) is still real,
+    working structure -- it just isn't `divided` specifically that this
+    particular signal (8-vs-9-byte ratio) tracks. Plausible alternatives,
+    not yet tested: construction/data-vintage status (A6 is explicitly
+    "still under construction" -- a real, unusual state that could
+    affect how its segments are encoded), real geometric complexity
+    (curve/junction density), or a real attribute unrelated to road
+    classification entirely (e.g. `eeu.si`'s own `restclass`/
+    `route_num_type`/`urban` fields, not `divided`).
+
+    **Also confirmed the SAME session, directly from the user's own
+    on-screen observation of the real unit**: the 5 tile layers are real
+    ROAD-CLASS tiers, not generic zoom simplification --
+    `mg4`=highways, `mg3`=main roads, `mg2`=boulevards, `mg1`=main
+    streets, `mp0`=everything else (see this module's own top docstring
+    and README S3.6 for the full writeup) -- meaning the `mp0`-format
+    Vladimir Bashev ground truth (points 1-3 above) is in a DIFFERENT,
+    not-yet-analyzed record format from this `mg4` parser, and could not
+    be used for a direct same-format comparison this session (a real,
+    separate reverse-engineering target for a future session, not
+    started successfully here -- a wide-candidate-range attempt
+    exhausted 15,000,000 search steps with no solution).
     """
     if declen is None:
         declen = len(raw)
@@ -2507,6 +2605,100 @@ def decode_topology(raw, declen=None, features=None):
             "graph_degree": degree,
         })
     return results
+
+
+# ---------------------------------------------------------------------------
+# `seg_list` TAIL REGION -- real, working per-ID-length record parser for
+# MG4-FORMAT tiles (real structure, validated on 2 tiles with precise real
+# ground truth; the "divided road" hypothesis it initially suggested was
+# tested against 2 MORE ground-truth tiles and REFUTED -- see
+# decode_topology()'s own docstring, "A REAL PER-ID-LENGTH PARSER" section,
+# for the full writeup and all 6 ground-truth points). NOT yet extended to
+# `mp0`-format tiles (confirmed a genuinely different byte structure --
+# a wide-candidate-range attempt exhausted 15,000,000 search steps with no
+# solution).
+# ---------------------------------------------------------------------------
+_SEG_TAIL_CANDIDATE_LENGTHS = (8, 9, 10, 4, 11, 12, 13, 14, 6, 7, 5)
+
+
+def seg_tail_region(raw, declen, feature, features, table_start=None):
+    """Return the raw bytes of one feature's own `seg_list` tail (the region
+    immediately after its local topology table, up to the next feature's own
+    topology table or the tile's end) -- the region `decode_topology()`
+    itself stops at. For a SINGLE-feature tile this is exact (bounded by
+    `declen`); for a MULTI-feature tile the true per-feature boundary is
+    NOT reliably locatable yet (an attempt via `_find_topology_table_start`
+    on the next feature produced an implausible, too-short result on a real
+    multi-feature tile -- see the docstring above) -- only use this on
+    single-feature tiles until that's fixed."""
+    n = len(feature["points"])
+    if table_start is None:
+        last_block_end = max(f["block_end"] for f in features)
+        table_start = _find_topology_table_start(raw, declen, n + 1, last_block_end)
+    tail_start = table_start + (n + 1) * 10
+    return raw[tail_start:declen]
+
+
+def parse_seg_tail_records(tail, max_steps=8_000_000, candidate_lengths=_SEG_TAIL_CANDIDATE_LENGTHS):
+    """Parse a `seg_list` tail (see `seg_tail_region()`) into records using
+    the real, validated model: each record starts with a 2-byte LE id;
+    the SAME id always implies the SAME record length (learned on the fly,
+    not assumed); every valid record ends in exactly `\\x00\\x00`. This is a
+    constraint-propagation backtracking search, NOT a blind formula search
+    -- the `00 00`-terminator requirement is what keeps it from the
+    over-permissive trap documented in `decode_topology()`'s own docstring
+    (a blind "any length that consumes the tail" search there was refuted).
+
+    Returns `(ok, records, id_length_map, steps)` where `records` is a list
+    of `(offset, id, length)` tuples in tail-relative order (empty if
+    `ok` is False). Validated (real ground truth, see `decode_topology()`'s
+    docstring): converges in ~2,000-4,500 steps on real MG4-format tiles
+    with 190-230 points; has NOT been validated on tiles much larger than
+    that (larger real tiles may need a bigger `max_steps` budget, or may
+    need per-feature boundary fixes for multi-feature tiles -- see
+    `seg_tail_region()`'s own caveat)."""
+    n = len(tail)
+    id_len = {}
+    steps = [0]
+    records = []
+
+    def valid_end(pos, length):
+        return pos + length <= n and tail[pos + length - 2:pos + length] == b"\x00\x00"
+
+    def rec(pos):
+        steps[0] += 1
+        if steps[0] > max_steps:
+            raise TimeoutError
+        if pos == n:
+            return True
+        if pos + 2 > n:
+            return False
+        idv = struct.unpack_from("<H", tail, pos)[0]
+        if idv in id_len:
+            length = id_len[idv]
+            if not valid_end(pos, length):
+                return False
+            records.append((pos, idv, length))
+            ok = rec(pos + length)
+            if not ok:
+                records.pop()
+            return ok
+        for length in candidate_lengths:
+            if not valid_end(pos, length):
+                continue
+            id_len[idv] = length
+            records.append((pos, idv, length))
+            if rec(pos + length):
+                return True
+            records.pop()
+            del id_len[idv]
+        return False
+
+    try:
+        ok = rec(0)
+    except TimeoutError:
+        return False, [], {}, steps[0]
+    return ok, records, id_len, steps[0]
 
 
 # ---------------------------------------------------------------------------

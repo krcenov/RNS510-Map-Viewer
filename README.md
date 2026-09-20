@@ -2428,7 +2428,34 @@ directly cross-referencing this schema**:
   `db_seg_rank_V004` accessor names suggest per-segment classification
   may be encoded DIRECTLY in each `seg` record, with `seginfoID` being a
   comparatively rare optional cross-reference, not the primary
-  mechanism).
+  mechanism). **A real, working per-ID-length parser was then built by
+  hand (`research/map_compressed_reader.py`'s `parse_seg_tail_records()`/
+  `seg_tail_region()`) — genuine progress, validated on `mg4`-format
+  tiles**: the same 2-byte leading id at a record's start always implies
+  the same record length (learned on the fly), and every valid record
+  ends in exactly `00 00` — a real, semantically meaningful terminator
+  that keeps this from the earlier over-permissive trap. Converges fast
+  and deterministically (~2,000 steps, unseeded) to a stable solution
+  whose length distribution (71% plain 8-byte records, rest larger
+  "special" records) matches the already-established "junctions get
+  bigger records" pattern from the local topology crack. **6 more real,
+  human-verified ground-truth points from the user's own RNS510 unit**
+  (full coordinates preserved in `decode_topology()`'s docstring) let
+  this parser's own 8-vs-9-byte length-distribution signal be tested
+  directly against KNOWN divided/non-divided status — **and it's now
+  CLEANLY REFUTED as a "divided" indicator**: `A6` (confirmed non-
+  divided, still under construction) and `Hemus/A2` (confirmed divided)
+  show nearly IDENTICAL signatures (~40%/~46-49%), while `A1` (also
+  confirmed divided) shows a completely different one (71%/14%) from
+  both. Two roads with opposite divided status look alike; two roads
+  with the same status look different — ruling this specific signal out
+  as a divided-status indicator, though the underlying parser structure
+  is still real. Plausible untested alternatives: construction/data-
+  vintage status, geometric complexity, or an unrelated `eeu.si` field
+  entirely. The `mp0`-format Vladimir Bashev ground truth remains
+  unusable for this specific parser (confirmed genuinely different byte
+  structure — a wide-range attempt exhausted 15M search steps with no
+  solution) — a separate, not-yet-started reverse-engineering target.
 
 **What's not cracked**: the exact binary encoding surrounding each field
 name (hand inspection suggests a `[type/flag][size][size][...]`-style
