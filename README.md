@@ -2855,8 +2855,50 @@ extensively-investigated `db/`):
   `alle_DbNavRbg3057_vw_split_mp0`, `alle_dbal_DbNavRbg3119_
   house_number_opt`, `alle_DbNavRbg2825_intersection_roundabout`,
   `alle_tmc_exit_fix`, and `lupa_dbal_DbNavRbg3501_RNS510_
-  wrong_phoneme_Dummy_V10` — literally naming "RNS510"). Full details:
-  `research/dbal_reader.py`.
+  wrong_phoneme_Dummy_V10` — literally naming "RNS510"). **A later
+  session, prompted by a direct re-check of this folder, diffed all 5
+  versions' own embedded string sets against each other** (string counts
+  grow monotonically 4208→4405→4600→4780→4802, real successive builds):
+  a "first appears in version X" scan finds `db_postalcode.*` was ADDED
+  in V007_038 (absent from V006_047's own baseline); V008_704 adds 36
+  files in one jump, including a whole aspect/event/listener-proxy
+  observer-pattern framework for display-language/voice-language/unit-
+  of-measurement change notifications (`displaylanguagechangedaspect.h`
+  etc.) plus a `mapjobqueue.h`/`maploader.h` job-queue abstraction, and
+  the `CPhonemeEUHandler`/`CPhonemeNA*Handler` class family (see below);
+  V009_038 adds 25 files, a real "navmedia" disc/media-management
+  subsystem (coverage/vendor/version/part-number/"request copy
+  database"/"select media"/"eject media", directly relevant to this
+  disc's own `DBINFO.TXT`/`cdrom.toc` part-number metadata) plus
+  `guidancejunctionviewinfo.h`, independently confirming `eeu.mod`'s own
+  `intersection_view`/`junction_view` schema fields (§3.16) were a V009-
+  era addition; V010_015 adds exactly 1 file,
+  `routepath_coordhashtable.h`, a coordinate-keyed hash table over
+  route-path segments (found alongside 2 real error strings,
+  `"itemsEqual(), headPosition/tailPosition, getNodePosition failed!"` —
+  not yet linked to any specific on-disc table). **A full V010_015-vs-
+  V006_047 file diff found 65 additions and 11 REMOVALS — all 11 belong
+  to one real "generic corridor" subsystem** (`corridorbackend.h`,
+  `corridorcatalogstorage.h`, `corridorhelpers.h`, `corridormp0storage.h`,
+  etc, source path `K:\siemens\...\genericcorridor\...`), present in
+  BOTH V006_047 and V007_038 and gone from V008_704 onward — removed at
+  exactly the same release boundary the aspect/event framework was
+  added at. Real runtime strings (`"Unsupported request in corridor mode
+  (dir=%d, catID=%d, count=%d)!"`, `"MP0Storage:constructor:
+  oslib_MutexCreate failed"`) confirm it was a real working feature, not
+  dead code; `corridormp0storage.h` directly referencing `eeuz.mp0`
+  suggests it was a route-corridor predictive tile-prefetch cache, later
+  removed/replaced. **The V008_704 phoneme classes are a real, dated
+  EU/North-America architectural split**, confirmed via mangled C++
+  symbols naming an actual `dbal::phonemes::` namespace
+  (`Q34dbal8phonemes17CPhonemeEUHandler`) — `CPhonemeEUHandler` (this
+  disc's own family) reads `eeuz.pca`/`.pct`/`.prd`/`eeu.pcl` directly,
+  while `CPhonemeNAFileReaderHandler`/`CPhonemeNAFlashHandler`/
+  `CPhonemeNAFlashFile` use a completely different "flash file"
+  (`loadPhonemeFileFlashMemory`) code path — strong evidence the
+  phoneme *data format itself*, not just the handler class, differs
+  between EU discs like this one and the (never-seen here) North
+  American disc family. Full details: `research/dbal_reader.py`.
 - **`tpd/`** (1,443 files, by far the largest disc-root area) —
   CRACKED at the system level (every distinct file role identified and
   confirmed with real content); the per-country compressed search-table
@@ -2934,8 +2976,12 @@ cracked using ground truth found via `config/create_cd` (§3.24):
 `telemat/tmc2/TMCCONFIG.ini` confirmed this disc's real ALERT-C/TMC
 conventions, and `dbal/`'s own embedded source-file list independently
 confirms the real handler is named `db_tmc.cpp` (plus a
-`db_tmc_deprecated.cpp` twin, suggesting the format changed between
-DBAL versions).
+`db_tmc_deprecated.cpp` twin — **CORRECTED, a later session**: a 5-
+version diff of every `dbal/V0*/DBAL.OUT` found both files coexist in
+ALL 5 DBAL versions, refuting the earlier guess that the on-disc TMC
+format changed between DBAL releases; `_deprecated` more likely means a
+legacy/alternate encoding kept for backward compatibility, §3.24-
+adjacent `dbal/` bullet).
 
 `eeu.mod` names this table `"tmc file"` (74 raw strings, §3.16) — after
 the usual boilerplate, a `tmc_file_header` (`no_of_location_tables`,
