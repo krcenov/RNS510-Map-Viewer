@@ -133,6 +133,38 @@ prematurely -- 2 concrete simple hypotheses were tried and cleanly
 refuted with real byte-level evidence rather than just re-asserting the
 prior session's "not decoded" note.
 
+**A LATER session, from the FIRMWARE side** (a separate factory
+firmware disc the user provided, `research/swl_5238_reader.py`): while
+investigating the `eeu.tmc` leaf-content wall, the firmware's own
+embedded debug strings revealed a real, complete `LanguageTable`/
+`TokenTable`/`NodeTokenEntity` subsystem -- real methods
+`SortTokenTable`, `FindLongestInTokenTable__13LanguageTableUiUi`,
+`FindTextInTokenTable__13LanguageTablePC9CfcStringRUiP9CfcString`,
+`AddTokenEntity__13LanguageTableRC9CfcStringT1Ui`, and a real
+`decode__13LanguageTableR19CfcIoCodecInterfaceR13CfcUtilBuffer`
+deserializer -- i.e. a genuine LONGEST-MATCH DICTIONARY TOKENIZER,
+architecturally exactly the kind of mechanism that would produce this
+project's own "missing leading characters" observation (a common
+prefix/word gets replaced by a short token id during encoding; decoding
+looks the id back up in the same shared table). **Important caveat, to
+avoid overclaiming**: the real source path for this exact class is
+`N:/siemens/source/navicore/modules/naviservice/voicegeneral/
+SentenceAssembler.cpp` -- this is the TURN-BY-TURN VOICE-GUIDANCE
+sentence assembler (building spoken instructions from `NodeVoiceToken`
+sequences), a DIFFERENT, though clearly related, resource from
+`telemat/tmc2/lan/*.et`'s own raw phrase-fragment library. `LanguageTable`
+does have its own `AddTmc`/`GetTmc`/`SetTmc`/`GetTmcToken` methods,
+confirming TMC-derived content DOES flow through this same token-table
+pipeline when being spoken aloud -- but that's downstream of the raw
+`.et` bytes (presumably read by the separate `CFlowTmc`/`TMC_List`
+code the same firmware scan found), not proof this exact class parses
+`.et` files directly. **Net effect**: a plausible, structurally
+consistent MECHANISM (dictionary/token-table substitution) for the same
+codebase and era, not a confirmed identification of `.et`'s own file
+format -- upgrades this wall from "no idea what kind of scheme this is"
+to "very likely a dictionary/token-table scheme, real precedent exists
+in this exact code area," without closing it.
+
 ============================================================================
 `eventinfo_2011_11_30_eu_nar_chnexc.cat` (866 bytes) -- NOT examined
 in depth

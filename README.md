@@ -2921,7 +2921,20 @@ extensively-investigated `db/`):
   is replaced by a single non-ASCII byte) — real evidence of some kind
   of per-entry prefix/dictionary substitution whose exact scheme (a
   static shared prefix table? bit-level Huffman coding of just the
-  first few characters?) wasn't identified. Full details:
+  first few characters?) wasn't identified. **A later session, from the
+  FIRMWARE side**: the same firmware image (§2.6) embeds a real,
+  complete `LanguageTable`/`TokenTable`/`NodeTokenEntity` subsystem
+  (`SortTokenTable`, `FindLongestInTokenTable`, `AddTokenEntity`, a real
+  `decode()` deserializer) — architecturally exactly the kind of
+  longest-match dictionary tokenizer that would produce this "missing
+  leading characters" pattern. Important caveat: its real source path is
+  `naviservice/voicegeneral/SentenceAssembler.cpp` — the TURN-BY-TURN
+  VOICE-GUIDANCE sentence assembler, a different (though `LanguageTable`
+  does have its own `AddTmc`/`GetTmc`/`SetTmc` methods, so TMC content
+  does flow through it when spoken aloud) resource from `.et`'s own raw
+  phrase table. Upgrades this wall from "unknown scheme" to "very likely
+  a dictionary/token-table scheme, real precedent exists in this exact
+  code area" without closing it. Full details:
   `research/telemat_reader.py`. `.lt`
   files (real per-country binary ALERT-C location tables) were
   identified by convention and structurally examined (no clean small
