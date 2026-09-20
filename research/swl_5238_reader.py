@@ -399,6 +399,46 @@ real hardware, or the original build's own unstripped object files).
 Recorded here in detail so a future session doesn't repeat the same
 `lis`/`addi` correlation attempt expecting a different result.
 
+**UPDATE, a still-later session: the pattern-based prologue-finder
+identified above WAS built and run -- finds 7,757 REAL function starts,
+but does NOT solve the correlation problem; a real, informative
+structural finding, not a fix.** PowerPC's `mflr r0` instruction always
+encodes to the exact same 4 bytes (`7c 08 02 a6`) regardless of which
+function it's in, and every real GCC-2.96 function prologue in this
+codebase starts with `stwu r1,-N(r1)` (`94 21` + a 2-byte frame size)
+immediately followed by it (confirmed on `WA/CTEST.OUT`'s own real,
+disassembled `TestCoding` function). Scanning the whole 24MB region for
+the fixed 8-byte pattern `94 21 ?? ?? 7c 08 02 a6` finds 7,757 matches --
+real, low-false-positive candidate function starts (2 wildcard bytes
+out of 8 is a very tight signature).
+
+**The real payoff of this scan is a clear map of the file's own
+internal layout, not a name-to-address link**: match DENSITY drops from
+900-1,235 per MB (1MB-9MB) to functionally ZERO from 9MB onward (only 2
+stray matches in 11-12MB, none at all in 9-11MB) -- i.e. the real
+`.text`-equivalent code region is roughly file offset 1.2MB-9MB, and
+the debug-string region this session's earlier scans found (rich from
+~8.9MB onward, e.g. `db_seg_marker_left_V004` at 11,296,384) starts
+right where the code region ends. **This directly explains why no
+proximity-based correlation is possible**: checked the nearest real
+prologue to each of 5 known accessor-name string offsets -- distances
+ranged 194,844 to 2,425,295 bytes (194KB to 2.3MB) -- code and debug
+strings are genuinely separate, non-adjacent regions by construction
+(consistent with a real, if stripped, `.text`/`.debug_str`-style
+section split), not merely unlucky. **Honest conclusion**: the
+prologue-finder works exactly as designed (finds real functions) but,
+without a surviving symbol table or recoverable load-base address
+(both independently confirmed absent above), there is no way to
+determine WHICH of the 7,757 real candidate functions is
+`db_seg_marker_left_V004` specifically. A further, much more labor-
+intensive next step for a future session -- manually disassembling a
+sample of the SHORTEST candidate functions (a real getter/accessor
+like `db_seg_marker_left` should be very short: load one field, mask/
+shift, return) looking for a pattern that plausibly matches -- was
+identified but not attempted this session, given the scale (7,757
+candidates) and the lack of any way to verify a match once found short
+of testing its extracted bit-offset against real `mg4` tile bytes.
+
 **UPDATE, a still-later session: this DWARF-debug-only-data hypothesis
 was tested a 2nd, independent, more DIRECT way and CONFIRMED.** Built a
 real DWARF2 parser (`research/dwarf2_reader.py`) and validated it
