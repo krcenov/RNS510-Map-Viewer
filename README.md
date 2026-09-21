@@ -2609,11 +2609,26 @@ directly cross-referencing this schema**:
   transcriptions) raises this to 95.8%. **`X` is now FULLY explained**:
   it's simply the entry's own total byte length (header + text + NUL)
   rounded up to the next odd integer — zero exceptions across 1,834
-  validated entries. `ZZ` narrows to a 2-family binary split (16/17 vs
-  4/5, weakly correlated with bare route-number text, not
-  deterministic) — still open. `Y` is confirmed NOT a simple counter
-  (irregular diffs, sometimes repeats the same value across 2 different
-  entries) — still open.
+  validated entries.
+
+  **The remaining 4.2% was a SECOND bug (fixed to 100%), and `Y`/`ZZ`
+  turned out to encode a real HIGHWAY-SIGN structure.** The regex's own
+  `{3,40}` length cap was truncating longer multi-destination strings
+  (e.g. the real 47-character `13^MEZDRA/13^KREMIKOVTSI/13^KALOTINA/
+  13^BELGRAD`), matching a spurious later point inside the string and
+  reading garbage as its header — widened to `{3,200}`, now **100.0%
+  exact match on both `WW` and `X`**. With clean data: **`Y` links
+  PAIRS of entries into a route↔destination relationship, and `ZZ`'s
+  family (16/17 vs 4/5) encodes which role a string plays** — 172 of
+  203 same-tile `Y`-sharing pairs (84.7%) show one entry in each
+  family, and the actual text confirms it directly: family-4 entries
+  are real road/route designators (`13^A3/13^E79`, `65^DN6`, bare
+  numbers like `13^9/13^E87`), family-16 entries are real destination
+  place names (`SOFIA`, `PLOVDIV`, `BUCURESTI`). Entries whose `Y` is
+  unique in their tile (no pairing partner) are overwhelmingly
+  family-16 (98.4%) — the "standalone place name" default. Not
+  perfectly clean (31 of 203 pairs share the same family); `Y`'s own
+  numeric value beyond "is it shared" is still unidentified.
 
   **Zone 2's record format GENERALIZED to multiple tiles, a still-later
   session — one real correction found.** `decode_mp0_zone2()` re-derives

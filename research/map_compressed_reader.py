@@ -3111,6 +3111,57 @@ def decode_topology(raw, declen=None, features=None):
     entries) -- still open. Full corrected writeup, including the exact
     validation numbers: `extract_district_names()`'s own docstring.
 
+    ==== UPDATE, same session, immediately following: the "5.8% of
+    entries mismatch" gap turned out to be a REGEX BUG, not a different
+    format -- fixed, then `Y`/`ZZ` cracked as a real HIGHWAY-SIGN
+    route<->destination pairing ====
+    Manually traced one of the "implausible header" mismatches (`13^
+    KREMIKOVTSI/13^KALOTINA/13^BELGRAD`, header all zeros) back to its
+    real raw bytes and found the TRUE full string was `13^MEZDRA/13^
+    KREMIKOVTSI/13^KALOTINA/13^BELGRAD` (47 characters) -- a genuine,
+    LONGER multi-destination entry that `_DISTRICT_NAME_PATTERN`'s own
+    `{3,40}` length cap truncated, matching a spurious LATER starting
+    point inside the real string and reading garbage as its "header"
+    (never a different record format at all). **Fixed by widening the
+    cap to `{3,200}`** (regex naturally still stops at the real `0x00`
+    terminator either way, since `\\x00` is outside the `[ -~]`
+    printable range -- no new false-positive risk). Re-validated on the
+    same 400-tile/2,055-entry sample: **100.0% exact match on both `WW`
+    and `X`** (1,914 of 1,914 clean, non-phonetic entries) -- the
+    "95.8%" ceiling reported above was itself an artifact of this bug,
+    not a real structural limit.
+
+    With genuinely clean data, `Y`/`ZZ` reveal a real, substantial
+    semantic structure: **`Y` links PAIRS of entries into a highway-
+    sign-style route<->destination relationship, and `ZZ`'s "family"
+    (16/17 vs 4/5) encodes which ROLE this specific string plays.**
+    Grouping same-tile entries by shared `Y`: 203 tiles' worth of exact
+    2-entry pairs found; **172 of 203 (84.7%) show the two paired
+    entries in DIFFERENT `ZZ` families** -- and inspecting the actual
+    text confirms the pattern directly: the family-4 side is a real
+    road/route designator (`13^A3/13^E79`, `65^DN6`, `13^E80`,
+    `77^E-80`, bare route numbers like `13^9/13^E87`) and the family-16
+    side is a real destination place name (`SOFIA`, `PLOVDIV`,
+    `BUCURESTI`, `CONSTANTA`, ...) -- i.e. this is genuine on-disk
+    highway-SIGNAGE data (a route number paired with where it leads),
+    not a coincidence. Independently confirmed from the OTHER direction
+    too: entries whose `Y` is UNIQUE in their tile (no pairing partner
+    found) are overwhelmingly family-16 (1,457 of 1,481, 98.4%) -- i.e.
+    family-16 is the "standalone place name" default, family-4 is
+    (almost) always part of a route<->destination pair. **Honest
+    limitation**: not perfectly clean -- 31 of 203 pairs (15.3%) show
+    BOTH entries in the SAME family (some are genuine same-name pairs
+    like `13^YAVOROVETS` paired with itself, others unexplained; some
+    `Y` collisions between unrelated standalone entries are also
+    plausible if `Y`'s own value range is limited enough to occasionally
+    repeat by chance). `ZZ`'s exact 16-vs-17 (and 4-vs-5) sub-split
+    within each family remains the same already-explained `WW`-parity
+    rule found earlier; only the FAMILY choice (16 vs 4) is newly
+    explained here. `Y`'s own numeric value itself (as opposed to
+    whether it's shared) still has no identified meaning -- plausibly a
+    simple incrementing "pair id" counter local to this route/
+    destination sub-table, not yet directly tested.
+
     ==== UPDATE, same session: zone 2's own record format GENERALIZED to
     multiple tiles -- one real correction found in the process ====
     `decode_mp0_zone2()`/`zone2_categorical_slots()` (added right after
@@ -4244,7 +4295,7 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     return results
 
 
-_DISTRICT_NAME_PATTERN = re.compile(rb'[0-9]{1,3}\^[ -~]{3,40}\x00')
+_DISTRICT_NAME_PATTERN = re.compile(rb'[0-9]{1,3}\^[ -~]{3,200}\x00')
 
 _LANGUAGE_INDEX_TO_CODE = None
 
@@ -4298,43 +4349,48 @@ def extract_district_names(raw, abc_path=None):
     match exactly; excluding entries containing `|`/`$`/apostrophe
     (a DIFFERENT record type that coincidentally matches this same loose
     regex -- phonetic/pronunciation transcriptions, e.g. `81^ka|ra|meh|
-    "met`, not real display names) raises this to 1,834 of 1,914 (95.8%)
-    -- the small remainder is longer, multi-"/"-separated strings
-    (looking like highway destination-sign lists, e.g. `13^KREMIKOVTSI/
-    13^KALOTINA/13^BELGRAD`) that may use a related but distinct
-    convention, not investigated further.
+    "met`, not real display names) raises this to 1,834 of 1,914 (95.8%).
 
-    **`X` is now FULLY explained** (on the 1,834-entry clean, validated
-    set, ZERO exceptions): `X = WW + 19` when `WW` is even, `X = WW +
-    18` when `WW` is odd -- i.e. `X` is simply `18 + WW` (the entry's
-    own total byte length: 17-byte header + `WW` text bytes + 1 NUL)
-    rounded UP to the next ODD integer. This is why `X` is always odd
-    (100% of 1,834 samples). Not new information beyond `WW` itself, but
-    a complete, provable formula -- most likely a "next odd boundary"
-    padding/alignment value the original encoder computed, not a
-    separately meaningful field.
+    ==== UPDATE, immediately following, same session: the remaining
+    4.2% was a REGEX BUG (fixed to 100%), and `Y`/`ZZ` cracked as a real
+    HIGHWAY-SIGN route<->destination pairing ====
+    The "5.8%"-ish mismatches were entries the original regex's `{3,40}`
+    length cap truncated (e.g. the real string `13^MEZDRA/13^KREMIKOVTSI
+    /13^KALOTINA/13^BELGRAD`, 47 characters, got matched starting from a
+    spurious LATER point inside itself, reading garbage as its header)
+    -- fixed by widening the cap to `{3,200}` (still safely stops at the
+    real `0x00` terminator, `\\x00` being outside `[ -~]`). Re-validated:
+    **100.0% exact match on both `WW` and `X`**, zero exceptions, on the
+    full 1,914-entry clean sample.
 
-    **`ZZ` narrowed, not fully cracked**: 4 values seen (16, 17, 4, 5),
-    which pair up the SAME way `X` does (`{16,17}` = `{17,16}+WW-parity`,
-    `{4,5}` = `{5,4}+WW-parity`, always exactly 1 apart by the same
-    even/odd-`WW` rule as `X`) -- so `ZZ` reduces to a single real
-    unknown: which of 2 "families" (base 16 or base 4, a 12-apart split)
-    a given entry belongs to. Tested against: which tile it's in (NOT a
-    pure per-tile constant -- 78 of 250 tiles mix both families),
-    whether the string is a bare route/road number like `13^9`/`13^E87`
-    (weak positive correlation -- route-like text is disproportionately
-    family-4, but 86 of 215 route-like entries are STILL family-16, so
-    not deterministic). Real, still-open question for a future session.
+    **`X` is FULLY explained**: `X = WW + 19` when `WW` is even, `X =
+    WW + 18` when `WW` is odd -- i.e. `X` is simply `18 + WW` (the
+    entry's own total byte length: 17-byte header + `WW` text bytes + 1
+    NUL) rounded UP to the next ODD integer. Not new information beyond
+    `WW` itself, but a complete, provable formula -- most likely a
+    "next odd boundary" padding/alignment value the encoder computed.
 
-    **`Y` characterized, ruled out as a simple counter**: within a
-    single tile, `Y` is NOT sequential (real diffs seen: 2, 17, 239 in
-    one tile) and sometimes repeats the EXACT SAME value across 2
-    different entries (e.g. one tile shows `Y=90` twice, then `Y=276`
-    twice) -- inconsistent with "entry number" or "running byte offset
-    strictly increasing per string", more consistent with a reference/
-    index into some OTHER structure this project hasn't located (2
-    entries sharing a `Y` plausibly share some underlying object, e.g.
-    the same road/POI, one entry per language). Not solved.
+    **`Y`/`ZZ` reveal a real semantic structure**: `Y` links PAIRS of
+    entries into a highway-sign-style route<->destination relationship;
+    `ZZ`'s "family" (16/17 vs 4/5 -- the sub-split within each family is
+    the same `WW`-parity rule `X` uses) encodes which ROLE a string
+    plays. Grouping same-tile entries by shared `Y`: of 203 exact
+    2-entry pairs found, 172 (84.7%) show the two entries in DIFFERENT
+    families -- and the text confirms it directly: the family-4 side is
+    a real road/route designator (`13^A3/13^E79`, `65^DN6`, `77^E-80`,
+    bare numbers like `13^9/13^E87`), the family-16 side is a real
+    destination place name (`SOFIA`, `PLOVDIV`, `BUCURESTI`,
+    `CONSTANTA`). Confirmed from the OTHER direction too: entries whose
+    `Y` is UNIQUE in their tile (no partner) are overwhelmingly
+    family-16 (1,457 of 1,481, 98.4%) -- family-16 is the "standalone
+    place name" default, family-4 is (almost) always paired. **Honest
+    limitation**: not perfectly clean -- 31 of 203 pairs (15.3%) share
+    the SAME family (some genuine self-paired entries like `13^
+    YAVOROVETS`<->`13^YAVOROVETS`, others unexplained; some `Y`
+    collisions between unrelated entries are plausible if `Y`'s value
+    range is small enough to repeat by chance). `Y`'s own NUMERIC value
+    (beyond "is it shared") still has no identified meaning -- plausibly
+    a simple incrementing pair-id counter, not directly tested.
 
     Returns a list of dicts, one per real entry found, in file order:
         {"text": <str, the full "LANGIDX^NAME" text, NOT including the
@@ -4354,14 +4410,19 @@ def extract_district_names(raw, abc_path=None):
                  (no confirmed preceding boundary)>,
          "X": <int, u16 LE, header bytes 0-1 -- FULLY EXPLAINED: `18 +
                  WW` rounded up to the next odd integer (see above)>,
-         "Y": <int, u16 LE, header bytes 2-3 -- NOT a simple counter,
-                 real meaning not yet identified (see above)>,
-         "ZZ": <int, header byte 6 -- 4 values (16/17/4/5), reduces to a
-                 2-family binary split whose real meaning is not yet
-                 identified (see above)>,
-         "WW": <int, header byte 7 -- VALIDATED: == len(text), on
-                 genuine name entries (excludes phonetic/pronunciation-
-                 tagged entries, which use a different convention)>}
+         "Y": <int, u16 LE, header bytes 2-3 -- PAIRING KEY: 2 entries
+                 in the same tile sharing the same Y are very likely a
+                 highway-sign route<->destination pair (see above); Y's
+                 own numeric value has no identified meaning beyond
+                 that>,
+         "ZZ": <int, header byte 6 -- ROLE marker: family 4/5 = route/
+                 road-number entry, family 16/17 = destination place
+                 name (the default for unpaired entries); the 1-apart
+                 sub-value within each family is the same WW-parity
+                 rule X uses (see above)>,
+         "WW": <int, header byte 7 -- VALIDATED: == len(text) exactly,
+                 100% on genuine name entries (excludes phonetic/
+                 pronunciation-tagged entries, a different convention)>}
     """
     lang_map = _get_language_index_map(abc_path)
     matches = list(_DISTRICT_NAME_PATTERN.finditer(raw))
