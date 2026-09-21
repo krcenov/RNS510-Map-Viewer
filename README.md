@@ -122,11 +122,22 @@ rns510\5238_ALL`), found and extracted a SEPARATE disc from the map disc
 `CD_8555`: a real Continental/VW factory "Software Loading" CD (VwSwIndex
 5238, matching this section's own already-known firmware generation) —
 `VERSION.TXT` confirms `CdTreeBuilder version 3.06`, `#VwSwPartNumber:`
-lists 15 real VW part numbers, `#Steckbrief: C_EU_13.236_t3 C3/C4A/C5C/
-C6/C10/C12` names 6 real platform codes, and discloses this exact image
-is `"an unofficial SWL CD by josi"` (a community repack, not verified
-byte-identical to the original factory CD, though CRC.16 files
-throughout the tree would make tampering detectable). **`ECUORDER.TXT`
+lists **18** real VW part numbers (re-verified directly against the raw
+file, corrected from an earlier miscount of 15 — the field wraps across
+2 lines, easy to undercount): `1T0035680L`, `3T0035680G`, `7F0035680B`,
+`7E0035680B`, `1T0035680P`, `1T0035680Q`, `3T0035680K`, `3T0035680L`,
+`1T0035686`, `1T0035686C`, `1T0035686D`, `7F0035686`, `7E0035686`,
+`3T0035686`, `3T0035686C`, `3T0035686D`, `7N5035686`, `2H0035680` — one
+per real vehicle-specific installation kit. `#Steckbrief: C_EU_13.236_t3
+C3/C4A/C5C/C6/C10/C12` names 6 codes — **corrected**: these are NOT
+vehicle platform codes as previously stated here; `INFO/CDSTRUCT.CFG`'s
+own `#ifdef HARDWARE_C3`/`HARDWARE_C4A`/etc. blocks confirm they're
+internal Continental HARDWARE-REVISION codes for the head unit's own
+PCB (mapped to sequential numeric IDs under the same `SILVER_1` product
+line), not vehicle codes. Discloses this exact image is `"an unofficial
+SWL CD by josi"` (a community repack, not verified byte-identical to the
+original factory CD, though CRC.16 files throughout the tree would make
+tampering detectable). **`ECUORDER.TXT`
 + `INFO/CDSTRUCT.CFG`** (25,955-line `#ifdef`-guarded flashing script,
 with a real, dated 2006-2008+ internal Continental/VW engineering
 changelog as its own leading comment block — named engineers, real

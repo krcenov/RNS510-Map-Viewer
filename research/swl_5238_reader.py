@@ -15,19 +15,33 @@ ready PowerPC ELF object with full symbol/debug info.
 Disc identity -- CRACKED (plain text)
 ============================================================================
 `VERSION.TXT`: `CdTreeBuilder version 3.06`, `#CD:P 0 0 5 . 6 7 0 . 3 0 6`,
-`#DATE:2012-10-19`, `#Project: VWRNS`, `#VwSwPartNumber:` lists 15 real VW
-part numbers sharing this build (`1T0035680L`, `3T0035680G`,
-`7F0035680B`, ... `2H0035680`), `#VwSwIndex:5238` (x5, matching the
-already-known firmware generation this project calls "5238"),
-`#Steckbrief: C_EU_13.236_t3 C3/C4A/C5C/C6/C10/C12` (a real internal
-"characteristics sheet" ID naming 6 real VW platform codes this build
-supports). `#CommentStart: This is an unofficial SWL CD by josi. Use it
-at your own risk. #CommentEnd:` -- this specific disc image is a
-community repack (not the original factory CD verbatim), a real,
-disclosed provenance detail worth keeping in mind for any byte-level
-claim below (the repacker could in principle have altered file
-contents, though CRC.16 files throughout the tree -- see below --
-would make that detectable).
+`#DATE:2012-10-19`, `#Project: VWRNS`, `#VwSwPartNumber:` lists **18**
+real VW part numbers sharing this build -- RE-VERIFIED directly against
+the real file (the field wraps across 2 lines in the raw text, easy to
+undercount at a glance; corrected from an earlier "15" miscount):
+`1T0035680L`, `3T0035680G`, `7F0035680B`, `7E0035680B`, `1T0035680P`,
+`1T0035680Q`, `3T0035680K`, `3T0035680L`, `1T0035686`, `1T0035686C`,
+`1T0035686D`, `7F0035686`, `7E0035686`, `3T0035686`, `3T0035686C`,
+`3T0035686D`, `7N5035686`, `2H0035680`. `#VwSwIndex:5238` (x5, matching
+the already-known firmware generation this project calls "5238").
+`#Steckbrief: C_EU_13.236_t3 C3/C4A/C5C/C6/C10/C12` -- RE-VERIFIED,
+CORRECTED: these are **NOT vehicle platform codes** (this docstring's
+own earlier characterization was wrong); `INFO/CDSTRUCT.CFG` directly
+confirms via `#ifdef HARDWARE_C3`/`HARDWARE_C4A`/`HARDWARE_C4B`/
+`HARDWARE_C6`/`HARDWARE_C10`/`HARDWARE_C12`/`HARDWARE_C14` conditional
+blocks (plus a plain `HARDWARE_C`) that these are internal Continental
+HARDWARE-REVISION codes for the head unit's own PCB, all mapped to
+sequential numeric hardware IDs (`000100020040`-`000100020047`) under
+the SAME `SILVER_1` product line -- i.e. they identify which physical
+head-unit board revision the firmware build targets, not which VW/Seat/
+Skoda vehicle it's installed in (that's what the 18 `VwSwPartNumber`
+values above are for, one per real vehicle-specific installation kit).
+`#CommentStart: This is an unofficial SWL CD by josi. Use it at your own
+risk. #CommentEnd:` -- this specific disc image is a community repack
+(not the original factory CD verbatim), a real, disclosed provenance
+detail worth keeping in mind for any byte-level claim below (the
+repacker could in principle have altered file contents, though CRC.16
+files throughout the tree -- see below -- would make that detectable).
 
 ============================================================================
 Disc structure -- CRACKED: a real ECU-by-ECU ordered flashing tree
