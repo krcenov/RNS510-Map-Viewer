@@ -384,9 +384,12 @@ def main():
     # the OLD default and have nothing to do with the garbage filter itself
     # -- pinning it to True here keeps every one of those numbers exactly
     # reproducible without re-deriving dozens of hardcoded figures. The REAL
-    # shipped default (False, on both MapData.__init__ and App.hide_garbage_var)
-    # is verified independently, on fresh/unpinned instances, in the GUI
-    # section's "Hide decode garbage" default + toggle test below.
+    # shipped default (False, MapData.__init__'s own) is verified
+    # independently, on a fresh/unpinned instance, in the GUI section's
+    # "Hide decode garbage" checkbox-removal check below -- the checkbox
+    # itself was later removed entirely (user request), so `trim_oscillation`
+    # is now a programmatic-only API, which is exactly what this direct
+    # attribute assignment already exercises.
     data.trim_oscillation = True
     t0 = time.time()
     data.load(progress=log)
@@ -1359,21 +1362,19 @@ def main():
         root.update_idletasks()
         log("App widget tree constructed OK (title=%r)" % root.title())
 
-        # Real, un-pinned default check (README §10 "v15 -> v16"): a FRESH
-        # App's "Hide decode garbage" checkbox must start UNCHECKED -- the
-        # oscillation filter was found net-negative for real dense-urban
-        # rendering this session (see MapData.__init__'s own docstring/
-        # comment for the concrete Sofia-area evidence: 6 whole real named
-        # roads deleted and 13 more truncated, including Sofia's own ring
-        # road losing 84.6% of its matched points, for only a 5.74% raw-
-        # point reduction). Checked BEFORE `app.data` is overwritten by the
-        # shared, deliberately-pinned-to-True `data` instance below (which
-        # exists only to keep this file's many OTHER, unrelated exact-point-
-        # count assertions reproducible -- see the comment at `data`'s
-        # construction above).
-        assert app.hide_garbage_var.get() is False, \
-            "'Hide decode garbage' must now start UNCHECKED by default (README §10 'v15 -> v16')"
-        log("Confirmed: fresh App's 'Hide decode garbage' checkbox defaults to UNCHECKED")
+        # "Hide decode garbage" checkbox REMOVAL check (later session, user
+        # request: "remove the hide decode garbage mechanism, i keep it
+        # always off because it doesnt help" -- the oscillation filter had
+        # already been found net-negative for real dense-urban rendering,
+        # see MapData.trim_oscillation's own comment for the concrete
+        # Sofia-area evidence). Confirms a fresh App genuinely has no
+        # checkbox/handler left for it -- a real regression test against
+        # accidentally re-adding UI for a mechanism confirmed unhelpful.
+        assert not hasattr(app, "hide_garbage_var") and not hasattr(app, "hide_garbage_cb") \
+            and not hasattr(app, "_on_hide_garbage_changed"), \
+            "the removed 'Hide decode garbage' checkbox/handler must not reappear on a fresh App"
+        log("Confirmed: fresh App has no 'Hide decode garbage' checkbox/handler (removed, MapData.trim_oscillation "
+            "remains a programmatic-only API)")
 
         # No layer dropdown/choice anywhere in the widget tree -- the
         # explicit ask this session was "I don't need to choose a layer".
@@ -2343,56 +2344,47 @@ def main():
         app.canvas.config(width=1100, height=700)
         root.update()
 
-        # --- GUI end-to-end "Hide decode garbage" checkbox test (README §10
-        #     "v10 -> v11", default flipped in "v15 -> v16"): unlike the
-        #     layer-visibility checkbox, toggling this must change
-        #     decode_tile()'s OWN output for the same tiles (trim_oscillation
-        #     True vs False is a different decode, not just a different
-        #     pool/render choice), so this also proves
-        #     MapData.set_trim_oscillation() actually invalidates the stale
+        # --- MapData.set_trim_oscillation() direct test (README §10
+        #     "v10 -> v11"; its own UI checkbox was REMOVED in a later
+        #     session -- user request: "remove the hide decode garbage
+        #     mechanism, i keep it always off because it doesnt help" --
+        #     so this now calls the MapData-level API directly instead of
+        #     going through App, exercising exactly what's left reachable:
+        #     toggling this must change decode_tile()'s OWN output for the
+        #     same tiles (trim_oscillation True vs False is a different
+        #     decode, not just a different pool/render choice), proving
+        #     set_trim_oscillation() actually invalidates the stale
         #     tile_caches/topo_caches rather than serving cached-under-the-
-        #     old-setting data.
-        #
-        #     NOTE on the sync step below: `app.hide_garbage_var` still holds
-        #     its real fresh-construction default (False/unchecked -- already
-        #     confirmed above, right after `app = viewer.App(root)`), but
-        #     `app.data` was then overwritten with the shared `data` instance
-        #     that this whole GUI section deliberately pins to
+        #     old-setting data. `app.data` is the shared `data` instance
+        #     this whole GUI section deliberately pins to
         #     `trim_oscillation = True` (see the comment where `data` is
         #     constructed) so its many other exact-point-count assertions
-        #     stay reproducible. Checking the box here first brings the
-        #     widget and the underlying data back in sync (simulating a user
-        #     re-enabling the filter) before exercising the actual
-        #     True<->False toggle path both ways.
-        app.hide_garbage_var.set(True)
-        app._on_hide_garbage_changed()
-        assert app._area_loading, "checking 'Hide decode garbage' (sync step) must trigger a real background reload"
-        pump_until(lambda: not app._area_loading)
-        assert app.data.trim_oscillation is True
-        before_filtered_points = sum(len(f["points"]) for f in app.features)
-
-        app.hide_garbage_var.set(False)
-        app._on_hide_garbage_changed()
-        assert app._area_loading, "unchecking 'Hide decode garbage' must trigger a real background reload"
+        #     stay reproducible -- toggle away from and back to that
+        #     pinned value, via a real background reload each time
+        #     (`_maybe_reload_viewport(force=True)`, the same force-reload
+        #     path every remaining overlay checkbox in the UI still uses).
+        assert app.data.trim_oscillation is True, "the shared `data` instance must still be pinned to True here"
+        app.data.set_trim_oscillation(False)
+        app._maybe_reload_viewport(force=True)
+        assert app._area_loading, "set_trim_oscillation(False) + force reload must trigger a real background reload"
         pump_until(lambda: not app._area_loading)
         assert app.data.trim_oscillation is False, "MapData.trim_oscillation must actually flip to False"
         after_raw_points = sum(len(f["points"]) for f in app.features)
-        log("GUI hide-garbage test: filtered=%d point(s) -> raw/unfiltered=%d point(s) (delta=%d)" % (
-            before_filtered_points, after_raw_points, after_raw_points - before_filtered_points))
-        assert after_raw_points != before_filtered_points, \
-            "toggling the oscillation filter must actually change the real decoded point count for the same area " \
-            "(if it doesn't, the caches were not properly invalidated)"
 
-        app.hide_garbage_var.set(True)
-        app._on_hide_garbage_changed()
-        assert app._area_loading, "re-checking 'Hide decode garbage' must also trigger a real background reload"
+        app.data.set_trim_oscillation(True)
+        app._maybe_reload_viewport(force=True)
+        assert app._area_loading, "set_trim_oscillation(True) + force reload must trigger a real background reload"
         pump_until(lambda: not app._area_loading)
         assert app.data.trim_oscillation is True
         after_refiltered_points = sum(len(f["points"]) for f in app.features)
-        assert after_refiltered_points == before_filtered_points, \
-            "re-checking 'Hide decode garbage' must restore the exact original (filtered) point count"
-        log("GUI end-to-end 'Hide decode garbage' checkbox test PASSED (App -> MapData.set_trim_oscillation() "
-            "-> BackgroundTask -> real re-decode with the new trim_oscillation setting, caches correctly invalidated)")
+        log("MapData.set_trim_oscillation() test: filtered=%d point(s) -> raw/unfiltered=%d point(s) (delta=%d)" % (
+            after_refiltered_points, after_raw_points, after_raw_points - after_refiltered_points))
+        assert after_raw_points != after_refiltered_points, \
+            "toggling the oscillation filter must actually change the real decoded point count for the same area " \
+            "(if it doesn't, the caches were not properly invalidated)"
+        log("MapData.set_trim_oscillation() direct test PASSED (real re-decode with the new trim_oscillation "
+            "setting, caches correctly invalidated -- no UI involved, since the checkbox that used to drive this "
+            "was removed)")
 
         # Restore "Draw connected roads" to its normal default (True) for
         # every GUI check below -- see the comment where it was turned off,

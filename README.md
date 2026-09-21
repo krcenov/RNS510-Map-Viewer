@@ -938,11 +938,12 @@ still-uncracked directory encoding (see below).
     failure mode (it only checks whether 2+ named roads match ANYWHERE in
     an `mg4` tile, not whether a SPECIFIC road survives, and was never run
     against `mg1`, the finer layer where the loss concentrates). The map
-    viewer's `MapData.trim_oscillation`/`App.hide_garbage_var` now both
-    default to `False` (unchecked) — see §10 "v15 -> v16" for the full
-    investigation and numbers. The library function's own default here is
-    unaffected (already `False`); only the viewer's prior override of it
-    was wrong and has been removed.
+    viewer's own `App.hide_garbage_var` checkbox first defaulted to
+    `False` (unchecked, §10 "v15 -> v16") then was REMOVED entirely in a
+    later session (§10 "v26 -> v27", user request: it was always kept
+    off anyway) — `MapData.trim_oscillation` remains, but only as a
+    programmatic-only API now, unreachable from the running app. The
+    library function's own default here is unaffected (already `False`).
   - **Topology/adjacency table — structure now understood, one major gap
     remains.** Past the coordinate run, each FEATURE (not each tile) gets its
     own table of exactly `point_count + 1` fixed 10-byte records (record 0 is a
@@ -6771,6 +6772,31 @@ learned the hard way, "v17 → v18", that per-item Tk canvas overhead at
 that scale is a real, measured freeze). Drawn first, under all
 points/roads, so it never obscures real data. OFF by default.
 `test_map_viewer.py` re-run in full, all tests pass.
+
+### v26 → v27: "Hide decode garbage" checkbox REMOVED entirely (this session, user-requested)
+
+User request (verbatim): *"remove the hide decode garbage mechanism, i
+keep it always off because it doesnt help"* — consistent with the
+checkbox's own history (§10 "v15 → v16": real-ISO testing had already
+found the oscillation filter net NEGATIVE for real dense-urban
+rendering, which is why it defaulted to unchecked). The checkbox, its
+`BooleanVar`, and its `_on_hide_garbage_changed()` handler are gone
+entirely — nothing in the running app can re-enable the filter anymore,
+so real usage always gets the raw, unfiltered (measurably more
+complete) geometry. `MapData.trim_oscillation`/`set_trim_oscillation()`
+are KEPT as a programmatic-only API (`decode_features()`'s own
+`trim_oscillation=True` detector still exists in `research/
+map_compressed_reader.py` for research use, and `test_map_viewer.py`
+still exercises the toggle directly against the real ISO — one shared
+`MapData` instance is deliberately pinned to `trim_oscillation=True` so
+dozens of unrelated, already-recorded exact point-count assertions
+elsewhere in that file stay reproducible) — only the UI surface is
+gone. The removed checkbox's own GUI test was rewritten to call
+`MapData.set_trim_oscillation()` directly instead of through the now-
+gone `App` handler, preserving the same real coverage (toggling
+actually re-decodes and changes the real point count, caches correctly
+invalidated) with no UI involved. `test_map_viewer.py` re-run in full,
+all tests pass.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 

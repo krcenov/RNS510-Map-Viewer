@@ -249,6 +249,13 @@ What changed vs. the v1 raw-lines viewer (see README §10 for full details)
     mg4 benchmark could not see this failure mode, real MAX_FEATURE_DRIFT_DEG
     and geo-index-coverage checks that ruled out two OTHER "missing roads"
     hypotheses at Sofia, and current connected-roads confidence numbers.
+    UI CHECKBOX REMOVED entirely in a later session (v25 -> v26, user
+    request: "remove the hide decode garbage mechanism, i keep it always
+    off because it doesnt help") -- nothing in the running app can toggle
+    this anymore, so real usage always gets the raw, unfiltered geometry.
+    `MapData.trim_oscillation`/`set_trim_oscillation()` are KEPT as a
+    programmatic-only API (still exercised by `test_map_viewer.py`
+    against the real ISO), just no longer reachable from the UI.
 16. Four user-requested debugging-workflow changes (this session, v16 -> v17):
     (a) road-point dots are now a single, unambiguous red (DOT_COLOR,
     "#d32f2f") instead of the old gray/gold ROAD_COLOR_* shades -- user's
@@ -1287,23 +1294,24 @@ class MapData:
         self.rd_cache = None        # road_naming.RdCache
         self.cty_cache = None       # city_reader.CtyCache
 
-        # Oscillation-garbage filter toggle (README S10 "v10 -> v11",
-        # DEFAULT FLIPPED in "v15 -> v16" -- see that section for the full
-        # investigation). Direct, real-ISO, real-named-road-level testing
-        # this session (not just the old tile-name-match-count benchmark)
-        # found the filter is NET NEGATIVE for real, dense urban areas at
-        # the zoom levels users actually look at: at a real Sofia, Bulgaria
-        # `mg1` sample (9 tiles), the filter removed only 5.74% of raw
-        # points but ENTIRELY deleted 6 real named roads (e.g. "TSARITSA",
-        # "BISTRISHKO SHOSE") and truncated 13 more -- including Sofia's own
-        # ring road, "OKOLOVRASTEN PAT", losing 84.6% of its matched points.
-        # This directly confirmed the user's own first-hand observation
-        # ("unchecking hide decode garbage is producing more real accurate
-        # roads"). Defaults to False (filter OFF / raw, unfiltered geometry)
-        # so a user who never touches the checkbox sees this measurably more
-        # complete rendering. set_trim_oscillation() below is the only place
-        # this should be changed at runtime, since it must also invalidate
-        # the decode caches (a tile decoded under the old setting is stale).
+        # Oscillation-garbage filter STATE (README S10 "v10 -> v11",
+        # DEFAULT FLIPPED in "v15 -> v16" -- real-ISO testing found the
+        # filter net NEGATIVE for real dense-urban rendering, see that
+        # section for the full investigation). The UI CHECKBOX that
+        # exposed this was REMOVED entirely in a later session (user
+        # request: "remove the hide decode garbage mechanism, i keep it
+        # always off because it doesnt help") -- see `set_trim_
+        # oscillation()` below and the removed-checkbox note near
+        # `_build_widgets()`'s own call site in `App.__init__`. This
+        # attribute and its setter are KEPT (not fully deleted) as a
+        # legitimate `MapData`-level testing/programmatic API -- e.g.
+        # `test_map_viewer.py` deliberately pins it to `True` on one
+        # shared instance so dozens of unrelated, already-recorded exact
+        # point-count assertions elsewhere in that file stay reproducible
+        # against the OLD decode behavior, with no UI involved at all.
+        # Defaults to False (filter OFF / raw, unfiltered geometry, the
+        # measurably more complete real rendering) since nothing in the
+        # running app can ever change it now.
         self.trim_oscillation = False
         self.tile_caches = {layer: {} for layer in ALL_LAYERS}  # per-layer decode cache
         # Per-layer resolve_topology_adjacency() cache (README §10 "v9 -> v10"):
@@ -1340,7 +1348,9 @@ class MapData:
         # evicted; reset alongside tile_caches on set_trim_oscillation()
         # since a trim_oscillation toggle changes the underlying feature
         # geometry a cached tile_id's named_ranges would otherwise still
-        # refer to). See ensure_area_loaded()'s own docstring for why this
+        # refer to -- no UI reaches this toggle anymore, see that
+        # attribute's own comment in __init__, but it's still exercised
+        # programmatically). See ensure_area_loaded()'s own docstring for why this
         # exists: avoids re-running match_feature() (a real per-vertex
         # spatial lookup) over the WHOLE pooled feature set on every single
         # pan/zoom reload, only tiles genuinely new to `self` pay that cost.
@@ -2072,16 +2082,19 @@ class MapData:
 
     def set_trim_oscillation(self, value):
         """Toggle the oscillation-garbage filter (README S10 "v10 -> v11").
-        A no-op if `value` already matches the current setting. Otherwise:
-        every already-decoded tile in `tile_caches`/`topo_caches` was
-        decoded under the OLD setting and is now stale (decode_features()'s
-        output for a given tile genuinely differs between trim_oscillation
-        True/False -- that's the whole point of this toggle), so both
-        caches are reset to empty per-layer dicts. This is a one-time
-        re-decode cost on toggle, same tradeoff already accepted elsewhere
-        in this class for other cache-invalidating state changes -- the
-        checkbox is expected to be flipped rarely (debugging/inspection),
-        not on every redraw."""
+        KEPT as a `MapData`-level API after the UI checkbox that used to
+        call this was REMOVED (later session, user request -- see
+        `trim_oscillation`'s own comment in `__init__`) -- still used
+        programmatically (e.g. by `test_map_viewer.py` to exercise both
+        decode behaviors against the real ISO). A no-op if `value`
+        already matches the current setting. Otherwise: every already-
+        decoded tile in `tile_caches`/`topo_caches` was decoded under the
+        OLD setting and is now stale (decode_features()'s output for a
+        given tile genuinely differs between trim_oscillation True/False
+        -- that's the whole point of this toggle), so all of them are
+        reset to empty per-layer dicts. This is a one-time re-decode
+        cost on toggle, same tradeoff already accepted elsewhere in this
+        class for other cache-invalidating state changes."""
         value = bool(value)
         if value == self.trim_oscillation:
             return
@@ -2296,9 +2309,10 @@ class MapData:
         by `(tile_id, tol_m)`, index-aligned with `feature_index`, computed
         once and reused forever after (reset only by
         `set_trim_oscillation()`, alongside `tile_caches`, since that
-        toggle changes the underlying geometry). A tile revisited by a
-        later overlapping call now costs one dict lookup instead of a full
-        re-match."""
+        toggle changes the underlying geometry -- programmatic-only now,
+        see that attribute's own comment in `__init__`). A tile revisited
+        by a later overlapping call now costs one dict lookup instead of a
+        full re-match."""
         # README §10 "v16 -> v17": no more layers_for_scale(scale, ...) gate
         # here -- the pooled set is purely `available_layers()` (what's
         # actually geo-indexed/ready) restricted by `allowed_layers` (the
@@ -3112,45 +3126,6 @@ class App:
             font=("Segoe UI", 9), highlightthickness=0)
         self.show_tile_boundaries_cb.pack(side="left", padx=(10, 0))
 
-        # ---- "Hide decode garbage" checkbox (README S10 "v10 -> v11") ----
-        # User request (verbatim, after asking whether every real point was
-        # being shown): "lets fix 2, add a checkbox that enables and
-        # disables the filter" -- "2" being the oscillation-garbage filter
-        # (decode_features(trim_oscillation=...), README S3.6/S10), which a
-        # direct measurement showed removes ~5.7% of raw points in a real
-        # sample area -- mostly genuine corruption, but with a confirmed
-        # non-zero false-positive rate (at least one real named road is
-        # known to get dropped by it, S3.6's 80-tile validation).
-        #
-        # DEFAULT FLIPPED TO UNCHECKED in "v15 -> v16" (README S10): this
-        # session's direct, real-ISO, per-named-road investigation (started
-        # from the user's own first-hand observation, verbatim: "unchecking
-        # hide decode garbage is producing more real accurate roads then
-        # when i enable it, meaning its not usefull and the garbage is not
-        # actually garbage") found the filter is net NEGATIVE for real
-        # dense-urban rendering at the zoom levels this app is actually used
-        # at: a real Sofia `mg1` sample lost 6 whole real named roads and
-        # badly truncated 13 more (including the Sofia ring road,
-        # "OKOLOVRASTEN PAT", -84.6% of its matched points) while removing
-        # only 5.74% of raw points -- the old 42/80-vs-28/80 mg4 tile-count
-        # benchmark this checkbox's original "checked by default" choice was
-        # based on cannot see this failure mode at all (it only checks
-        # whether 2+ named roads match ANYWHERE in a tile, not whether any
-        # SPECIFIC real road survives intact). Unchecked by default now, so
-        # a user who never touches this checkbox sees the raw, unfiltered
-        # (measurably more complete) geometry -- checking it re-enables the
-        # filter for inspection/comparison, unchanged mechanically from
-        # "v10 -> v11".
-        self.hide_garbage_var = tk.BooleanVar(value=False)
-        self._status_divider(layers_row)
-        self.hide_garbage_cb = tk.Checkbutton(
-            layers_row, text="Hide decode garbage", variable=self.hide_garbage_var,
-            onvalue=True, offvalue=False, command=self._on_hide_garbage_changed,
-            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
-            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
-            font=("Segoe UI", 9), highlightthickness=0)
-        self.hide_garbage_cb.pack(side="left", padx=(10, 0))
-
         # ---- "Show POIs" checkbox (README §10 "v19 -> v20") ----
         # Real POIs (gas stations, hotels, restaurants, airports, ...)
         # from EDB/POI/POI.DB3, made possible by this session's crack of
@@ -3334,7 +3309,6 @@ class App:
         self._controls = [search_entry, search_btn, self.results_list, go_btn, clear_points_btn]
         self._controls.extend(self._layer_checkbuttons.values())
         self._controls.append(self.connected_roads_cb)
-        self._controls.append(self.hide_garbage_cb)
         self._tick_clock()
 
     # -------------------------------------------------------- chrome helpers
@@ -4918,26 +4892,6 @@ class App:
         if self.data is None or self.center_lon is None:
             return  # nothing loaded yet -- the checkbox state is remembered for when it is
         self._redraw()
-
-    # ------------------------------------------- oscillation filter (v10 -> v11)
-
-    def _on_hide_garbage_changed(self):
-        """Checkbutton command for "Hide decode garbage" (README §10
-        "v10 -> v11"): unlike the layer-visibility/connected-roads
-        checkboxes, this doesn't just change which already-decoded points
-        get POOLED or how they're DRAWN -- decode_features()'s own output
-        for a given tile genuinely differs between trim_oscillation
-        True/False (that's the whole point of the toggle), so any
-        already-decoded tile is now stale. MapData.set_trim_oscillation()
-        handles that (resets tile_caches/topo_caches to empty per-layer
-        dicts, a one-time re-decode cost on toggle); this handler just
-        calls it and then reuses the same force-reload path every other
-        checkbox in this UI already uses, so the (now-empty) caches get
-        repopulated under the new setting before the next redraw."""
-        if self.data is None or self.center_lon is None:
-            return  # nothing loaded yet -- the checkbox state is remembered for when it is
-        self.data.set_trim_oscillation(self.hide_garbage_var.get())
-        self._maybe_reload_viewport(force=True)
 
     # ------------------------------------------------- dynamic pan/zoom loading
 
