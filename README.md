@@ -2595,14 +2595,25 @@ directly cross-referencing this schema**:
   CENTER`) and paired with Bulgarian on bilingual ones (`13^TERMINAL 2/
   24^TERMINAL 2`) — real-world-plausible for an international airport.
   The header is a fixed 17 bytes: `[X: u16 LE][Y: u16 LE][0x01][0x00]
-  [ZZ: 1 byte][WW: 1 byte][9 zero bytes]`. **`WW` is REAL and VALIDATED:
-  exactly `len(text) - 1`** (the string's own length, excluding its NUL)
-  — confirmed on all 25 entries, 100% exact match. `[0x01][0x00]` is a
-  constant marker on every entry. `ZZ` is binary (only 16 or 17, no
-  clean correlation found yet); `X` is always odd and sits close to
-  `WW+18` or `WW+19`; `Y` increases monotonically per-tile but its
-  jumps don't match cumulative string length — all 3 still open for a
-  future session with more samples.
+  [ZZ: 1 byte][WW: 1 byte][9 zero bytes]`. `[0x01][0x00]` is a constant
+  marker on every entry.
+
+  **Re-validated at scale, a later session — a real off-by-one bug
+  caught and fixed, then `X` fully cracked.** Testing at scale (2,055
+  entries, 400 Bulgaria-region tiles) first looked like a near-total
+  failure of the `WW` formula — but the bug was in this project's own
+  earlier claim, not the data: **`WW` actually equals `len(text)`
+  exactly (no `-1`)**, re-confirmed against the original 3-tile sample.
+  With the fix: 91.2% of entries match exactly; excluding a different,
+  coincidentally-regex-matching record type (phonetic/pronunciation
+  transcriptions) raises this to 95.8%. **`X` is now FULLY explained**:
+  it's simply the entry's own total byte length (header + text + NUL)
+  rounded up to the next odd integer — zero exceptions across 1,834
+  validated entries. `ZZ` narrows to a 2-family binary split (16/17 vs
+  4/5, weakly correlated with bare route-number text, not
+  deterministic) — still open. `Y` is confirmed NOT a simple counter
+  (irregular diffs, sometimes repeats the same value across 2 different
+  entries) — still open.
 
   **Zone 2's record format GENERALIZED to multiple tiles, a still-later
   session — one real correction found.** `decode_mp0_zone2()` re-derives

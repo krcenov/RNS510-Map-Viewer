@@ -3087,6 +3087,30 @@ def decode_topology(raw, declen=None, features=None):
     version of this ad-hoc analysis, wired into the viewer's own point-
     pick info panel.
 
+    ==== UPDATE, a later session: the `WW == len(text) - 1` claim above
+    was WRONG by one -- caught by testing at scale (2,055 entries, 400
+    tiles), fixed, and `X` fully cracked on top of the fix ====
+    The real rule is `WW == len(text)` (no `-1`) -- re-checked directly
+    against the ORIGINAL 3-tile/25-entry sample this section is built
+    on and confirmed exactly (e.g. `len('13^ZHK IZTOK')==12`, and its
+    own `WW` byte is 12, not 11 -- the earlier "confirmed on ALL 25...
+    100% exact match" claim above was itself off by one, an error in
+    THIS project's own arithmetic, not a data problem). At scale,
+    91.2% of entries match the corrected formula exactly; excluding a
+    DIFFERENT, coincidentally-regex-matching record type (phonetic/
+    pronunciation transcriptions, identifiable by `|`/`$`/apostrophe
+    characters) raises this to 95.8%. With the fix, **`X` is now FULLY
+    explained**: `X` is simply the entry's own total byte length
+    (17-byte header + `WW` text bytes + 1 NUL) rounded UP to the next
+    ODD integer -- zero exceptions across 1,834 validated entries. `ZZ`
+    reduces from "binary, unexplained" to "2 binary families 12 apart
+    (16/17 vs 4/5), family selection still unexplained" -- weakly
+    correlated with bare route-number text but not deterministically.
+    `Y` is confirmed NOT a simple counter (real per-tile diffs like 2,
+    17, 239; sometimes the exact same value repeats across 2 different
+    entries) -- still open. Full corrected writeup, including the exact
+    validation numbers: `extract_district_names()`'s own docstring.
+
     ==== UPDATE, same session: zone 2's own record format GENERALIZED to
     multiple tiles -- one real correction found in the process ====
     `decode_mp0_zone2()`/`zone2_categorical_slots()` (added right after
@@ -4258,18 +4282,59 @@ def extract_district_names(raw, abc_path=None):
     Each real entry has the form `<17-byte header><lang-index digits>^
     <NAME>\\x00`, found via regex over the tile's raw decompressed bytes
     (no need to locate the containing zone/record boundary first -- the
-    string pattern itself is distinctive enough). Of the header's 5
-    sub-fields (`X`, `Y`, `[0x01][0x00]` constant, `ZZ`, `WW`), only
-    `WW` is validated (`WW == len(text) - 1`, confirmed on 25/25 real
-    entries across 3 tiles); `X`/`Y`/`ZZ` are returned raw for a future
-    session to keep characterizing, not yet given real names.
+    string pattern itself is distinctive enough).
 
-    These are almost certainly DISTRICT/NEIGHBORHOOD labels for the
-    tile's own area (e.g. "ZHK IZTOK", "HLADILNIKA", "TSENTAR/CENTRUM"),
-    NOT any individual street/segment's own name -- there is currently
-    no known way to attribute a specific entry to a specific point or
-    seg_list record (the same open `idx`<->point-index mapping problem
-    documented elsewhere in this module blocks that).
+    ==== UPDATE, a later session: RE-VALIDATED at scale (2,055 entries
+    across 400 real Bulgaria-region tiles, not just the original 3) --
+    found and fixed a real off-by-one bug in the ORIGINAL `WW` formula,
+    then fully cracked `X` on top of the correction ====
+    The broader test first looked like a near-total failure (`WW ==
+    len(text) - 1` held on only 4 of 2,055 entries!) -- but re-deriving
+    directly from the ORIGINAL 3-tile sample showed the earlier "25/25
+    validated" claim was itself wrong by one: **the real rule is `WW ==
+    len(text)` (no `-1`)** -- re-confirmed exactly on the original
+    Vladimir Bashev entries (`len('13^ZHK IZTOK')==12`, `WW==12`, not
+    11). With the corrected formula, 1,875 of 2,055 entries (91.2%)
+    match exactly; excluding entries containing `|`/`$`/apostrophe
+    (a DIFFERENT record type that coincidentally matches this same loose
+    regex -- phonetic/pronunciation transcriptions, e.g. `81^ka|ra|meh|
+    "met`, not real display names) raises this to 1,834 of 1,914 (95.8%)
+    -- the small remainder is longer, multi-"/"-separated strings
+    (looking like highway destination-sign lists, e.g. `13^KREMIKOVTSI/
+    13^KALOTINA/13^BELGRAD`) that may use a related but distinct
+    convention, not investigated further.
+
+    **`X` is now FULLY explained** (on the 1,834-entry clean, validated
+    set, ZERO exceptions): `X = WW + 19` when `WW` is even, `X = WW +
+    18` when `WW` is odd -- i.e. `X` is simply `18 + WW` (the entry's
+    own total byte length: 17-byte header + `WW` text bytes + 1 NUL)
+    rounded UP to the next ODD integer. This is why `X` is always odd
+    (100% of 1,834 samples). Not new information beyond `WW` itself, but
+    a complete, provable formula -- most likely a "next odd boundary"
+    padding/alignment value the original encoder computed, not a
+    separately meaningful field.
+
+    **`ZZ` narrowed, not fully cracked**: 4 values seen (16, 17, 4, 5),
+    which pair up the SAME way `X` does (`{16,17}` = `{17,16}+WW-parity`,
+    `{4,5}` = `{5,4}+WW-parity`, always exactly 1 apart by the same
+    even/odd-`WW` rule as `X`) -- so `ZZ` reduces to a single real
+    unknown: which of 2 "families" (base 16 or base 4, a 12-apart split)
+    a given entry belongs to. Tested against: which tile it's in (NOT a
+    pure per-tile constant -- 78 of 250 tiles mix both families),
+    whether the string is a bare route/road number like `13^9`/`13^E87`
+    (weak positive correlation -- route-like text is disproportionately
+    family-4, but 86 of 215 route-like entries are STILL family-16, so
+    not deterministic). Real, still-open question for a future session.
+
+    **`Y` characterized, ruled out as a simple counter**: within a
+    single tile, `Y` is NOT sequential (real diffs seen: 2, 17, 239 in
+    one tile) and sometimes repeats the EXACT SAME value across 2
+    different entries (e.g. one tile shows `Y=90` twice, then `Y=276`
+    twice) -- inconsistent with "entry number" or "running byte offset
+    strictly increasing per string", more consistent with a reference/
+    index into some OTHER structure this project hasn't located (2
+    entries sharing a `Y` plausibly share some underlying object, e.g.
+    the same road/POI, one entry per language). Not solved.
 
     Returns a list of dicts, one per real entry found, in file order:
         {"text": <str, the full "LANGIDX^NAME" text, NOT including the
@@ -4287,13 +4352,16 @@ def extract_district_names(raw, abc_path=None):
          "header": <the 17 raw header bytes immediately preceding the
                  string, or fewer if this is the very first entry found
                  (no confirmed preceding boundary)>,
-         "X": <int, u16 LE, header bytes 0-1 -- real meaning not yet
-                 identified>,
-         "Y": <int, u16 LE, header bytes 2-3 -- increases monotonically
-                 per-tile; real meaning not yet identified>,
-         "ZZ": <int, header byte 6 -- binary, only 16 or 17 ever seen;
-                 real meaning not yet identified>,
-         "WW": <int, header byte 7 -- VALIDATED: == len(text) - 1>}
+         "X": <int, u16 LE, header bytes 0-1 -- FULLY EXPLAINED: `18 +
+                 WW` rounded up to the next odd integer (see above)>,
+         "Y": <int, u16 LE, header bytes 2-3 -- NOT a simple counter,
+                 real meaning not yet identified (see above)>,
+         "ZZ": <int, header byte 6 -- 4 values (16/17/4/5), reduces to a
+                 2-family binary split whose real meaning is not yet
+                 identified (see above)>,
+         "WW": <int, header byte 7 -- VALIDATED: == len(text), on
+                 genuine name entries (excludes phonetic/pronunciation-
+                 tagged entries, which use a different convention)>}
     """
     lang_map = _get_language_index_map(abc_path)
     matches = list(_DISTRICT_NAME_PATTERN.finditer(raw))
