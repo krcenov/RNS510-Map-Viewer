@@ -2541,6 +2541,22 @@ directly cross-referencing this schema**:
   docstring, "FIRST REAL CRACK of a chunk of `mp0`'s own tail structure"
   and the zone-3 UPDATE immediately after it.
 
+  **Zone 2's own `(tag, subidx)` slots characterized by value
+  distribution — one clean binary flag found.** `tag=0xf4, subidx=1`
+  (70 records) has only 2 distinct values ever (`0xcc`: 43, `0xe1`: 27,
+  a 61%/39% split) — the cleanest categorical slot in the whole zone, a
+  real candidate for a boolean road property (one-way is an obvious
+  guess). 2 more slots look like small enums with a dominant value; 2
+  more (`f1/0`, `f1/1`) are clearly numeric, not flags. **2 independent
+  attempts to localize which `idx` values belong to Vladimir Bashev
+  specifically both failed**, honestly documented rather than reused:
+  point-index-with-topology-shift landed on uninformative "no data"
+  records, and an edge-ordinal check turned out to rely on an artifact
+  of Python's own sort order, not a real structural correspondence — so
+  `f4/1`'s guess remains untestable for now. Real fix needed: recover
+  the topology table's own raw on-disk record order and test whether
+  `idx` tracks that, not point index.
+
   **A DIFFERENT signal from the same parser, tried right after — real,
   clean, and the most promising lead in this file region so far**:
   whether an 8-byte record's `byte2` or `byte3` is EXACTLY ZERO. Across

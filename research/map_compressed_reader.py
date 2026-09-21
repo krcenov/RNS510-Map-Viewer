@@ -2910,6 +2910,66 @@ def decode_topology(raw, declen=None, features=None):
     `mp0`'s own tail. Sub-zones 3b/3c and zone 1 are honest open work for
     a future session.
 
+    ==== UPDATE, same session: zone 2's own `(tag, subidx)` slots
+    characterized by value distribution -- ONE clean binary flag found
+    ====
+    Grouped all 949 zone-2 records by their `(tag byte0, subidx)` pair
+    and looked at each slot's `value` byte distribution (the same "few
+    distinct values = categorical, many = numeric" heuristic that led to
+    the sub-zone-3a speed-limit find). Results:
+      - **`tag=0xf4, subidx=1` (70 records): a clean, genuine BINARY
+        flag** -- only 2 distinct values ever seen, `0xcc` (43 records,
+        61%) and `0xe1` (27 records, 39%). The single cleanest
+        categorical slot in the whole zone; `0xf4` never co-occurs with
+        any other `subidx`. A real candidate for a boolean road property
+        (one-way/two-way is an obvious guess, since this exact tile has
+        a real, confirmed one-way street) -- NOT yet testable against
+        ground truth, for the same reason the missing-subidx=1
+        hypothesis above couldn't be localized: no confirmed `idx`<->
+        point/segment mapping exists yet (2 independent attempts this
+        session -- point-index-with-topology-shift, and an
+        artificially-sorted edge-ordinal position -- both failed to
+        produce usable evidence; see below).
+      - `tag=0xf3, subidx=2` (28 records) and `tag=0xf1, subidx=3` (16
+        records): small categorical-LOOKING enums with one dominant
+        value (82% and 87.5% respectively) plus rare others -- plausibly
+        real categories, but not as clean as `0xf4/1`.
+      - `tag=0xf1, subidx=0` (539 records, 52 distinct values, range
+        110-247) and `subidx=1` (248 records, 18 distinct, range 0-246):
+        clearly NUMERIC/continuous, not flags -- too many distinct
+        values across too narrow a record count to be a small enum.
+        Real candidates: a name/label reference id, or a continuous
+        measurement (width, elevation, etc.); not investigated further.
+
+    ==== UPDATE, same session: 2 independent attempts to map `idx` to a
+    real point/edge, to localize Vladimir Bashev's own segments -- BOTH
+    FAILED, honestly documented so a future session doesn't repeat them
+    ====
+    Used `resolve_topology_adjacency()` (already validated elsewhere in
+    this file) on this exact tile/feature: confirms the real ground-
+    truth edge (point 198 <-> point 269, Vladimir Bashev) IS present at
+    "high" confidence (437 total real edges, shift=1). Attempt 1: assume
+    `idx` approximately equals point index (reusing this feature's own
+    validated topology shift=1) -- checked `idx` values near 195-198 and
+    269-277 in sub-zone 3a; ALL show `speed=0x00` (no data), which is
+    UNINFORMATIVE (0 is the single most common speed value overall, 61 of
+    131 records), not a confirming or refuting result. Attempt 2:
+    compute edge (198,269)'s ordinal position in `resolve_topology_
+    adjacency()`'s returned edge list -- landed on position 230, and
+    sub-zone-3a's `idx=230` DOES have real speed data (`0x28`=40 km/h,
+    close to but not exactly the user's confirmed real 50 km/h) -- but
+    this is NOT real evidence: the returned edge list is sorted by plain
+    Python tuple comparison on `(point_a, point_b)`, an ARTIFACT of how
+    this project's own code presents results, with no reason to relate
+    to how the original encoder ordered anything on disk. Correctly
+    caught and disclaimed before being reported as a finding, not after.
+    **Honest conclusion**: localizing which `idx`/`seg_list` records
+    belong to which real, named street remains unsolved. The real fix
+    would be recovering the topology table's own RAW on-disk record
+    order for this feature (not point index, not an artificial sort) and
+    testing whether `idx` tracks that instead -- a genuinely uncertain,
+    non-trivial next step, not attempted further this session.
+
     ==== UPDATE: firmware emulation used to probe byte1's real role ====
     Built a Unicorn-based (UC_ARCH_PPC/UC_MODE_BIG_ENDIAN) "emulation
     classifier" over `FHDD6.FLI`'s real code region (see
