@@ -2622,6 +2622,24 @@ directly cross-referencing this schema**:
   per-street identifier, not a record-type marker. `zone2_categorical_
   slots()` computes the "most categorical slot" fresh per tile.
 
+  **A real bug found and fixed in that same boundary-finding, then zone
+  3a (the speed-limit candidate) generalized on top of it.** Chaining
+  `decode_mp0_zone3a()` right after `decode_mp0_zone2()`'s own `"end"`
+  surfaced a genuine over-permissive-trap bug: on the ORIGINAL Vladimir
+  Bashev tile, `"end"` landed 4 bytes past the true boundary — the last
+  real record's own trailing bytes coincidentally also satisfied the
+  11-byte check, producing an implausible `subidx=133` (real `subidx`
+  is always 0-5). Fixed with a `subidx <= 10` plausibility guard;
+  re-verified this changes nothing about the already-validated
+  949-record result, only removes the spurious over-reach. With that
+  fix, zone 3a reproduces the original speed distribution EXACTLY
+  (`{0x00:61, 0x1e:7, 0x28:14, 0x32:24, 0x50:26}`) and generalizes to 4
+  of 5 more tiles. **A genuinely exciting extra confirmation**: the
+  Sofia-airport tile shows speed values `{0,20,40,50,60,70,80}` km/h —
+  wider but still perfectly clean multiples of 10, exactly what you'd
+  expect from an airport's mixed taxiway/access-road/parking zones vs.
+  a uniform residential street.
+
   **Zone 2's own `(tag, subidx)` slots characterized by value
   distribution — one clean binary flag found.** `tag=0xf4, subidx=1`
   (70 records) has only 2 distinct values ever (`0xcc`: 43, `0xe1`: 27,
@@ -6550,14 +6568,14 @@ that POI's own real coordinates, and the breadcrumb correctly reads
 `RESTAURANTS | POI | MCDONALD'S` — not the old hardcoded `"ROAD"` label
 a POI hit would previously have gotten.
 
-### v23 → v24: `mp0` district-name table + zone-2 candidate flag slots surfaced in the point-pick panel (this session)
+### v23 → v24: `mp0` district-name table + zone-2 candidate flag slots + zone-3a candidate speed limits surfaced in the point-pick panel (this session)
 
 **Standing rule established this session**: every real discovery gets
 implemented in this viewer, not just documented in the research files —
 previously only the `mg4` "predicted divided" overlay had ever been
 wired in (§3.6/§8), and only because it was explicitly requested.
 
-Two new EXPERIMENTAL, `mp0`-only rows now append to the picked-points
+Three new EXPERIMENTAL, `mp0`-only rows now append to the picked-points
 panel on an ordinary point pick (or an edge pick), alongside the
 existing "nearby streets" enrichment:
   - **Tile area label(s)**: `MapData.get_tile_district_names()` →
@@ -6570,13 +6588,24 @@ existing "nearby streets" enrichment:
     of the zone-2 record crack (§3.16/§8). Structure validated
     (exhaustive DP, zero-leftover coverage on every tile tested); the
     real-world meaning of any given slot's value is explicitly NOT
-    claimed.
+    claimed. Generalizing this surfaced and fixed a real
+    over-permissive-trap bug in its own boundary-finding (a `subidx <=
+    10` plausibility guard, §3.16/§8) — re-verified to change nothing
+    about the already-validated 949-record result on the original tile.
+  - **Zone-3a candidate speed-limit-shaped value(s)**: `MapData.
+    get_tile_seg_zone3a_summary()` → `mcr.decode_mp0_zone3a()`/
+    `zone3a_speed_distribution()` — the generalized speed-limit
+    candidate (§3.16/§8), built on the corrected zone-2 boundary above.
+    Reproduces the original tile's exact speed distribution and
+    generalizes to 4 of 5 more tiles tested, including a wider but still
+    clean multiple-of-10-km/h range on a Sofia-airport tile. NOT
+    ground-truth-confirmed on any tile.
 
-Both follow the existing best-effort-enrichment pattern (`try`/`except`
+All 3 follow the existing best-effort-enrichment pattern (`try`/`except`
 → empty string, never blocks or crashes an ordinary pick) and the
 `_predecode_caches`-reuse-then-disk-fallback pattern already used by
 `get_tile_adjacency()`/`get_tile_seg_prediction()`. `test_map_viewer.py`
-re-run in full after both additions — all tests still pass, zero
+re-run in full after every addition — all tests still pass, zero
 regressions.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)

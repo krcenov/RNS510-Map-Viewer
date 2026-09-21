@@ -1389,6 +1389,18 @@ class MapData:
         # the real world remains an open question -- shown as a raw
         # candidate, not a named property.
         self.seg_zone2_caches = {layer: {} for layer in ALL_LAYERS}
+        # Per-tile `mp0` "zone 3a" speed-limit-shaped record cache (later
+        # session, EXPERIMENTAL): {layer: {tile_id: dict or None}}, a
+        # `mcr.zone3a_speed_distribution()` result per tile (built on
+        # `mcr.decode_mp0_zone3a()`, itself chained right after
+        # `decode_mp0_zone2()`'s own "end"). ONLY ever populated for
+        # layer == "mp0". This is the SAME candidate speed-limit field
+        # found on the Vladimir Bashev ground-truth tile (4 exact values
+        # -- 30/40/50/80 km/h); generalized here to any tile, tested on
+        # 5 more real tiles (4 found a real run, 1 found none -- not
+        # every tile necessarily has this sub-structure). NOT ground-
+        # truth-confirmed on any tile including the original.
+        self.seg_zone3a_caches = {layer: {} for layer in ALL_LAYERS}
         self.covered_bbox = None    # (lon_min, lon_max, lat_min, lat_max)
         self.covered_layers = None  # list of layers covered_bbox's tiles were pooled from
         self.active_tile_ids = {}   # {layer: [tile_id, ...]} currently pooled for drawing
@@ -1932,6 +1944,51 @@ class MapData:
                 if zone2["records"]:
                     slots = mcr.zone2_categorical_slots(zone2["records"])
                     result = {"n_records": len(zone2["records"]), "top_slots": slots}
+        except Exception:
+            result = None
+        cache[tile_id] = result
+        return result
+
+    def get_tile_seg_zone3a_summary(self, layer, tile_id):
+        """Lazily compute + cache a summary of `mcr.decode_mp0_zone3a()`
+        (chained right after `decode_mp0_zone2()`'s own `"end"`) for one
+        `mp0` tile's FIRST feature. Same fallback pattern as
+        `get_tile_seg_zone2_summary()`. A no-op (returns `None` without
+        touching the cache) for any layer other than `mp0` -- see
+        `MapData.seg_zone3a_caches`'s own comment in `__init__`. Returns
+        `None` if no features, no locatable topology table, no plausible
+        zone-2 run (needed first, to know where zone 3 starts), or no
+        plausible zone-3a run -- never raises (not every tile
+        necessarily has this sub-structure). Otherwise returns
+        `{"n_records": int, "speed_distribution": {value: count, ...}}`
+        (see `mcr.zone3a_speed_distribution()`'s own docstring -- values
+        are raw bytes, NOT yet ground-truth-confirmed as km/h on any
+        tile)."""
+        if layer != "mp0":
+            return None
+        cache = self.seg_zone3a_caches[layer]
+        if tile_id in cache:
+            return cache[tile_id]
+        result = None
+        try:
+            pre = self._predecode_caches[layer].get(tile_id)
+            if pre is not None:
+                raw, declen, features, keep_idx = pre
+            else:
+                offset, declen, complen = self.directories[layer]["entries"][tile_id]
+                with open(self.layer_paths[layer], "rb") as f:
+                    f.seek(offset)
+                    raw = zlib.decompress(f.read(complen))
+                declen = len(raw)
+                features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
+            if features:
+                tail = mcr.seg_tail_region(raw, declen, features[0], features)
+                zone2 = mcr.decode_mp0_zone2(tail)
+                if zone2["end"] is not None:
+                    zone3a = mcr.decode_mp0_zone3a(tail, zone2["end"])
+                    if zone3a["records"]:
+                        dist = mcr.zone3a_speed_distribution(zone3a["records"])
+                        result = {"n_records": len(zone3a["records"]), "speed_distribution": dist}
         except Exception:
             result = None
         cache[tile_id] = result
@@ -4317,15 +4374,17 @@ class App:
             nearby_summary = self._append_nearby_streets_row(info["lon"], info["lat"])
             district_summary = self._append_district_names_row(info["layer"], info["tile_id"])
             zone2_summary = self._append_seg_zone2_row(info["layer"], info["tile_id"])
+            zone3a_summary = self._append_seg_zone3a_row(info["layer"], info["tile_id"])
             self._redraw()
             self._set_status(
                 "Point #%d identified: layer=%s tile_id=%s feature=%s point=%s (%.6f, %.6f)%s -- "
-                "see the picked-points panel below to copy its full info.%s%s%s" % (
+                "see the picked-points panel below to copy its full info.%s%s%s%s" % (
                     info["number"], info["layer"], info["tile_id"], info["feature_index"], info["point_index"],
                     info["lon"], info["lat"], (" name=%s" % info["name"]) if info["name"] else "",
                     (" " + nearby_summary) if nearby_summary else "",
                     (" " + district_summary) if district_summary else "",
-                    (" " + zone2_summary) if zone2_summary else ""))
+                    (" " + zone2_summary) if zone2_summary else "",
+                    (" " + zone3a_summary) if zone3a_summary else ""))
             return
 
         if self.connected_roads_var.get():
@@ -4367,6 +4426,7 @@ class App:
         self._append_picked_point_row(b)
         self._append_district_names_row(a["layer"], a["tile_id"])
         self._append_seg_zone2_row(a["layer"], a["tile_id"])
+        self._append_seg_zone3a_row(a["layer"], a["tile_id"])
         self._redraw()
         self._set_status(
             "Edge identified: connects point #%d (layer=%s tile_id=%s point=%s, %.6f, %.6f) <-> "
@@ -4500,6 +4560,39 @@ class App:
                 summary["n_records"], "; ".join(shown)))
         self.points_text.see("end")
         return "Zone-2 candidate flag slot(s) found (see panel)."
+
+    def _append_seg_zone3a_row(self, layer, tile_id):
+        """`mp0` "zone 3a" speed-limit-SHAPED record feature (later
+        session, EXPERIMENTAL -- see map_compressed_reader.
+        decode_mp0_zone3a()/zone3a_speed_distribution()'s own
+        docstrings): after a normal point pick on an `mp0` point, look
+        up that tile's own zone-3a record run (feature 0 only, chained
+        right after zone 2) and, if found, append its speed-byte
+        distribution. TILE-LEVEL, not attributed to the specific picked
+        point/street. The candidate values (30/40/50/80 km/h on the
+        original Vladimir Bashev tile) are REAL, standard speed limits,
+        but this is NOT ground-truth-confirmed on any tile -- shown as a
+        raw candidate distribution, never a confirmed speed limit. Not
+        every tile has this sub-structure (found on 4 of 5 additional
+        tiles tested). Silent no-op for any other layer or if nothing
+        was found. Returns a short one-line summary string for the
+        status bar (empty string if nothing was found/added)."""
+        if self.data is None or layer != "mp0":
+            return ""
+        try:
+            summary = self.data.get_tile_seg_zone3a_summary(layer, tile_id)
+        except Exception:
+            return ""  # best-effort enrichment -- never blocks an ordinary pick
+        if not summary or not summary["speed_distribution"]:
+            return ""
+        dist = summary["speed_distribution"]
+        shown = ", ".join("0x%02x(x%d)" % (v, c) for v, c in sorted(dist.items()))
+        self.points_text.insert(
+            "end", "      zone-3a candidate speed-limit-shaped value(s) (EXPERIMENTAL, mp0 "
+            "only, NOT ground-truth-confirmed, %d records this tile): %s\n" % (
+                summary["n_records"], shown))
+        self.points_text.see("end")
+        return "Zone-3a candidate speed-limit value(s) found (see panel)."
 
     def _rebuild_points_panel(self):
         """Fully redraw the picked-points text panel from self.picked_points

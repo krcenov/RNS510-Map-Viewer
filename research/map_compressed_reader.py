@@ -3120,6 +3120,43 @@ def decode_topology(raw, declen=None, features=None):
     (EXPERIMENTAL, structure validated, real-world meaning still
     unknown for every tile including the original).
 
+    ==== UPDATE, same session, immediately following: a REAL bug found
+    and fixed in `decode_mp0_zone2()`'s own boundary-finding, THEN
+    zone 3a (the speed-limit candidate) generalized on top of it ====
+    Chaining `decode_mp0_zone3a()` right after `decode_mp0_zone2()`'s
+    own `"end"` (rather than a hand-picked offset, exactly like zone 2's
+    own generalization) surfaced a real, previously-undetected bug: on
+    the ORIGINAL Vladimir Bashev tile, `decode_mp0_zone2()`'s `"end"`
+    landed 4 bytes past the true, already-validated boundary (12,323
+    instead of 12,319) -- the classic "over-permissive trap" this
+    project has hit before: the last real 7-byte record's own trailing
+    bytes coincidentally ALSO satisfied the 11-byte validity check,
+    stretching one extra "record" whose own `subidx` byte decoded to
+    133 -- never a plausible value (every real `subidx` seen anywhere
+    in this project is 0-5). **Fixed with a plausibility guard**:
+    `decode_mp0_zone2()`'s own validity check now also requires
+    `subidx <= 10`. Re-verified this changes NOTHING about the already-
+    validated 949-record result (same records, same `(tag, subidx)`
+    slot values) -- it only removes the one spurious trailing
+    over-reach, confirmed by re-matching the corrected boundary (12,319)
+    exactly against the ORIGINAL, hand-verified zone-1/zone-2 seam.
+
+    With that fix, `decode_mp0_zone3a()` (chained from the corrected
+    `"end"`) reproduces the original 131-132 record speed-distribution
+    exactly (`{0x00: 61, 0x1e: 7, 0x28: 14, 0x32: 24, 0x50: 26}` --
+    identical counts to the original hand-verified crack) and
+    generalizes to 4 of 5 additional real tiles (46-154 records each; 1
+    tile found no plausible run, honestly left uninvestigated). **A
+    genuinely exciting additional confirmation**: the Sofia-airport tile
+    (`mp0` offset 1,003,495,557, already used for the district-name
+    table's own richest sample) shows speed-byte values `{0x00, 0x14,
+    0x28, 0x32, 0x3c, 0x46, 0x50}` = `{0, 20, 40, 50, 60, 70, 80}` km/h
+    -- a WIDER but still perfectly clean multiple-of-10 km/h range,
+    exactly what you'd expect from an airport's mixed taxiway/access-
+    road/parking speed zones vs. a uniform residential street. Wired
+    into the viewer's point-pick info panel (EXPERIMENTAL, NOT ground-
+    truth-confirmed on any tile).
+
     ==== UPDATE: firmware emulation used to probe byte1's real role ====
     Built a Unicorn-based (UC_ARCH_PPC/UC_MODE_BIG_ENDIAN) "emulation
     classifier" over `FHDD6.FLI`'s real code region (see
@@ -3505,7 +3542,17 @@ def decode_mp0_zone2(tail):
     def valid(pos, w):
         if pos + w > n:
             return False
-        return tail[pos + 1] == mid_byte and tail[pos + 2] == 0x00
+        if tail[pos + 1] != mid_byte or tail[pos + 2] != 0x00:
+            return False
+        # Plausibility guard against the "over-permissive trap": a real
+        # subidx is always small (0-5 in every sample seen so far); an
+        # interpretation whose own subidx byte is huge (e.g. 133) is a
+        # coincidental match on unrelated bytes, not a real record --
+        # found directly (VladimirBashev's own final record wrongly
+        # extended from 7 to 11 bytes without this guard, producing
+        # subidx=0x85=133).
+        subidx = tail[pos + 5] if w == 7 else tail[pos + 9]
+        return subidx <= 10
 
     visited = {start}
     frontier = [start]
@@ -3581,6 +3628,92 @@ def zone2_categorical_slots(records, max_distinct=4, min_records=8):
         })
     results.sort(key=lambda r: -r["n"])
     return results
+
+
+def decode_mp0_zone3a(tail, zone3_start, widths=(6, 7, 5, 8)):
+    """PARTIALLY CRACKED, GENERALIZED -- `mp0`'s "zone 3, sub-zone 3a"
+    speed-limit-shaped record run (originally found on Vladimir Bashev,
+    `decode_topology()`'s own docstring, "a REAL, PLAUSIBLE SPEED-LIMIT
+    crack found, plus 2 more sub-structures characterized"), re-derived
+    to start right after `decode_mp0_zone2()`'s own `"end"` on ANY tile
+    rather than a hand-picked offset. Record shape: `[idx: u16 LE]
+    [type: 1 byte][... variable ...][value: 1 byte][0x04 terminator]`,
+    total width 6 or 7 bytes (occasionally 5 or 8) -- the `type` byte
+    deterministically selects the width, and the byte right before the
+    terminator is, on the original tile, one of exactly 4 values (30,
+    40, 50, 80 -- real km/h speed limits).
+
+    Tested against 5 more real Sofia-area `mp0` tiles this session:
+    **the boundary-finding itself needed a real fix to generalize** --
+    `decode_mp0_zone2()`'s own end position was occasionally 4 bytes too
+    far (an "over-permissive trap" instance: a final 7-byte record's own
+    tail bytes coincidentally also satisfied the 11-byte validity check,
+    producing an implausible `subidx=133`; fixed there with a `subidx
+    <= 10` plausibility guard -- see that function's own docstring).
+    With that fix, 4 of the 5 new tiles found a real record run (46-154
+    records each) with plausible speed-byte distributions matching the
+    original tile's own shape; 1 tile found no plausible run at all
+    (honest, not investigated further this session -- not every tile
+    necessarily has this exact sub-structure immediately after zone 2).
+
+    Uses the same exhaustive-DP technique as everywhere else in this
+    module (validity = the candidate slice's own last byte is `0x04`,
+    full chain must reach a consistent target, no partial credit).
+    Returns `{"records": [(pos, width, raw_bytes), ...], "end": int or
+    None}` -- `records` is `[]` and `end` is `None` if no plausible run
+    was found (never raises)."""
+    n = len(tail)
+
+    def valid(pos, w):
+        if pos + w > n:
+            return False
+        return tail[pos + w - 1] == 0x04
+
+    visited = {zone3_start}
+    frontier = [zone3_start]
+    while frontier:
+        nf = []
+        for pos in frontier:
+            for w in widths:
+                if valid(pos, w) and pos + w not in visited:
+                    visited.add(pos + w)
+                    nf.append(pos + w)
+        frontier = nf
+    if len(visited) <= 1:
+        return {"records": [], "end": None}
+    target = max(visited)
+
+    reachable = {target: True}
+    for i in range(target - 1, zone3_start - 1, -1):
+        reachable[i] = any(
+            i + w <= target and valid(i, w) and reachable.get(i + w) for w in widths)
+    if not reachable.get(zone3_start):
+        return {"records": [], "end": None}
+
+    i = zone3_start
+    records = []
+    while i < target:
+        moved = False
+        for w in widths:
+            if i + w <= target and valid(i, w) and reachable.get(i + w):
+                records.append((i, w, tail[i:i + w]))
+                i += w
+                moved = True
+                break
+        if not moved:
+            break
+    return {"records": records, "end": target}
+
+
+def zone3a_speed_distribution(records):
+    """Given `decode_mp0_zone3a()`'s own `"records"` list, returns the
+    byte-value distribution of the byte immediately before each
+    record's `0x04` terminator (the field validated as a plausible
+    speed-limit candidate on the original tile -- see
+    `decode_mp0_zone3a()`'s own docstring). Returns `{value: count,
+    ...}` (raw byte values, NOT yet confirmed as km/h on any tile other
+    than the original)."""
+    return dict(collections.Counter(rec[-2] for _pos, _w, rec in records))
 
 
 # ---------------------------------------------------------------------------
