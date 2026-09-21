@@ -6634,6 +6634,16 @@ All 3 follow the existing best-effort-enrichment pattern (`try`/`except`
 re-run in full after every addition — all tests still pass, zero
 regressions.
 
+**Update, still this session**: fixing a regex-truncation bug in
+`extract_district_names()` (widened `{3,40}` → `{3,200}`, §3.16/§8)
+took `WW`/`X` from 95.8% to 100.0% exact match, and with clean data
+revealed `Y`/`ZZ` encode a real highway-sign route↔destination
+structure. The "tile area label(s)" panel row now uses `mcr.
+group_district_name_signs()` to join paired entries into one readable
+`"9/E87 -> BURGAS/SOFIA"`-style label instead of 2 separate-looking
+strings — itself EXPERIMENTAL (84.7% validated, not perfectly clean).
+`test_map_viewer.py` re-run again, all tests pass.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

@@ -4507,9 +4507,18 @@ class App:
         point/street -- there is no known way yet to tell which entry
         (if any) belongs to which segment, so this is shown as "this
         tile's own area label(s)", not a property of the picked point
-        itself. Silent no-op for any other layer or if none are found.
-        Returns a short one-line summary string for the status bar
-        (empty string if nothing was found/added)."""
+        itself.
+
+        Groups entries via `mcr.group_district_name_signs()` (a later
+        session's own real find: paired entries sharing a `Y` value are
+        very likely a highway-sign route<->destination pair, e.g.
+        "9/E87 -> BURGAS/SOFIA" -- 84.7% validated, not perfectly clean)
+        so a route/destination pair shows as ONE readable arrow-joined
+        label instead of 2 unrelated-looking strings.
+
+        Silent no-op for any other layer or if none are found. Returns
+        a short one-line summary string for the status bar (empty
+        string if nothing was found/added)."""
         if self.data is None or layer != "mp0":
             return ""
         try:
@@ -4518,11 +4527,18 @@ class App:
             return ""  # best-effort enrichment -- never blocks an ordinary pick
         if not entries:
             return ""
-        shown = [e["text"] for e in entries[:8]]
-        more = "" if len(entries) <= 8 else " (+%d more)" % (len(entries) - 8)
+        try:
+            groups = mcr.group_district_name_signs(entries)
+            shown = [g["label"] for g in groups[:8]]
+            n_total = len(groups)
+        except Exception:
+            shown = [e["text"] for e in entries[:8]]
+            n_total = len(entries)
+        more = "" if n_total <= 8 else " (+%d more)" % (n_total - 8)
         self.points_text.insert(
             "end", "      tile area label(s) (EXPERIMENTAL, mp0 only, not attributed to this "
-            "specific point): %s%s\n" % (", ".join(shown), more))
+            "specific point; \"A -> B\" = a route/destination sign pairing, itself "
+            "experimental): %s%s\n" % (", ".join(shown), more))
         self.points_text.see("end")
         return "Tile area label(s): %s%s." % (", ".join(shown), more)
 

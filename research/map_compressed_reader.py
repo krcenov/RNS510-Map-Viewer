@@ -4459,3 +4459,62 @@ def extract_district_names(raw, abc_path=None):
         results.append(rec)
         prev_end = m.end()
     return results
+
+
+def group_district_name_signs(entries):
+    """Groups `extract_district_names()`'s own output into readable
+    "sign" entries using the `Y`-pairing/`ZZ`-role structure found this
+    session (see `extract_district_names()`'s own docstring UPDATE,
+    "`Y`/`ZZ` cracked as a real HIGHWAY-SIGN route<->destination
+    pairing", for the full validation -- 84.7% of same-`Y` pairs show
+    one route-designator entry (`ZZ` family 4/5) matched with one
+    destination-place entry (family 16/17); NOT perfectly clean, ~15%
+    of pairs don't split this way).
+
+    Groups entries sharing the same `Y` value; within each group, any
+    family-4/5 entries are treated as the route/road label(s) and any
+    family-16/17 entries as the destination label(s). Returns a list of
+    dicts, one per `Y` group, in the SAME relative order as `entries`
+    (by the first member's own position):
+        {"y": <int>, "route": <str or None, the route entries' own
+                 text, "/"-joined if more than one>,
+         "destination": <str or None, the destination entries' own
+                 text, "/"-joined if more than one>,
+         "label": <str, a human-readable summary: "ROUTE -> DEST" if
+                 both are present, just the plain text if only one
+                 side is present (the common, unpaired case)>,
+         "members": <the original entry dicts in this group>}
+    Entries with no `"ZZ"` (a malformed/edge-of-buffer header) are
+    each their own singleton group. Never raises."""
+    groups = {}
+    order = []
+    for e in entries:
+        if "Y" not in e:
+            key = ("_no_y_", id(e))
+        else:
+            key = e["Y"]
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(e)
+
+    results = []
+    for key in order:
+        members = groups[key]
+        routes = [e["text"] for e in members if e.get("ZZ") in (4, 5)]
+        dests = [e["text"] for e in members if e.get("ZZ") in (16, 17)]
+        others = [e["text"] for e in members if e.get("ZZ") not in (4, 5, 16, 17)]
+        route_str = "/".join(routes) or None
+        dest_str = "/".join(dests) or None
+        if route_str and dest_str:
+            label = "%s -> %s" % (route_str, dest_str)
+        else:
+            label = "/".join(routes + dests + others) or (members[0]["text"] if members else "")
+        results.append({
+            "y": key if isinstance(key, int) else None,
+            "route": route_str,
+            "destination": dest_str,
+            "label": label,
+            "members": members,
+        })
+    return results
