@@ -4150,6 +4150,40 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     separate gap from the per-feature "found: False" issue above, and not
     yet attempted in any session.
 
+    CONCRETE CROSS-TILE EXAMPLE, a still-later session, user-reported,
+    investigated directly: an even BIGGER version of the same
+    architectural gap above -- this one crosses TILES entirely, not just
+    features within one tile. User right-clicked 2 real points on `mg4`
+    they expect connected: tile 2384 (offset 6,543,722), point_index 132,
+    (23.45508, 42.63235); tile 2385 (offset 6,546,198), point_index 12,
+    (23.45595, 42.63224) -- 2 DIFFERENT tiles. Confirmed real and
+    plausible directly: both points decode exactly as reported, ~72m
+    apart (well within this project's own already-established real-edge
+    distance range). **Structural signature matches a genuine tile-
+    boundary split exactly**: `resolve_topology_adjacency()` gives BOTH
+    points "high" confidence within their own tile, but each is a
+    degree-1 dead end locally (tile 2384's point 132 -> only neighbor is
+    point 127; tile 2385's point 12 -> only neighbor is point 37) -- the
+    expected signature of a single real road cut at a tile boundary, each
+    half looking like a local dead end because neither tile's own table
+    can express a link to the OTHER tile. **The actual cross-tile link
+    mechanism remains uncracked**: the 2 points' own raw topology records
+    share NO common field value (tile 2384 point 132's record fields are
+    `(163, 162)`; tile 2385 point 12's are `(116, 117, 118)`) -- confirming
+    the intra-tile "shared link-id" trick this whole mechanism is built on
+    genuinely cannot reach across tiles, consistent with this project's
+    own earlier firmware-string finding that a SEPARATE, real, NAMED
+    pipeline exists for exactly this (`db_vid_get_map_id_V000`/`db_vid_
+    get_pcl_id_V000` -- resolve a virtual node id to its owning map/
+    parcel -- see `research/swl_5238_reader.py`'s own "GLOBAL routing-
+    graph node problem" section) but was never byte-offset-cracked. This
+    real example is preserved here, with full coordinates, specifically
+    so a future session attempting that crack has real, human-verified
+    ground truth to validate against -- 1 example isn't enough to reverse
+    -engineer a new mechanism from scratch, but is exactly the kind of
+    concrete anchor point that DID work for the intra-tile mechanism
+    (which needed 2 ground-truth tiles before the real pattern emerged).
+
     PER-EDGE FALSE-POSITIVE FILTER (this session, README §10 "v16 -> v17" --
     found via the map viewer's new edge click-to-identify feature, which
     lets a user right-click a specific rendered connected-roads LINE and

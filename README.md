@@ -4142,6 +4142,26 @@ original exactly.
    see the "UPDATE (later session): CRACKED" paragraph in §3.6's topology
    write-up, `decode_topology()`'s and `resolve_topology_adjacency()`'s
    docstrings in `map_compressed_reader.py`.
+
+   **Real, user-reported CROSS-TILE example, a still-later session**: an
+   even bigger version of the same gap — `resolve_topology_adjacency()`
+   only ever resolves adjacency WITHIN one feature/tile; it has no
+   mechanism at all for a road that continues into a DIFFERENT tile.
+   User right-clicked 2 real points on `mg4` expected to connect: tile
+   2384 point 132 (23.45508, 42.63235) and tile 2385 point 12
+   (23.45595, 42.63224) — different tiles, ~72m apart, a real, plausible
+   connection. Confirmed the structural signature matches a genuine
+   tile-boundary split exactly: both resolve at "high" confidence within
+   their own tile, but each is a degree-1 dead end locally (no further
+   neighbor within its own tile's data). The actual cross-tile link is
+   NOT encoded via the usual shared-link-id trick — the 2 points' own
+   raw topology records share no common field value at all. This is the
+   same GLOBAL routing-graph problem the firmware string-mining already
+   named a real pipeline for (`db_vid_get_map_id_V000`/`db_vid_get_
+   pcl_id_V000`, §2.6) but never cracked at the byte level — this real
+   example is preserved as ground truth for that future attempt. Full
+   coordinates: `decode_topology()`'s docstring in
+   `research/map_compressed_reader.py`.
 6. ~~`.rt`/`.rl` semantics~~ **`.rl`/`.prl` SOLVED and validated at scale; `.rt`'s node
    format also now CRACKED and cross-validated, with a few fields/edge cases still
    open** — see §3.7. `.rl` (12-byte records: candidate `.rd` index + validated `.prl`
