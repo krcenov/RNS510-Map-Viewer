@@ -2923,6 +2923,61 @@ def decode_topology(raw, declen=None, features=None):
     suggests a further, not-yet-isolated sub-boundary partway through.
     Not solved.
 
+    ==== UPDATE, a still-later session: the "large repeating values"
+    were a MISALIGNMENT ARTIFACT, not real data -- the true structure
+    underneath is a real, DP-validated 3-byte record format ====
+    Tried correlating the small early deltas against this feature's own
+    real point-to-point coordinate deltas (multiple plausible fixed-
+    point scale factors) -- no clean match found at any scale; this
+    specific "coordinate delta" hypothesis does not hold up, at least
+    not this simply.
+
+    Hand-inspected the raw bytes right where the "large, repeating
+    value" region begins (zone-3c byte ~652) directly, instead of
+    trusting the flat `int16`-pair parse: found a clear, repeating `XX
+    YY 04` 3-byte shape (e.g. `c3 ff 04`, `fa ff 04`, `d3 ff 04` ...).
+    **The earlier "large values like 1279/-11516 repeating constantly"
+    were a pure misalignment artifact**: `1279` = `0x04ff`, exactly the
+    byte pattern you get by reading a terminator byte (`0x04`) and the
+    NEXT record's own first byte together as a fake 2-byte value --
+    i.e. the true record width here is 3 bytes (`[value: s16 LE][0x04
+    terminator]`), not the flat 2-byte stride used everywhere else in
+    this zone, and blindly continuing the 2-byte stride through a
+    3-byte-record region produces exactly this kind of "huge, oddly
+    repeating" drift. A genuine, useful lesson for this project's own
+    methodology: always re-derive the record width locally, never
+    assume the previous sub-zone's stride continues.
+
+    Confirmed with the SAME exhaustive-DP technique used everywhere
+    else (validity = record's own last byte is `0x04`, widths 3-7,
+    full-chain reachability, no partial credit): starting from byte
+    692 (right after ANOTHER real sub-structure -- see below) reaches
+    byte 807 with **34 real records, zero leftover bytes** -- mostly
+    3-byte (dominant values recur: `-6`, `-45`, `-46`, `-5`, `-62`),
+    with 2 six-byte and 1 seven-byte "special" records mixed in --
+    the SAME "mostly-fixed-width plus occasional wider special record"
+    shape this project has now found in `mg4`'s own `seg_list`, zone
+    1's numeric records, and zone 2 -- consistent, not coincidental.
+
+    The bytes immediately BEFORE byte 692 (roughly zone-3c bytes
+    ~590-692) are themselves a THIRD, different real sub-structure: 2
+    monotonically-increasing `u16` sequences read together as pairs --
+    e.g. `(321,6), (338,18), (342,24), (358,30), (359,36), (360,51),
+    (362,63), (364,69), (365,75), (366,87), (374,99)` -- both halves of
+    each pair climb steadily. The first half's range (321-374+) sits
+    ABOVE sub-zone 3b's own already-refuted "point index" range
+    (49-211 on this same tile), so if these ARE also point-index-like
+    references, they'd cover a DIFFERENT, later portion of this
+    feature's 391-point polyline -- a plausible but NOT yet tested
+    continuation of the (refuted-elsewhere) point-index hypothesis.
+
+    **Honest overall picture for sub-zone 3c**: at least 3 real,
+    distinct internal regions (small deltas -> a 2-sequence increasing-
+    pair run -> a DP-validated 3-byte record run), none semantically
+    named yet, but the earlier "confusing, seemingly-random large
+    values" mystery is now explained as an artifact rather than real
+    structure -- a genuine, if partial, step forward.
+
     **Overall**: zone 1 (tail bytes 0-3,788) remains completely
     uncharacterized. This session's real, validated positive results are
     zone 2 (949 records, full 8,524-byte coverage) and zone-3's sub-zone

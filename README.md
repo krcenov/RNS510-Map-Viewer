@@ -2577,9 +2577,19 @@ directly cross-referencing this schema**:
   a 2nd tile the resulting indices exceed that tile's own real point
   count entirely — a clean refutation, not just inconclusive. Sub-zone
   3c (1,056 bytes) starts as small signed deltas then shifts character
-  partway through — not fully solved. Full writeup: `decode_topology()`'s
-  docstring, "FIRST REAL CRACK of a chunk of `mp0`'s own tail structure"
-  and the zone-3 UPDATE immediately after it.
+  partway through — a later session found the "large, repeating values"
+  were a MISALIGNMENT ARTIFACT, not real data: the true record width
+  changes to 3 bytes (`[value: s16][0x04 terminator]`) partway through,
+  and reading it with the wrong 2-byte stride produces exactly this
+  kind of confusing drift (`1279` = `0x04ff`, literally a terminator
+  byte glued to the next record's own first byte). DP-validated: 34
+  real 3-byte (plus a few 6/7-byte "special") records, zero leftover
+  bytes. A 3rd, distinct sub-region (2 monotonically-increasing `u16`
+  sequences read as pairs) sits between the deltas and this record run.
+  None of the 3 regions are semantically named yet, but the "seemingly
+  random large values" mystery is now explained. Full writeup:
+  `decode_topology()`'s docstring, "FIRST REAL CRACK of a chunk of
+  `mp0`'s own tail structure" and the zone-3 UPDATE immediately after it.
 
   **Zone 1 (tail bytes 0-3,788) — a real numeric-record crack PLUS a
   genuine, independently-verified Bulgarian place-name string table.**
