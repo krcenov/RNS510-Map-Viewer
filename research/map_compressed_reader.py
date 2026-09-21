@@ -4392,6 +4392,25 @@ def extract_district_names(raw, abc_path=None):
     (beyond "is it shared") still has no identified meaning -- plausibly
     a simple incrementing pair-id counter, not directly tested.
 
+    ==== UPDATE, a still-later session: tested whether `Y` directly
+    references `mp0` zone 2's own per-street `idx` counter -- genuinely
+    UNTESTABLE with a simple check, not confirmed or refuted ====
+    Motivated by both being small, tile-local integers: checked whether
+    every `Y` value in a tile is also a valid zone-2 `idx` value (via
+    `decode_mp0_zone2()`). On every tile tested (`gt2_91124`: 19/19
+    `Y` values are valid `idx` values; `92468`: 4/4; `87600`: 16/16) --
+    100% "membership", which LOOKED promising at first but turned out
+    uninformative: zone 2's own `idx` range is ITSELF 100% dense on
+    every one of these tiles (zero gaps -- e.g. `gt2_91124`'s `idx`
+    covers the complete integer range 0-363 with no missing values at
+    all), so almost ANY small integer would trivially pass this
+    "membership" check regardless of whether `Y` genuinely references
+    `idx` or not. A real, honest dead end for this specific test -- not
+    a confirmation, and not (yet) a refutation either. A future
+    session's next step would need a tile where zone 2's `idx` range
+    has REAL gaps (none found among the tiles checked so far) to make
+    this a meaningful test.
+
     Returns a list of dicts, one per real entry found, in file order:
         {"text": <str, the full "LANGIDX^NAME" text, NOT including the
                  trailing NUL>,
