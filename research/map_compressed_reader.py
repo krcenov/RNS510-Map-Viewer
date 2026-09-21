@@ -2848,17 +2848,67 @@ def decode_topology(raw, declen=None, features=None):
     against `mg4`, or a completely different part of `mp0`'s own record)
     remains open.
 
-    **Still open**: zone 1 (tail bytes 0-3788) and zone 3 (tail bytes
-    12,312-14,393, ~2,074 bytes) both remain uncharacterized -- zone 3
-    was hand-inspected briefly and looks structurally different again
-    (no `0x44` tag; leading `u16 LE` values that ALSO climb steadily,
-    paired with short variable-length trailing byte groups that often
-    end in a repeated `0x04` byte, suggestively but not yet confirmed
-    to be a name/label-reference sub-table). Neither zone's own record
-    format has been solved yet. This is nonetheless the first real,
-    validated, exhaustively-checked crack of ANY part of `mp0`'s own
-    tail structure this project has achieved -- a genuine, load-bearing
-    positive result, not just another refuted hypothesis.
+    ==== UPDATE, same session: zone 3 (tail bytes 12,312-14,393, 2,074
+    bytes) hand-inspected properly -- a REAL, PLAUSIBLE SPEED-LIMIT
+    crack found, plus 2 more sub-structures characterized ====
+    Zone 3 is itself NOT one uniform structure either -- it splits into
+    (at least) 3 further sub-zones:
+
+    **Sub-zone 3a (zone-3 bytes 0-822, 822 bytes): a real, exhaustively-
+    validated record format, and a strong speed-limit candidate.** Naive
+    "split on the next `0x04` byte" parsing looked plausible at first but
+    is WRONG -- it breaks the instant `idx`'s own low byte happens to
+    equal `0x04` (e.g. `idx=0x0104`), producing a spurious 1-byte
+    "record". Fixed with the same exhaustive backward-DP technique used
+    for zone 2 (candidate widths 5-8, validity = last byte of the
+    candidate slice is `0x04`, requiring a fully consistent chain to the
+    zone's own true end): **131 records, exact, zero-leftover coverage**,
+    idx strictly non-decreasing throughout (12 to 490 -- the SAME
+    numeric range as zone 2's own per-street `idx` counters, strongly
+    suggesting this is a 2nd, sparser attribute list over the SAME
+    per-street segment numbering). Record shape: `[idx: u16 LE][type: 1
+    byte][...][speed-like byte][0x04 terminator]`, total width 6 or 7
+    bytes. The `type` byte (9 distinct values seen: `0x02`,
+    `0x12`, `0x40`, `0x49`, `0x50`, `0x80`, `0x85`, `0x90`, `0xc0`)
+    DETERMINISTICALLY selects the width (each type maps to exactly ONE
+    width, verified directly, no exceptions) -- `{0x49,0x85,0xc0}` are
+    always 7 bytes, the rest always 6. **The byte immediately before the
+    terminator, across almost every type, lands on one of exactly 4
+    values: `0x1e`(30), `0x28`(40), `0x32`(50), `0x50`(80)** -- all real,
+    standard urban/rural speed limits in km/h, and nothing else (types
+    `0x02`/`0x12` show `0x00` instead, plausibly "no speed limit
+    recorded" for that segment). This is a strong, plausible candidate
+    for the on-disk location of the firmware's own known
+    `db_seg_speed_V004` accessor (README S2.6/`research/swl_5238_reader.py`)
+    -- not yet cross-checked against real ground truth (no confirmed
+    real-world speed limit for any of this project's ground-truth
+    points yet), so treated as a strong lead, not a closed crack.
+
+    **Sub-zone 3b (zone-3 bytes 822-1018, 196 bytes): a clean, monotonic
+    list, meaning not yet identified.** 98 `u16 LE` values, ALL exact
+    multiples of 4, strictly non-decreasing, spanning 196 to 844 (49 to
+    211 in units of 4). Real and clean, but no working hypothesis yet
+    for what it indexes (candidates: byte offsets into a 4-byte-stride
+    table, or a scaled point/vertex reference).
+
+    **Sub-zone 3c (zone-3 bytes 1018-2074, 1,056 bytes): partially
+    characterized, itself probably not uniform.** 528 `u16 LE` values,
+    signed-looking (roughly half negative). The first ~349 values are
+    small (single/double-digit magnitude, consistent with coordinate or
+    positional DELTAS), then the character changes -- occasional much
+    larger values appear (-1532, 1279, -11516, ...) with some of them
+    REPEATING exactly, which argues against pure organic delta noise and
+    suggests a further, not-yet-isolated sub-boundary partway through.
+    Not solved.
+
+    **Overall**: zone 1 (tail bytes 0-3,788) remains completely
+    uncharacterized. This session's real, validated positive results are
+    zone 2 (949 records, full 8,524-byte coverage) and zone-3's sub-zone
+    3a (131 records, full 822-byte coverage, with a genuine plausible
+    semantic identification -- speed limit) -- the first time this
+    project has both structurally AND semantically cracked any part of
+    `mp0`'s own tail. Sub-zones 3b/3c and zone 1 are honest open work for
+    a future session.
 
     ==== UPDATE: firmware emulation used to probe byte1's real role ====
     Built a Unicorn-based (UC_ARCH_PPC/UC_MODE_BIG_ENDIAN) "emulation

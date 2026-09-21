@@ -2518,11 +2518,28 @@ directly cross-referencing this schema**:
   with street boundaries encoded purely by the counter resetting. The
   paired `subidx`/`value` pattern looks like a forward/backward
   attribute pair, but the real-world meaning of `value` isn't identified
-  yet — cross-checking against Vladimir Bashev's own confirmed one-way
-  status is the next concrete step. The tail's other 2 zones (bytes
-  0-3,788 and 12,312-14,393) remain uncharacterized. Full writeup:
-  `decode_topology()`'s docstring, "FIRST REAL CRACK of a chunk of
-  `mp0`'s own tail structure".
+  yet. **Cross-checked against Vladimir Bashev's own confirmed one-way
+  status — CLEANLY REFUTED**: idx values missing a `subidx=1` record
+  scatter randomly through the whole range in both groups (37%/48% rate)
+  instead of clustering into a contiguous run, which is what a real
+  one-way stretch should look like — `subidx` more likely marks a sparse
+  per-segment attribute than direction of travel.
+
+  **Zone 3 (tail bytes 12,312-14,393) hand-inspected next — a real,
+  plausible SPEED-LIMIT crack.** Zone 3 itself splits into 3 further
+  sub-zones. Sub-zone 3a (822 bytes) has its own validated record format
+  (same exhaustive-DP technique, 131 records, zero leftover bytes): a
+  `type` byte deterministically selects a 6- or 7-byte record width, and
+  the byte right before the terminator is one of exactly 4 values —
+  `30`, `40`, `50`, `80` — all real, standard km/h speed limits, a
+  plausible on-disk match for the firmware's known `db_seg_speed_V004`
+  accessor (not yet ground-truth-confirmed). Sub-zone 3b (196 bytes) is
+  a clean monotonic list of multiples of 4, not yet identified. Sub-zone
+  3c (1,056 bytes) starts as small signed deltas then shifts character
+  partway through — not fully solved. Zone 1 (tail bytes 0-3,788)
+  remains completely uncharacterized. Full writeup: `decode_topology()`'s
+  docstring, "FIRST REAL CRACK of a chunk of `mp0`'s own tail structure"
+  and the zone-3 UPDATE immediately after it.
 
   **A DIFFERENT signal from the same parser, tried right after — real,
   clean, and the most promising lead in this file region so far**:
