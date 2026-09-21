@@ -6687,6 +6687,36 @@ this session's other `mp0` panel rows, this one is NOT labeled
 EXPERIMENTAL — the underlying field meaning is genuinely confirmed, not
 a candidate. `test_map_viewer.py` re-run once more, all tests pass.
 
+### v24 → v25: a REAL, SEVERE bug found and fixed — every app close leaked its entire temp workdir (this session)
+
+**User-reported, confirmed directly against a real system's own temp
+folder.** `MapData.__init__()` creates a real `tempfile.mkdtemp()`
+workdir per ISO opened (extracted copies of `eeu.cty`, all 5 `eeuz.mg*`/
+`mp0` layer files, `POI.DB3`, a `search/` subfolder — often 500MB-3GB+
+per open) and `MapData.close()` cleans it up correctly (`shutil.
+rmtree`). But `close()` was ONLY ever called from `on_open_iso()`, when
+replacing an already-loaded ISO with a different one in the same
+session — never on normal app shutdown. No `WM_DELETE_WINDOW` handler
+and no `atexit` registration existed anywhere in the file, so closing
+the app via the window's X button (or Alt+F4) exited the Python process
+without ever calling `close()`, silently leaking the ENTIRE workdir
+every single session.
+
+**Confirmed with real evidence, not just code reading**: the real
+system this project runs on had **56 leaked `rns510_viewer_*`
+directories totaling 146GB**, dating back to this project's own early
+sessions (Sep 18) — one sample directory alone was ~490MB just for the
+4 non-`mp0` layer files. Verified no viewer instance was currently
+running (only the test suite itself, via `Get-CimInstance
+Win32_Process`) before deleting all 56 with the user's explicit
+confirmation.
+
+**Fixed** with a real `self.root.protocol("WM_DELETE_WINDOW",
+self.on_close)` handler — `App.on_close()` calls `self.data.close()`
+(if an ISO is loaded) before destroying the window, exactly mirroring
+the cleanup `on_open_iso()` already did correctly when switching ISOs.
+`test_map_viewer.py` re-run in full after the fix — all tests pass.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

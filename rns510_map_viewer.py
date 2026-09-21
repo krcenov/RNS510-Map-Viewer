@@ -2845,6 +2845,33 @@ class App:
         self._build_widgets()
         self._set_status("No ISO loaded. Use File > Open Map ISO...")
         self._set_controls_enabled(False)
+        # Real bug found and fixed (later session): MapData.__init__()
+        # creates a real tempfile.mkdtemp() workdir (extracted eeu.cty/
+        # eeuz.*/POI.DB3/search-index copies, often 500MB-3GB+ per ISO
+        # open) and MapData.close() cleans it up correctly -- but close()
+        # was previously only ever called when opening a DIFFERENT ISO in
+        # the same session (see on_open_iso()). Closing the app normally
+        # (the window's X button / Alt+F4) exits the process without ever
+        # calling it, silently leaking the ENTIRE workdir every session --
+        # confirmed directly against a real system's own temp folder (56
+        # leaked `rns510_viewer_*` directories, 146GB total, going back to
+        # this project's own early sessions). Fixed with a real
+        # WM_DELETE_WINDOW handler.
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def on_close(self):
+        """Real cleanup on window close (see the WM_DELETE_WINDOW comment
+        above `_build_widgets()`'s own call site in `__init__`): closes
+        `self.data` if an ISO is loaded (which deletes its real
+        `tempfile.mkdtemp()` workdir via `MapData.close()`'s own
+        `shutil.rmtree`), then destroys the window. `ignore_errors=True`
+        inside `MapData.close()` itself already means this can't raise
+        and block shutdown even if the workdir is somehow already gone or
+        locked."""
+        if self.data is not None:
+            self.data.close()
+            self.data = None
+        self.root.destroy()
 
     # ------------------------------------------------------------- layout
 
