@@ -2564,10 +2564,30 @@ directly cross-referencing this schema**:
   accessor (not yet ground-truth-confirmed). Sub-zone 3b (196 bytes) is
   a clean monotonic list of multiples of 4, not yet identified. Sub-zone
   3c (1,056 bytes) starts as small signed deltas then shifts character
-  partway through — not fully solved. Zone 1 (tail bytes 0-3,788)
-  remains completely uncharacterized. Full writeup: `decode_topology()`'s
+  partway through — not fully solved. Full writeup: `decode_topology()`'s
   docstring, "FIRST REAL CRACK of a chunk of `mp0`'s own tail structure"
   and the zone-3 UPDATE immediately after it.
+
+  **Zone 1 (tail bytes 0-3,788) — a real numeric-record crack PLUS a
+  genuine, independently-verified Bulgarian place-name string table.**
+  446 records exactly match this project's own already-confirmed `mg4`
+  8-byte `seg_list` layout (`[id(2)][byte2(1)][byte3(1)][value(4, ends
+  in 00 00)]`) via exhaustive DP — 98.5% exact coverage (3,731 of 3,788
+  bytes), widths 6-14, 8-byte dominant (56.7%). The remaining 57 bytes
+  are NOT records at all — they're a small, human-readable name table
+  that continues seamlessly across the artificial zone1/zone2 boundary:
+  3 real strings in the form `<binary header><lang-index digits>^<NAME>
+  \0` — `13^ZHK IZTOK` (a real Sofia residential-complex name, "East"),
+  `13^HLADILNIKA` (a real Sofia neighborhood), `13^TSENTAR/13^CENTRUM`
+  (2 transliterations of "Center"). **The `13` prefix is independently,
+  exactly confirmed**: `eeu.abc`'s own already-cracked language table
+  has index 13 == `bul` (Bulgarian), checked directly against the real
+  file (`('bul', 1, 13, 5)`) — the prefix is the language index written
+  as literal ASCII digits, not a raw byte. Almost certainly district/
+  neighborhood labels (not the street's own name), consistent with a
+  "which area is this tile in" lookup. The small numeric header
+  preceding each name entry, and the exact consumer of this label,
+  remain undecoded — a concrete follow-up for a future session.
 
   **Zone 2's own `(tag, subidx)` slots characterized by value
   distribution — one clean binary flag found.** `tag=0xf4, subidx=1`

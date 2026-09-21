@@ -2970,6 +2970,69 @@ def decode_topology(raw, declen=None, features=None):
     testing whether `idx` tracks that instead -- a genuinely uncertain,
     non-trivial next step, not attempted further this session.
 
+    ==== UPDATE, a still-later session: zone 1 (tail bytes 0-3,788)
+    cracked -- BOTH a real `mg4`-style numeric record run AND a genuine,
+    independently-cross-referenced BULGARIAN PLACE-NAME string table ====
+    Zone 1 has no single dominant recurring 2-byte tag the way zones 2/3a
+    do (the closest candidates, `ac d4`/`8c cd`/`ae d4`, appear only 8, 9,
+    and 1 times respectively across 3,788 bytes) -- a genuinely different
+    character, hand-inspected fresh rather than assumed to match zones
+    2/3's own pattern.
+
+    **Numeric records: this project's OWN already-confirmed `mg4` 8-byte
+    `seg_list` layout, `[id(2)][byte2(1)][byte3(1)][value(4, ends in
+    00 00)]`, applies here too.** The `mg4`-tuned `parse_seg_tail_records()`
+    (per-id length-consistency backtracking) had already been tried
+    against this exact tail and failed (see the "MULTIPLE hypotheses
+    tried, ALL FAILED" section above) -- but that attempt required
+    per-id-repeated length consistency, which doesn't hold when most ids
+    are genuinely unique (as zone 1's low tag-repeat count suggests).
+    Dropped that requirement and tried a pure exhaustive DP (validity =
+    the candidate record's own last 2 bytes are exactly `00 00`, widths
+    6-16 tried): **reaches byte 3,731 of 3,788 (98.5%) with zero garbage
+    accepted** -- 446 records, width distribution `{6:37, 7:41, 8:253,
+    9:41, 10:29, 11:5, 12:38, 14:2}` (8 bytes dominant at 56.7%, more
+    heterogeneous than `mg4`'s own cleaner 71/29 split, but a genuinely
+    strong, non-trivial validation -- 98.5% exact coverage under a single
+    hard constraint is not the kind of result an over-permissive search
+    produces by luck).
+
+    **The remaining 57 bytes (tail bytes 3,731-3,788) are NOT numeric
+    records at all -- they're the START of a real, human-readable name
+    table** that continues right across the artificial zone1/zone2
+    boundary this session drew at byte 3,788 (a coincidence of where
+    zone 2's own dominant `f1 44` tag happened to first appear, not a
+    real structural seam). Hand-reading the raw bytes as ASCII directly
+    finds 3 real strings, each in the exact form `<small binary header>
+    <language-index digits>^<NAME>\x00`:
+      - `13^ZHK IZTOK` -- "ЖК Изток" (Zh.K. = "жилищен комплекс",
+        residential complex; Iztok = "East"), a REAL, well-known Sofia
+        residential-complex/neighborhood name.
+      - `13^HLADILNIKA` -- "Хладилника", a REAL, well-known Sofia
+        neighborhood (southern Sofia, near Vitosha Blvd, named for an
+        old refrigerator factory).
+      - `13^TSENTAR/13^CENTRUM` -- 2 transliteration variants of
+        "Център" (Center/Downtown), a real, extremely common Bulgarian
+        district-name pattern, immediately followed (byte 3,788) by
+        zone 2's own first `f1 44 00 00 00 01 7a` record -- confirming
+        the name table and zone 2 are directly, seamlessly adjacent.
+    **The `13` prefix is independently, exactly confirmed, not a
+    guess**: `research/abc_reader.py`'s own already-cracked `eeu.abc`
+    language table has index 13 == `bul` (Bulgarian) -- checked directly
+    against the real file this session (`('bul', 1, 13, 5)`). The prefix
+    is the language-table index written as literal ASCII decimal digits
+    (`'1'`,`'3'`), not a raw binary byte -- an unusual but real,
+    human-debuggable text convention. These are almost certainly
+    DISTRICT/NEIGHBORHOOD labels (not this street's own name -- "Iztok"/
+    "Hladilnika"/"Tsentar" are area names, not "Vladimir Bashev"),
+    consistent with a "which district is this tile/segment in" lookup,
+    though the exact consumer of this label and the meaning of each
+    entry's small numeric header (`0c 00 00 00 00 00 00 00 00 00` before
+    "ZHK IZTOK"; `1f 00 38 01 01 00 11 0d 00...` before "HLADILNIKA")
+    were not decoded this session -- a real, concrete follow-up for a
+    future session, not attempted further here given the scope already
+    covered.
+
     ==== UPDATE: firmware emulation used to probe byte1's real role ====
     Built a Unicorn-based (UC_ARCH_PPC/UC_MODE_BIG_ENDIAN) "emulation
     classifier" over `FHDD6.FLI`'s real code region (see
