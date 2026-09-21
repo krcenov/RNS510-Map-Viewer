@@ -4581,3 +4581,73 @@ def group_district_name_signs(entries):
             "members": members,
         })
     return results
+
+
+def extract_pronunciations(raw, abc_path=None):
+    """PARTIALLY CRACKED -- finds this tile's own embedded name +
+    PHONETIC-PRONUNCIATION pairs (`mp0` only). These are the exact
+    entries `extract_district_names()` deliberately excludes (its own
+    regex still matches them, but they contain `|`/`$`/apostrophe,
+    which `extract_district_names()` filters out as "not a real
+    display name"). See `decode_topology()`'s own docstring UPDATE,
+    "the entries this function deliberately EXCLUDES ... turned out to
+    be a real, independent crack", and `research/abc_reader.py`'s own
+    `(flag_a, flag_b)` UPDATE, for the full discovery writeup: this is
+    real embedded TTS pronunciation-guide data, syllable-broken with a
+    leading `"` marking the stressed syllable, e.g. `24^BULGARIA$25^
+    bVl|"ge@|rI|@` (a real, correct IPA-ish rendering of the actual
+    ENGLISH pronunciation of "Bulgaria"). Confirmed real via the same
+    `eeu.abc` language-table cross-reference as that update: the
+    phonetic half always uses the `(flag_a,flag_b)=(4,8)` language
+    index adjacent to a plain-name half using `(1,5)` or `(2,2)`.
+
+    Each real "sign" entry (one raw regex match, possibly listing
+    several `/`-separated items) is split first on `/` (separate
+    items), then each item on `$` (name half vs. phonetic half, when
+    both are present -- some raw matches are phonetic-only fragments
+    with no name half in the SAME match, e.g. a standalone `81^bah|tSe|
+    de|"re`). Returns a list of dicts, one per real ITEM found (i.e.
+    possibly several per raw regex match), in file order:
+        {"name": <str or None, the plain-name half's own text (without
+                 its own lang-index prefix), or None if this item has
+                 no name half>,
+         "name_lang": <3-letter lang_code for the name half, or None>,
+         "pronunciation": <str or None, the phonetic half's own raw
+                 syllable-broken text (without its own lang-index
+                 prefix), or None if this item has no phonetic half>,
+         "pronunciation_lang": <3-letter lang_code for the phonetic
+                 half, or None>,
+         "offset": <int, byte offset of the RAW regex match this item
+                 came from, within `raw`>}
+    Never raises; returns `[]` if none found."""
+    lang_map = _get_language_index_map(abc_path)
+    matches = list(_DISTRICT_NAME_PATTERN.finditer(raw))
+    results = []
+    for m in matches:
+        text = m.group()[:-1].decode("ascii", "replace")
+        if not any(c in text for c in "|$'"):
+            continue
+        for item in text.split("/"):
+            halves = item.split("$")
+            name = name_lang = pron = pron_lang = None
+            for half in halves:
+                if "^" not in half:
+                    continue
+                idx_str, content = half.split("^", 1)
+                try:
+                    idx = int(idx_str)
+                except ValueError:
+                    continue
+                lang = lang_map.get(idx, "?")
+                if "|" in content or content.startswith('"'):
+                    pron, pron_lang = content, lang
+                else:
+                    name, name_lang = content, lang
+            if name is None and pron is None:
+                continue
+            results.append({
+                "name": name, "name_lang": name_lang,
+                "pronunciation": pron, "pronunciation_lang": pron_lang,
+                "offset": m.start(),
+            })
+    return results

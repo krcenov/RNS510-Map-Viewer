@@ -6672,6 +6672,21 @@ group_district_name_signs()` to join paired entries into one readable
 strings — itself EXPERIMENTAL (84.7% validated, not perfectly clean).
 `test_map_viewer.py` re-run again, all tests pass.
 
+**Update, still this session — a REAL (not experimental) new panel
+row.** The entries `extract_district_names()` deliberately excludes
+(phonetic transcriptions, `|`/`$`/apostrophe) turned out to be real
+embedded TTS pronunciation-guide data, cross-referenced and CONFIRMED
+against `eeu.abc`'s own language table (§3.11's `(flag_a, flag_b)`
+crack). `mcr.extract_pronunciations()` parses these into clean
+name/pronunciation pairs; `MapData.get_tile_pronunciations()` and a new
+"pronunciation guide(s)" panel row surface them on point pick —
+exactly the kind of data a real GPS unit uses for voice announcements,
+so it earns a spot even though (like the district-name table) it's
+TILE-level, not attributed to the specific picked point. Unlike most of
+this session's other `mp0` panel rows, this one is NOT labeled
+EXPERIMENTAL — the underlying field meaning is genuinely confirmed, not
+a candidate. `test_map_viewer.py` re-run once more, all tests pass.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

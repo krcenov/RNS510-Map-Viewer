@@ -1401,6 +1401,15 @@ class MapData:
         # every tile necessarily has this sub-structure). NOT ground-
         # truth-confirmed on any tile including the original.
         self.seg_zone3a_caches = {layer: {} for layer in ALL_LAYERS}
+        # Per-tile PRONUNCIATION-GUIDE cache (later session): {layer:
+        # {tile_id: [dict, ...]}}, `mcr.extract_pronunciations()`'s own
+        # output per tile. ONLY ever populated for layer == "mp0". Real,
+        # confirmed TTS phonetic-transcription data (cross-referenced
+        # against `eeu.abc`'s own language table -- see
+        # `research/abc_reader.py`'s `(flag_a, flag_b)` UPDATE) -- not
+        # a guess, unlike most of this session's other `mp0` finds.
+        # TILE-LEVEL, not attributed to the specific picked point.
+        self.pronunciation_caches = {layer: {} for layer in ALL_LAYERS}
         self.covered_bbox = None    # (lon_min, lon_max, lat_min, lat_max)
         self.covered_layers = None  # list of layers covered_bbox's tiles were pooled from
         self.active_tile_ids = {}   # {layer: [tile_id, ...]} currently pooled for drawing
@@ -1902,6 +1911,32 @@ class MapData:
                     f.seek(offset)
                     raw = zlib.decompress(f.read(complen))
             result = mcr.extract_district_names(raw)
+        except Exception:
+            result = []
+        cache[tile_id] = result
+        return result
+
+    def get_tile_pronunciations(self, layer, tile_id):
+        """Lazily compute + cache `mcr.extract_pronunciations()` for one
+        `mp0` tile's raw decompressed bytes -- same fallback pattern as
+        `get_tile_district_names()`. A no-op (returns `[]` without
+        touching the cache) for any layer other than `mp0` -- see
+        `MapData.pronunciation_caches`'s own comment in `__init__`."""
+        if layer != "mp0":
+            return []
+        cache = self.pronunciation_caches[layer]
+        if tile_id in cache:
+            return cache[tile_id]
+        try:
+            pre = self._predecode_caches[layer].get(tile_id)
+            if pre is not None:
+                raw, declen, features, keep_idx = pre
+            else:
+                offset, declen, complen = self.directories[layer]["entries"][tile_id]
+                with open(self.layer_paths[layer], "rb") as f:
+                    f.seek(offset)
+                    raw = zlib.decompress(f.read(complen))
+            result = mcr.extract_pronunciations(raw)
         except Exception:
             result = []
         cache[tile_id] = result
@@ -4373,16 +4408,18 @@ class App:
             self._append_picked_point_row(info)
             nearby_summary = self._append_nearby_streets_row(info["lon"], info["lat"])
             district_summary = self._append_district_names_row(info["layer"], info["tile_id"])
+            pron_summary = self._append_pronunciation_row(info["layer"], info["tile_id"])
             zone2_summary = self._append_seg_zone2_row(info["layer"], info["tile_id"])
             zone3a_summary = self._append_seg_zone3a_row(info["layer"], info["tile_id"])
             self._redraw()
             self._set_status(
                 "Point #%d identified: layer=%s tile_id=%s feature=%s point=%s (%.6f, %.6f)%s -- "
-                "see the picked-points panel below to copy its full info.%s%s%s%s" % (
+                "see the picked-points panel below to copy its full info.%s%s%s%s%s" % (
                     info["number"], info["layer"], info["tile_id"], info["feature_index"], info["point_index"],
                     info["lon"], info["lat"], (" name=%s" % info["name"]) if info["name"] else "",
                     (" " + nearby_summary) if nearby_summary else "",
                     (" " + district_summary) if district_summary else "",
+                    (" " + pron_summary) if pron_summary else "",
                     (" " + zone2_summary) if zone2_summary else "",
                     (" " + zone3a_summary) if zone3a_summary else ""))
             return
@@ -4425,6 +4462,7 @@ class App:
         self._append_picked_point_row(a)
         self._append_picked_point_row(b)
         self._append_district_names_row(a["layer"], a["tile_id"])
+        self._append_pronunciation_row(a["layer"], a["tile_id"])
         self._append_seg_zone2_row(a["layer"], a["tile_id"])
         self._append_seg_zone3a_row(a["layer"], a["tile_id"])
         self._redraw()
@@ -4541,6 +4579,42 @@ class App:
             "experimental): %s%s\n" % (", ".join(shown), more))
         self.points_text.see("end")
         return "Tile area label(s): %s%s." % (", ".join(shown), more)
+
+    def _append_pronunciation_row(self, layer, tile_id):
+        """Pronunciation-guide feature (later session -- see
+        map_compressed_reader.extract_pronunciations()'s own docstring):
+        after a normal point pick on an `mp0` point, look up that
+        tile's own embedded name+phonetic-transcription pairs and, if
+        any exist, append them to the picked-points panel. This is
+        REAL, CONFIRMED data (cross-referenced against `eeu.abc`'s own
+        language table, unlike most of this session's other `mp0`
+        finds) -- exactly the kind of pronunciation-guide data a real
+        GPS unit uses for voice announcements, which is why it's shown
+        here even though (like the district-name table) it's TILE-LEVEL
+        and not attributed to the specific picked point. Silent no-op
+        for any other layer or if none are found. Returns a short
+        one-line summary string for the status bar (empty string if
+        nothing was found/added)."""
+        if self.data is None or layer != "mp0":
+            return ""
+        try:
+            prons = self.data.get_tile_pronunciations(layer, tile_id)
+        except Exception:
+            return ""  # best-effort enrichment -- never blocks an ordinary pick
+        if not prons:
+            return ""
+        shown = []
+        for p in prons[:6]:
+            if p["name"]:
+                shown.append("%s -> /%s/" % (p["name"], p["pronunciation"]))
+            else:
+                shown.append("/%s/" % p["pronunciation"])
+        more = "" if len(prons) <= 6 else " (+%d more)" % (len(prons) - 6)
+        self.points_text.insert(
+            "end", "      pronunciation guide(s) (real, eeu.abc-confirmed TTS phonetic data, "
+            "not attributed to this specific point): %s%s\n" % (", ".join(shown), more))
+        self.points_text.see("end")
+        return "Pronunciation guide(s) found: %s%s." % (", ".join(shown), more)
 
     def _append_seg_zone2_row(self, layer, tile_id):
         """`mp0` "zone 2" seg_list record-structure feature (later
