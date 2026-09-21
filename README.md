@@ -337,6 +337,23 @@ left implied-promising. Full details:
 `research/swl_5238_reader.py` and `research/map_compressed_reader.py`'s
 `decode_topology()` docstring.
 
+**Re-run against `mp0`'s own predicted field offsets, a still-later
+session, over the FULL 7,757-candidate pool** (earlier passes only
+covered the shortest 3,000-5,000): zero candidates matched `mp0`'s exact
+zone-2/zone-3a byte positions combined with their tag/type bytes — a
+real negative result. The overall read-offset distribution across all
+1,393 loosely-matching candidates is dominated by 4-byte-ALIGNED offsets,
+consistent with most short functions here operating on regular,
+word-aligned runtime structs, not packed on-disk bytes directly. Two
+disassembled candidates are genuinely informative anyway, though neither
+is confirmed `mp0`-specific: one reconstructs an unaligned 32-bit value
+from 4 individual byte reads for a table lookup, and one does real
+bit-level unpacking (`rlwinm` mask/rotate) of packed bits into a
+normalized runtime table — the architectural shape this project has
+suspected (a decode/unpack layer between compressed tile bytes and any
+named accessor) but never directly observed before. Full details:
+`research/swl_5238_reader.py`.
+
 **A complete, real, NAMED pipeline for the long-standing GLOBAL
 routing-graph "topology node-id↔coordinate mapping" problem** (§3.2's
 `vnodeID` lead, distinct from the ALREADY-CRACKED per-tile local vertex

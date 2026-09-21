@@ -510,6 +510,46 @@ over a LARGER candidate set, or abandoning static/emulation analysis for
 this specific question in favor of more ground-truth-driven byte
 correlation on the map-data side.
 
+**UPDATE, a still-later session: the same emulation-classifier technique
+re-run against `mp0`'s own zone-2/zone-3a offsets (rather than `mg4`'s),
+this time over ALL 7,757 prologue candidates (the earlier passes only
+covered the shortest 3,000-5,000).** 1,393 candidates showed 1-4 reads
+from the fake record buffer. Filtering for reads matching `mp0`'s
+specific predicted field positions (zone-2's `value` byte at offset 6/10
+co-occurring with the `tag` byte at offset 0; zone-3a's `speed` byte at
+offset 4/5 co-occurring with the `type` byte at offset 2) found **zero**
+candidates -- a real negative result, not an unexplored gap. The overall
+read-offset distribution across all 1,393 candidates is dominated by
+4-byte-ALIGNED offsets (0, 4, 8, 12, 16... -- the most common by a wide
+margin), consistent with most short functions in this codebase operating
+on regular, word-aligned in-memory C/C++ structs, not packed on-disk
+byte layouts directly. Loosening the filter to single-byte reads at just
+offset 4, 5, 6, or 10 (dropping the co-occurrence requirement) found 4
+real candidates; 2 disassembled cleanly and are genuinely informative
+even though neither is confirmed `mp0`-specific:
+  - Offset 1,998,624: reconstructs an UNALIGNED 32-bit big-endian value
+    from 4 individual byte reads at offsets 4-7 (`lbz`+`slwi` chain, the
+    standard idiom for reading a multi-byte field that isn't 4-byte
+    aligned), then searches a 20-byte-stride reference table for a
+    matching value -- a generic "find the table entry whose stored value
+    matches this input's unaligned 4-byte field" lookup utility.
+  - Offset 2,337,788: genuine BIT-LEVEL unpacking -- reads byte 4 of its
+    argument, extracts its top 2 bits (`srwi r0,r0,6`) as a category
+    check, then uses `rlwinm` bit-rotate/mask operations to pull further
+    sub-fields out of bytes 4 and 5 and writes them into a normalized,
+    word-aligned 84-byte-stride runtime table (indexed by its own 2nd
+    argument). This is exactly the architectural SHAPE this project has
+    suspected but never directly observed: a real function that decodes
+    packed on-disk attribute bits into individually-addressable runtime
+    fields, consistent with why no direct 1:1 accessor for our exact
+    raw byte offsets has ever been found -- there is likely a decode/
+    unpack layer between the compressed tile bytes and whatever the
+    named `db_seg_*` accessors actually read. NOT confirmed to be
+    `mp0`-specific or to touch OUR exact `seg_list` zones (the offsets
+    4-5 pattern is common enough to belong to any number of unrelated
+    packed structures in this 9MB codebase), so treated as suggestive
+    architectural evidence, not a crack of `mp0`'s own encoding.
+
 ============================================================================
 The GLOBAL routing-graph node problem (`vnodeID`, README's own long-
 standing "topology node-id<->coordinate mapping" open lead, wiki's
