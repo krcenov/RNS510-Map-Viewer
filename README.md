@@ -2604,6 +2604,24 @@ directly cross-referencing this schema**:
   jumps don't match cumulative string length — all 3 still open for a
   future session with more samples.
 
+  **Zone 2's record format GENERALIZED to multiple tiles, a still-later
+  session — one real correction found.** `decode_mp0_zone2()` re-derives
+  the format without hardcoding Vladimir Bashev's own `0x44` middle
+  byte, auto-detecting each tile's own dominant tag instead. Tested on 5
+  more Sofia-area `mp0` tiles: 4 succeeded structurally (real 516-819-
+  record dense runs, matching shape); a naive "first tag occurrence"
+  boundary-finder failed on 2 of them (landed on a sparse, unrelated
+  early occurrence) — fixed by requiring several consecutive anchors to
+  already show the 7-or-11-byte stride before accepting a start
+  position. **Correction**: the original write-up implied `0x44` was a
+  fixed attribute-type tag; testing elsewhere shows each tile has its
+  OWN dominant middle byte and its OWN per-slot tag values (the original
+  `tag=0xf4/subidx=1` binary flag doesn't recur as `0xf4` anywhere else
+  — other tiles show `0xf2`/`0xe8`/`0xf5`/`0xeb` instead, each still
+  forming its own clean small-value slot) — confirming `id` is a genuine
+  per-street identifier, not a record-type marker. `zone2_categorical_
+  slots()` computes the "most categorical slot" fresh per tile.
+
   **Zone 2's own `(tag, subidx)` slots characterized by value
   distribution — one clean binary flag found.** `tag=0xf4, subidx=1`
   (70 records) has only 2 distinct values ever (`0xcc`: 43, `0xe1`: 27,
@@ -6531,6 +6549,35 @@ result and jumping to it lands `center_lon`/`center_lat` exactly on
 that POI's own real coordinates, and the breadcrumb correctly reads
 `RESTAURANTS | POI | MCDONALD'S` — not the old hardcoded `"ROAD"` label
 a POI hit would previously have gotten.
+
+### v23 → v24: `mp0` district-name table + zone-2 candidate flag slots surfaced in the point-pick panel (this session)
+
+**Standing rule established this session**: every real discovery gets
+implemented in this viewer, not just documented in the research files —
+previously only the `mg4` "predicted divided" overlay had ever been
+wired in (§3.6/§8), and only because it was explicitly requested.
+
+Two new EXPERIMENTAL, `mp0`-only rows now append to the picked-points
+panel on an ordinary point pick (or an edge pick), alongside the
+existing "nearby streets" enrichment:
+  - **Tile area label(s)**: `MapData.get_tile_district_names()` →
+    `mcr.extract_district_names()` — the real, independently-verified
+    Bulgarian/English district-name table (§3.16/§8). TILE-level, not
+    attributed to the specific picked point.
+  - **Zone-2 candidate flag slot(s)**: `MapData.get_tile_seg_zone2_
+    summary()` → `mcr.decode_mp0_zone2()`/`zone2_categorical_slots()` —
+    the generalized (not hardcoded to one tile's own tag byte) version
+    of the zone-2 record crack (§3.16/§8). Structure validated
+    (exhaustive DP, zero-leftover coverage on every tile tested); the
+    real-world meaning of any given slot's value is explicitly NOT
+    claimed.
+
+Both follow the existing best-effort-enrichment pattern (`try`/`except`
+→ empty string, never blocks or crashes an ordinary pick) and the
+`_predecode_caches`-reuse-then-disk-fallback pattern already used by
+`get_tile_adjacency()`/`get_tile_seg_prediction()`. `test_map_viewer.py`
+re-run in full after both additions — all tests still pass, zero
+regressions.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 

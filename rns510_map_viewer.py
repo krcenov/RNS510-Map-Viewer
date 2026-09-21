@@ -1364,6 +1364,31 @@ class MapData:
         # human (who may have real local knowledge) can spot wrong
         # predictions directly on the rendered map.
         self.seg_predict_caches = {layer: {} for layer in ALL_LAYERS}
+        # Per-tile district/neighborhood NAME-TABLE cache (later session,
+        # partially cracked): {layer: {tile_id: [dict, ...]}}, one dict
+        # per real embedded name entry found -- see
+        # map_compressed_reader.extract_district_names()'s own docstring
+        # for the exact fields. ONLY ever populated for layer == "mp0"
+        # (the only layer this string-table convention has been found
+        # in). TILE-LEVEL, not per-point/per-segment -- there is no known
+        # way yet to attribute a specific entry to a specific street/
+        # point, so this is surfaced as "this tile's own area labels",
+        # not tied to whichever point was actually picked.
+        self.district_name_caches = {layer: {} for layer in ALL_LAYERS}
+        # Per-tile `mp0` "zone 2" seg_list record cache (later session,
+        # partially cracked, EXPERIMENTAL): {layer: {tile_id: dict or
+        # None}}, one `mcr.decode_mp0_zone2()` result per tile. ONLY ever
+        # populated for layer == "mp0". The tag byte this record format
+        # uses is PER-STREET, not a fixed attribute-type code (confirmed
+        # by testing on multiple real tiles -- see decode_mp0_zone2()'s
+        # own docstring), so the "most categorical slot" shown in the UI
+        # is computed fresh per tile via zone2_categorical_slots(), never
+        # a hardcoded tag. This is a REAL, STRUCTURALLY-VALIDATED record
+        # format (exhaustive DP, zero-leftover coverage on every tile
+        # tested), but what any given categorical slot's VALUE means in
+        # the real world remains an open question -- shown as a raw
+        # candidate, not a named property.
+        self.seg_zone2_caches = {layer: {} for layer in ALL_LAYERS}
         self.covered_bbox = None    # (lon_min, lon_max, lat_min, lat_max)
         self.covered_layers = None  # list of layers covered_bbox's tiles were pooled from
         self.active_tile_ids = {}   # {layer: [tile_id, ...]} currently pooled for drawing
@@ -1839,6 +1864,76 @@ class MapData:
         except Exception:
             n_kept = len(self.tile_caches[layer].get(tile_id, ()))
             result = [{"n8": 0, "zero_rate": None, "prediction": "unknown"} for _ in range(n_kept)]
+        cache[tile_id] = result
+        return result
+
+    def get_tile_district_names(self, layer, tile_id):
+        """Lazily compute + cache `mcr.extract_district_names()` for one
+        `mp0` tile's raw decompressed bytes -- same fallback pattern as
+        `get_tile_adjacency()`/`get_tile_seg_prediction()` (reuses
+        `_predecode_caches` when available, re-reads from disk as a
+        defensive last resort). A no-op (returns `[]` without touching
+        the cache) for any layer other than `mp0` -- see
+        `MapData.district_name_caches`'s own comment in `__init__`."""
+        if layer != "mp0":
+            return []
+        cache = self.district_name_caches[layer]
+        if tile_id in cache:
+            return cache[tile_id]
+        try:
+            pre = self._predecode_caches[layer].get(tile_id)
+            if pre is not None:
+                raw, declen, features, keep_idx = pre
+            else:
+                offset, declen, complen = self.directories[layer]["entries"][tile_id]
+                with open(self.layer_paths[layer], "rb") as f:
+                    f.seek(offset)
+                    raw = zlib.decompress(f.read(complen))
+            result = mcr.extract_district_names(raw)
+        except Exception:
+            result = []
+        cache[tile_id] = result
+        return result
+
+    def get_tile_seg_zone2_summary(self, layer, tile_id):
+        """Lazily compute + cache a summary of `mcr.decode_mp0_zone2()`
+        for one `mp0` tile's FIRST feature (feature index 0 only -- this
+        session's own testing only ever used feature 0; a tile's other
+        features are not attempted). Same fallback pattern as
+        `get_tile_district_names()`. A no-op (returns `None` without
+        touching the cache) for any layer other than `mp0` -- see
+        `MapData.seg_zone2_caches`'s own comment in `__init__`. Returns
+        `None` if no features, no locatable topology table for feature 0
+        (a pre-existing, unrelated `decode_topology()` limitation), or no
+        plausible zone-2 record run was found -- never raises. Otherwise
+        returns `{"n_records": int, "top_slots": [dict, ...]}` (see
+        `mcr.zone2_categorical_slots()`'s own docstring for each dict's
+        fields)."""
+        if layer != "mp0":
+            return None
+        cache = self.seg_zone2_caches[layer]
+        if tile_id in cache:
+            return cache[tile_id]
+        result = None
+        try:
+            pre = self._predecode_caches[layer].get(tile_id)
+            if pre is not None:
+                raw, declen, features, keep_idx = pre
+            else:
+                offset, declen, complen = self.directories[layer]["entries"][tile_id]
+                with open(self.layer_paths[layer], "rb") as f:
+                    f.seek(offset)
+                    raw = zlib.decompress(f.read(complen))
+                declen = len(raw)
+                features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
+            if features:
+                tail = mcr.seg_tail_region(raw, declen, features[0], features)
+                zone2 = mcr.decode_mp0_zone2(tail)
+                if zone2["records"]:
+                    slots = mcr.zone2_categorical_slots(zone2["records"])
+                    result = {"n_records": len(zone2["records"]), "top_slots": slots}
+        except Exception:
+            result = None
         cache[tile_id] = result
         return result
 
@@ -4220,13 +4315,17 @@ class App:
             self.picked_points.append(info)
             self._append_picked_point_row(info)
             nearby_summary = self._append_nearby_streets_row(info["lon"], info["lat"])
+            district_summary = self._append_district_names_row(info["layer"], info["tile_id"])
+            zone2_summary = self._append_seg_zone2_row(info["layer"], info["tile_id"])
             self._redraw()
             self._set_status(
                 "Point #%d identified: layer=%s tile_id=%s feature=%s point=%s (%.6f, %.6f)%s -- "
-                "see the picked-points panel below to copy its full info.%s" % (
+                "see the picked-points panel below to copy its full info.%s%s%s" % (
                     info["number"], info["layer"], info["tile_id"], info["feature_index"], info["point_index"],
                     info["lon"], info["lat"], (" name=%s" % info["name"]) if info["name"] else "",
-                    (" " + nearby_summary) if nearby_summary else ""))
+                    (" " + nearby_summary) if nearby_summary else "",
+                    (" " + district_summary) if district_summary else "",
+                    (" " + zone2_summary) if zone2_summary else ""))
             return
 
         if self.connected_roads_var.get():
@@ -4266,6 +4365,8 @@ class App:
                 a["number"], b["number"]))
         self._append_picked_point_row(a)
         self._append_picked_point_row(b)
+        self._append_district_names_row(a["layer"], a["tile_id"])
+        self._append_seg_zone2_row(a["layer"], a["tile_id"])
         self._redraw()
         self._set_status(
             "Edge identified: connects point #%d (layer=%s tile_id=%s point=%s, %.6f, %.6f) <-> "
@@ -4335,6 +4436,70 @@ class App:
                 result["anchor_name"] or "?", result["distance_m"], ", ".join(shown), more))
         self.points_text.see("end")
         return "Nearby streets: %s%s." % (", ".join(shown), more)
+
+    def _append_district_names_row(self, layer, tile_id):
+        """District/neighborhood name-table feature (later session,
+        partially cracked -- see map_compressed_reader.extract_
+        district_names()'s own docstring): after a normal point pick on
+        an `mp0` point, look up that tile's own embedded district-name
+        entries and, if any exist, append a summary line to the picked-
+        points panel. TILE-LEVEL, not attributed to the specific picked
+        point/street -- there is no known way yet to tell which entry
+        (if any) belongs to which segment, so this is shown as "this
+        tile's own area label(s)", not a property of the picked point
+        itself. Silent no-op for any other layer or if none are found.
+        Returns a short one-line summary string for the status bar
+        (empty string if nothing was found/added)."""
+        if self.data is None or layer != "mp0":
+            return ""
+        try:
+            entries = self.data.get_tile_district_names(layer, tile_id)
+        except Exception:
+            return ""  # best-effort enrichment -- never blocks an ordinary pick
+        if not entries:
+            return ""
+        shown = [e["text"] for e in entries[:8]]
+        more = "" if len(entries) <= 8 else " (+%d more)" % (len(entries) - 8)
+        self.points_text.insert(
+            "end", "      tile area label(s) (EXPERIMENTAL, mp0 only, not attributed to this "
+            "specific point): %s%s\n" % (", ".join(shown), more))
+        self.points_text.see("end")
+        return "Tile area label(s): %s%s." % (", ".join(shown), more)
+
+    def _append_seg_zone2_row(self, layer, tile_id):
+        """`mp0` "zone 2" seg_list record-structure feature (later
+        session, EXPERIMENTAL, partially cracked -- see
+        map_compressed_reader.decode_mp0_zone2()/zone2_categorical_
+        slots()'s own docstrings): after a normal point pick on an
+        `mp0` point, look up that tile's own zone-2 record run (feature
+        0 only) and, if a real run was found, append the most
+        CATEGORICAL attribute slot(s) as a candidate flag/enum. TILE-
+        LEVEL, not attributed to the specific picked point/street --
+        the tag byte this format uses is PER-STREET, not a fixed
+        attribute-type code (see decode_mp0_zone2()'s own docstring),
+        and what any slot's value means in the real world is NOT known
+        -- shown as a raw structural candidate, never a named property.
+        Silent no-op for any other layer or if nothing was found.
+        Returns a short one-line summary string for the status bar
+        (empty string if nothing was found/added)."""
+        if self.data is None or layer != "mp0":
+            return ""
+        try:
+            summary = self.data.get_tile_seg_zone2_summary(layer, tile_id)
+        except Exception:
+            return ""  # best-effort enrichment -- never blocks an ordinary pick
+        if not summary or not summary["top_slots"]:
+            return ""
+        shown = []
+        for s in summary["top_slots"][:3]:
+            vals = ",".join("0x%02x(x%d)" % (v, c) for v, c in sorted(s["values"].items()))
+            shown.append("tag=0x%02x/sub=%d: %s" % (s["tag"], s["subidx"], vals))
+        self.points_text.insert(
+            "end", "      zone-2 candidate flag slot(s) (EXPERIMENTAL, mp0 only, structure "
+            "validated / meaning NOT known, %d records this tile): %s\n" % (
+                summary["n_records"], "; ".join(shown)))
+        self.points_text.see("end")
+        return "Zone-2 candidate flag slot(s) found (see panel)."
 
     def _rebuild_points_panel(self):
         """Fully redraw the picked-points text panel from self.picked_points

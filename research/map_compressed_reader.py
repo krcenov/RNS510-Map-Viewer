@@ -160,7 +160,10 @@ to look up "which tile covers lat/lon X,Y" from scratch, or to add a
 brand-new tile at a location with no existing tile.
 """
 
+import collections
 import math
+import os
+import re
 import struct
 import zlib
 
@@ -3077,8 +3080,45 @@ def decode_topology(raw, declen=None, features=None):
     running id, offset, or index into a separate structure this project
     hasn't located yet. A real, worthwhile follow-up for a future
     session: gather MORE tiles' worth of these entries (cheap now that
-    the regex `[0-9]{1,3}\^[ -~]{3,40}\x00` reliably finds them) to get
-    enough samples to pin down `X`/`Y`/`ZZ` the same way `WW` was solved.
+    the regex `[0-9]{1,3}` + caret + `[ -~]{3,40}\x00` reliably finds
+    them) to get enough samples to pin down `X`/`Y`/`ZZ` the same way
+    `WW` was solved. `extract_district_names()` (added right after this
+    module's own `resolve_topology_adjacency()`) is the clean, reusable
+    version of this ad-hoc analysis, wired into the viewer's own point-
+    pick info panel.
+
+    ==== UPDATE, same session: zone 2's own record format GENERALIZED to
+    multiple tiles -- one real correction found in the process ====
+    `decode_mp0_zone2()`/`zone2_categorical_slots()` (added right after
+    `parse_seg_tail_records()`) re-derive zone 2's structure WITHOUT
+    hardcoding the Vladimir Bashev tile's own `0x44` middle byte,
+    auto-detecting each tile's own dominant tag instead. Tested against
+    5 more real Sofia-area `mp0` tiles: 4 succeeded structurally (a 5th
+    and 6th failed only because `seg_tail_region()` itself couldn't
+    locate their topology table -- a pre-existing, unrelated limitation),
+    finding real dense record runs (516-819 records each) matching the
+    original crack's shape. **A naive "first occurrence of the tag"
+    boundary-finder failed on 2 of the 4 test tiles**, landing on a
+    sparse, unrelated earlier occurrence instead of the true dense-run
+    start -- fixed by requiring several consecutive anchors to already
+    show the 7-or-11-byte stride before accepting a start position (the
+    same principle zone 1's own numeric-record boundary needed).
+
+    **A real correction to how this project described the format**: the
+    original write-up implied `0x44` was a fixed "attribute-type" tag.
+    Testing on other tiles shows each tile has its OWN dominant middle
+    byte and its OWN dominant per-slot tag values (e.g. the original
+    tag=0xf4/subidx=1 binary-flag CANDIDATE does not recur as `0xf4` on
+    any other tile -- other tiles show `0xf2`, `0xe8`, `0xf5`, `0xeb`
+    instead, each still forming its OWN clean small-distinct-value
+    slot). This confirms `id` (`tag_byte0` + the tile's dominant middle
+    byte) is a genuine PER-STREET identifier, not a record-type marker
+    -- consistent with, and reinforcing, the original 3-group/3-street
+    `idx`-reset finding. `zone2_categorical_slots()` therefore computes
+    the "most categorical attribute slot" fresh per tile rather than
+    assuming a fixed tag. Wired into the viewer's point-pick info panel
+    (EXPERIMENTAL, structure validated, real-world meaning still
+    unknown for every tile including the original).
 
     ==== UPDATE: firmware emulation used to probe byte1's real role ====
     Built a Unicorn-based (UC_ARCH_PPC/UC_MODE_BIG_ENDIAN) "emulation
@@ -3390,6 +3430,157 @@ def parse_seg_tail_records(tail, max_steps=8_000_000, candidate_lengths=_SEG_TAI
     except TimeoutError:
         return False, [], {}, steps[0]
     return ok, records, id_len, steps[0]
+
+
+def decode_mp0_zone2(tail):
+    """PARTIALLY CRACKED, GENERALIZED -- the `mp0`-specific "zone 2"
+    record format originally found on the Vladimir Bashev ground-truth
+    tile (`decode_topology()`'s own docstring, "FIRST REAL CRACK of a
+    chunk of `mp0`'s own tail structure"), re-derived here WITHOUT
+    hardcoding that one tile's own `0x44` tag byte -- tested against
+    5 more real Sofia-area `mp0` tiles (4 succeeded structurally; a
+    5th and 6th failed only because `seg_tail_region()` itself could
+    not locate their topology table, a pre-existing, unrelated
+    `decode_topology()` limitation, not a failure of this function).
+
+    IMPORTANT CORRECTION from that broader test: the original writeup
+    described the per-record leading byte pair (`id` = `tag_byte0` +
+    `0x44`) as if `0x44` were a fixed "attribute-type" marker. Testing
+    on other tiles shows each tile has its OWN dominant middle byte
+    (`0x44` on the Vladimir Bashev/airport tiles, but `0xNN` varies
+    tile to tile) -- `id` is a genuine PER-STREET identifier (as the
+    original docstring's own 3-group/3-street correlation already
+    established), not a fixed record-type tag. This function therefore
+    auto-detects the tile's own dominant middle byte rather than
+    assuming `0x44`.
+
+    Mechanism: (1) find the most common non-zero byte `M` such that
+    `tail[i+1]==M and tail[i+2]==0` for many `i` (real records share
+    this middle byte constant far more than chance); (2) find where a
+    run of consecutive `(tag, M, 0x00)` anchors settles into a
+    consistent 7-or-11-byte stride (the true dense-record run start,
+    NOT just the first isolated occurrence -- an early version of this
+    function that used "first occurrence" failed on 2 of 4 test tiles
+    by landing on a sparse, unrelated earlier occurrence); (3) from
+    there, exhaustively DP-parse forward (widths 7 and 11, validity =
+    `rec[1]==M and rec[2]==0`) as far as a fully consistent chain
+    reaches.
+
+    Real, generalized test results (Sofia-area sample, this session):
+    all 4 structurally-succeeding tiles found a real dense run (516-819
+    total records each, roughly 60-75% width-7), matching the shape of
+    the original single-tile crack. Each tile's own most-populated
+    `(tag, subidx)` "attribute slot" (candidate for a flag/category
+    field, the same kind of analysis that found the original
+    tag=0xf4/subidx=1 binary-flag CANDIDATE on Vladimir Bashev) uses a
+    COMPLETELY DIFFERENT tag value per tile (confirming the per-street
+    `id` point above) -- so "which slot looks most categorical" must be
+    computed fresh per tile, never assumed to be a fixed tag.
+
+    Returns `{"mid_byte": int or None, "start": int or None,
+    "end": int or None, "records": [(pos, width, raw_bytes), ...]}` --
+    `mid_byte`/`start`/`end` are `None` and `records` is `[]` if no
+    plausible dense run was found (never raises)."""
+    n = len(tail)
+    counts = collections.Counter()
+    for i in range(n - 2):
+        if tail[i + 2] == 0x00 and tail[i + 1] != 0x00:
+            counts[tail[i + 1]] += 1
+    if not counts:
+        return {"mid_byte": None, "start": None, "end": None, "records": []}
+    mid_byte, top_count = counts.most_common(1)[0]
+    if top_count < 20:
+        return {"mid_byte": None, "start": None, "end": None, "records": []}
+
+    anchors = [i for i in range(n - 2) if tail[i + 1] == mid_byte and tail[i + 2] == 0x00]
+    start = None
+    min_run = 4
+    for start_i in range(len(anchors) - min_run + 1):
+        if all(anchors[k + 1] - anchors[k] in (7, 11) for k in range(start_i, start_i + min_run - 1)):
+            start = anchors[start_i]
+            break
+    if start is None:
+        return {"mid_byte": mid_byte, "start": None, "end": None, "records": []}
+
+    def valid(pos, w):
+        if pos + w > n:
+            return False
+        return tail[pos + 1] == mid_byte and tail[pos + 2] == 0x00
+
+    visited = {start}
+    frontier = [start]
+    while frontier:
+        nf = []
+        for pos in frontier:
+            for w in (7, 11):
+                if valid(pos, w) and pos + w not in visited:
+                    visited.add(pos + w)
+                    nf.append(pos + w)
+        frontier = nf
+    target = max(visited)
+
+    reachable = {target: True}
+    for i in range(target - 1, start - 1, -1):
+        reachable[i] = any(i + w <= target and valid(i, w) and reachable.get(i + w) for w in (7, 11))
+
+    i = start
+    records = []
+    while i < target:
+        moved = False
+        for w in (7, 11):
+            if i + w <= target and valid(i, w) and reachable.get(i + w):
+                records.append((i, w, tail[i:i + w]))
+                i += w
+                moved = True
+                break
+        if not moved:
+            break
+    return {"mid_byte": mid_byte, "start": start, "end": target, "records": records}
+
+
+def zone2_categorical_slots(records, max_distinct=4, min_records=8):
+    """Given `decode_mp0_zone2()`'s own `"records"` list, groups by
+    `(tag_byte0, subidx)` and returns the slots that look CATEGORICAL
+    (few distinct `value` bytes relative to their own record count) --
+    the same heuristic that found the tag=0xf4/subidx=1 binary-flag
+    CANDIDATE on the Vladimir Bashev tile, generalized to work per-tile
+    (see `decode_mp0_zone2()`'s own docstring for why the tag value
+    itself is NOT reusable across tiles). NOT a confirmed semantic
+    crack for any tile other than the original -- and even there, only
+    the record STRUCTURE is validated, not what the flag means in the
+    real world. Returns a list of dicts, sorted by record count
+    descending: `{"tag": int, "subidx": int, "n": int, "distinct":
+    int, "values": {value: count, ...}}`, restricted to slots with at
+    least `min_records` records and at most `max_distinct` distinct
+    values."""
+    def get_tag(w, rec):
+        return rec[0]
+
+    def get_subidx(w, rec):
+        return rec[5] if w == 7 else rec[9]
+
+    def get_value(w, rec):
+        return rec[6] if w == 7 else rec[10]
+
+    slots = collections.defaultdict(list)
+    for _pos, w, rec in records:
+        if w not in (7, 11):
+            continue
+        slots[(get_tag(w, rec), get_subidx(w, rec))].append(get_value(w, rec))
+
+    results = []
+    for (tag, subidx), vals in slots.items():
+        if len(vals) < min_records:
+            continue
+        distinct = collections.Counter(vals)
+        if len(distinct) > max_distinct:
+            continue
+        results.append({
+            "tag": tag, "subidx": subidx, "n": len(vals),
+            "distinct": len(distinct), "values": dict(distinct),
+        })
+    results.sort(key=lambda r: -r["n"])
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -3893,4 +4084,116 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
             "adjacency": adjacency,
             "edges_dropped_implausible": dropped,
         })
+    return results
+
+
+_DISTRICT_NAME_PATTERN = re.compile(rb'[0-9]{1,3}\^[ -~]{3,40}\x00')
+
+_LANGUAGE_INDEX_TO_CODE = None
+
+
+def _get_language_index_map(abc_path=None):
+    """Lazily builds {index: 3-letter lang_code} from `eeu.abc`'s own
+    already-cracked language table (see `research/abc_reader.py`).
+    Cached at module scope -- the table is tiny (86 records) and never
+    changes per-disc. `abc_path` defaults to this project's own
+    conventional `CD_8555/db/eeu.abc` location; pass an explicit path if
+    calling from a different working directory."""
+    global _LANGUAGE_INDEX_TO_CODE
+    if _LANGUAGE_INDEX_TO_CODE is not None:
+        return _LANGUAGE_INDEX_TO_CODE
+    if abc_path is None:
+        abc_path = os.path.join(os.path.dirname(__file__), "..", "CD_8555", "db", "eeu.abc")
+    try:
+        import abc_reader
+        _, records = abc_reader.read_abc(abc_path)
+        _LANGUAGE_INDEX_TO_CODE = {r[2]: r[0] for r in records}
+    except Exception:
+        _LANGUAGE_INDEX_TO_CODE = {}
+    return _LANGUAGE_INDEX_TO_CODE
+
+
+def extract_district_names(raw, abc_path=None):
+    """PARTIALLY CRACKED -- finds this tile's own embedded district/
+    neighborhood name-table entries (`mp0` only, confirmed; not checked
+    on other layers). See `decode_topology()`'s own docstring, "zone 1
+    ... a genuine, independently-cross-referenced BULGARIAN PLACE-NAME
+    string table" and the immediately-following header UPDATE, for the
+    full discovery writeup -- this function is the clean, reusable
+    version of that ad-hoc analysis.
+
+    Each real entry has the form `<17-byte header><lang-index digits>^
+    <NAME>\\x00`, found via regex over the tile's raw decompressed bytes
+    (no need to locate the containing zone/record boundary first -- the
+    string pattern itself is distinctive enough). Of the header's 5
+    sub-fields (`X`, `Y`, `[0x01][0x00]` constant, `ZZ`, `WW`), only
+    `WW` is validated (`WW == len(text) - 1`, confirmed on 25/25 real
+    entries across 3 tiles); `X`/`Y`/`ZZ` are returned raw for a future
+    session to keep characterizing, not yet given real names.
+
+    These are almost certainly DISTRICT/NEIGHBORHOOD labels for the
+    tile's own area (e.g. "ZHK IZTOK", "HLADILNIKA", "TSENTAR/CENTRUM"),
+    NOT any individual street/segment's own name -- there is currently
+    no known way to attribute a specific entry to a specific point or
+    seg_list record (the same open `idx`<->point-index mapping problem
+    documented elsewhere in this module blocks that).
+
+    Returns a list of dicts, one per real entry found, in file order:
+        {"text": <str, the full "LANGIDX^NAME" text, NOT including the
+                 trailing NUL>,
+         "entries": <list of (lang_index, name) tuples -- a single
+                 string can carry multiple language variants separated
+                 by "/", e.g. "13^TSENTAR/24^CENTRE" -> [(13,"TSENTAR"),
+                 (24,"CENTRE")]>,
+         "lang_codes": <list of 3-letter lang_code strings from
+                 `eeu.abc`, one per entry above, in the same order --
+                 e.g. ["bul","eng"] -- "?" for any index not found in
+                 the language table>,
+         "offset": <int, byte offset of this entry's string within
+                 `raw`>,
+         "header": <the 17 raw header bytes immediately preceding the
+                 string, or fewer if this is the very first entry found
+                 (no confirmed preceding boundary)>,
+         "X": <int, u16 LE, header bytes 0-1 -- real meaning not yet
+                 identified>,
+         "Y": <int, u16 LE, header bytes 2-3 -- increases monotonically
+                 per-tile; real meaning not yet identified>,
+         "ZZ": <int, header byte 6 -- binary, only 16 or 17 ever seen;
+                 real meaning not yet identified>,
+         "WW": <int, header byte 7 -- VALIDATED: == len(text) - 1>}
+    """
+    lang_map = _get_language_index_map(abc_path)
+    matches = list(_DISTRICT_NAME_PATTERN.finditer(raw))
+    results = []
+    prev_end = None
+    for m in matches:
+        text = m.group()[:-1].decode("ascii", "replace")  # drop trailing \x00
+        header_start = prev_end if prev_end is not None else max(0, m.start() - 17)
+        header = raw[header_start:m.start()]
+        tail17 = header[-17:] if len(header) >= 17 else header
+        entries = []
+        for part in text.split("/"):
+            if "^" in part:
+                idx_str, name = part.split("^", 1)
+                try:
+                    entries.append((int(idx_str), name))
+                except ValueError:
+                    entries.append((None, part))
+            else:
+                entries.append((None, part))
+        lang_codes = [lang_map.get(idx, "?") if idx is not None else "?" for idx, _ in entries]
+        rec = {
+            "text": text,
+            "entries": entries,
+            "lang_codes": lang_codes,
+            "offset": m.start(),
+            "header": tail17,
+        }
+        if len(tail17) == 17:
+            rec["X"] = int.from_bytes(tail17[0:2], "little")
+            rec["Y"] = int.from_bytes(tail17[2:4], "little")
+            rec["ZZ"] = tail17[6]
+            rec["WW"] = tail17[7]
+        results.append(rec)
+        prev_end = m.end()
     return results
