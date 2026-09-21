@@ -77,6 +77,32 @@ available for that language -- but no independent evidence (e.g. cross-
 referencing a real voice-file inventory) was available this session to
 confirm it over any other 3-valued per-language property.
 
+**UPDATE, a MUCH later session: `(4, 8)` CONFIRMED, directly, with real
+embedded data -- it is the per-language PHONETIC/PRONUNCIATION-
+TRANSCRIPTION index.** Found while investigating `mp0`'s own embedded
+district-name string table (`research/map_compressed_reader.py`,
+`extract_district_names()`): real name entries there are tagged with
+this table's own `index` (e.g. `13^ZHK IZTOK` uses index 13 = `bul`).
+A subset of entries near the Bulgaria/Turkey and Bulgaria/Greece border
+tiles pair a plain name with a SECOND, syllable-broken phonetic string
+using the NEXT language index up, joined by `$`, e.g. `80^UZUNHACI$
+81^u|zun|ha|"dZ1` and `24^BULGARIA$25^bVl|"ge@|rI|@` (a real, correct
+IPA-ish English pronunciation of "Bulgaria") and `24^TURKEY$25^"t3|ki`
+(real English "Turkey"). Cross-referencing the index PAIRS used against
+this file's own table: `tur` is `(80,81)` = `(1,5)`+`(4,8)`; `eng` is
+`(24,25)` = `(2,2)`+`(4,8)`; `gre` is `(38,39)` = `(1,5)`+`(4,8)`;
+`bul` is `(13,14)` = `(1,5)`+`(4,8)` (index 14 itself not directly
+observed populated in the sample checked, but the SAME flag pattern).
+**`(4, 8)` is confirmed, directly and repeatedly, as the phonetic/
+pronunciation-transcription slot for whichever language it's paired
+with** -- not a guess anymore. `(1, 5)` and `(2, 2)` both serve as
+"plain display name" slots (confirmed via real, independently-decoded
+name entries using both, e.g. `24^SOFIA AIRPORT CENTER` at `eng`'s
+`(2,2)` index) -- which of the two a given language gets, and whether
+they differ in any other way, is still open. Full writeup, including
+the district-name-table discovery this rode in on:
+`research/map_compressed_reader.py`'s `decode_topology()` docstring.
+
 ============================================================================
 Practical use
 ============================================================================

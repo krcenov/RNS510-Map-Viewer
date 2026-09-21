@@ -2164,17 +2164,25 @@ bytes of UTF-8][fixed 7-byte language-table records to EOF]`.
   ISO 639-2's real "Undetermined" code) — a handful of non-standard-looking
   codes also appear (`aaa`, `bet`, `grt`, `mat`, `rst`, `sct`, `ukt`),
   unidentified against any standard list.
-- **`(flag_a, flag_b)` — behavior cracked, exact meaning open**: exactly 3
-  distinct pairs occur in the whole file — `(2, 2)` (42 records, the most
-  common), `(4, 8)` (23), `(1, 5)` (21) — no other combination appears. 32 of
-  the 52 languages get more than one record (up to all 3 pairs, e.g. `pol`
-  and `scr` each get all three); the other 20 get exactly one. Plausible
-  reading, not confirmed: a per-language "voice/TTS profile tier" flag —
-  which of up to 3 distinct synthesis profiles are available for that
-  language — but no independent evidence (e.g. a real voice-file inventory)
-  was available this session to confirm it over any other 3-valued
-  per-language property. Full methodology: `research/abc_reader.py`'s module
-  docstring.
+- **`(flag_a, flag_b)` — CONFIRMED, a much later session, via real embedded
+  data.** Exactly 3 distinct pairs occur in the whole file — `(2, 2)` (42
+  records, the most common), `(4, 8)` (23), `(1, 5)` (21) — no other
+  combination appears. Found while investigating `mp0`'s own embedded
+  district-name string table (§3.16): some entries near the Bulgaria/
+  Turkey and Bulgaria/Greece border tiles pair a plain name with a
+  syllable-broken PHONETIC transcription using the next language index up,
+  e.g. `80^UZUNHACI$81^u|zun|ha|"dZ1` and — cleanest of all — `24^BULGARIA$
+  25^bVl|"ge@|rI|@` (a real, correct IPA-ish rendering of the actual
+  ENGLISH pronunciation of "Bulgaria") and `24^TURKEY$25^"t3|ki`.
+  Cross-referencing the index pairs used against this table directly:
+  `tur`=`(80,81)`=`(1,5)`+`(4,8)`; `eng`=`(24,25)`=`(2,2)`+`(4,8)`;
+  `gre`=`(38,39)`=`(1,5)`+`(4,8)` — **`(4, 8)` is now CONFIRMED as the
+  per-language PHONETIC/PRONUNCIATION-TRANSCRIPTION slot**, not a guess.
+  `(1, 5)` and `(2, 2)` both serve as "plain display name" slots (confirmed
+  via real entries using each); which of the two a given language gets
+  isn't yet explained. Full methodology: `research/abc_reader.py`'s module
+  docstring and `research/map_compressed_reader.py`'s `decode_topology()`
+  docstring (the district-name-table discovery this rode in on).
 
 ### 3.12 `eeu.aff` — affix table (138 bytes, NOT_COMPRESSED) — CRACKED (structure); EMPTY on this disc
 94-byte header (see §3.1's now-cracked trailing fields: type code 2, record
@@ -2562,7 +2570,12 @@ directly cross-referencing this schema**:
   `30`, `40`, `50`, `80` — all real, standard km/h speed limits, a
   plausible on-disk match for the firmware's known `db_seg_speed_V004`
   accessor (not yet ground-truth-confirmed). Sub-zone 3b (196 bytes) is
-  a clean monotonic list of multiples of 4, not yet identified. Sub-zone
+  a clean monotonic list of multiples of 4, not yet identified — a
+  later session tested and REFUTED the "scaled point/vertex index"
+  hypothesis: dividing by 4 gives valid point indices on the original
+  tile (with a weak, inconclusive bias toward junction points), but on
+  a 2nd tile the resulting indices exceed that tile's own real point
+  count entirely — a clean refutation, not just inconclusive. Sub-zone
   3c (1,056 bytes) starts as small signed deltas then shifts character
   partway through — not fully solved. Full writeup: `decode_topology()`'s
   docstring, "FIRST REAL CRACK of a chunk of `mp0`'s own tail structure"
@@ -2629,6 +2642,21 @@ directly cross-referencing this schema**:
   family-16 (98.4%) — the "standalone place name" default. Not
   perfectly clean (31 of 203 pairs share the same family); `Y`'s own
   numeric value beyond "is it shared" is still unidentified.
+
+  **The entries this table's own regex deliberately excludes (`|`/`$`/
+  apostrophe — "phonetic transcriptions") turned out to be a real,
+  independent crack that closes an OLD open question in §3.11's own
+  `eeu.abc` writeup.** See that section above for the full `(flag_a,
+  flag_b)` = `(4,8)`-is-the-phonetic-slot confirmation, found via these
+  exact entries (e.g. `24^BULGARIA$25^bVl|"ge@|rI|@`).
+
+  **`Y`-vs-`idx` tested, genuinely inconclusive**: checked whether `Y`
+  directly references zone 2's own per-street `idx` counter — 100% of
+  `Y` values in every tile tested ARE valid `idx` values, but zone 2's
+  own `idx` range turned out to be 100% dense (zero gaps) on every tile
+  checked, making simple membership uninformative either way. Would
+  need a tile with real `idx` gaps to test meaningfully — none found
+  yet.
 
   **Zone 2's record format GENERALIZED to multiple tiles, a still-later
   session — one real correction found.** `decode_mp0_zone2()` re-derives

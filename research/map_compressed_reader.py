@@ -4430,6 +4430,31 @@ def extract_district_names(raw, abc_path=None):
     has REAL gaps (none found among the tiles checked so far) to make
     this a meaningful test.
 
+    ==== UPDATE, a still-later session: the entries this function
+    deliberately EXCLUDES (containing `|`/`$`/apostrophe, "phonetic/
+    pronunciation transcriptions") turned out to be a real, independent
+    crack -- and it closes an OLD open question in `research/
+    abc_reader.py` ====
+    These entries pair a plain name with a phonetic transcription using
+    the SAME `<idx>^<text>` convention, joined by `$`, e.g. `80^
+    UZUNHACI$81^u|zun|ha|"dZ1` (a real town near the Bulgaria/Turkey
+    border) and, cleanest of all, `24^BULGARIA$25^bVl|"ge@|rI|@` (a
+    real, correct IPA-ish rendering of the actual ENGLISH pronunciation
+    of "Bulgaria") and `24^TURKEY$25^"t3|ki`. Cross-referencing the
+    index PAIRS used against `eeu.abc`'s own already-cracked language
+    table (`research/abc_reader.py`) directly answers that file's own
+    long-standing open question about what its `(flag_a, flag_b)` pair
+    means: `tur` is index pair `(80,81)` = flags `(1,5)`+`(4,8)`; `eng`
+    is `(24,25)` = `(2,2)`+`(4,8)`; `gre` is `(38,39)` = `(1,5)`+`(4,8)`
+    -- **`(4, 8)` is CONFIRMED, directly, as the per-language PHONETIC/
+    PRONUNCIATION-TRANSCRIPTION slot**, not a guess anymore (`abc_
+    reader.py`'s own earlier docstring called this "plausible, not
+    confirmed"). `(1, 5)` and `(2, 2)` both serve as "plain display
+    name" slots (confirmed via real entries using each, e.g. `24^SOFIA
+    AIRPORT CENTER` at `eng`'s `(2,2)` index) -- which of the two a
+    given language gets isn't yet explained. Full writeup:
+    `research/abc_reader.py`'s own docstring.
+
     Returns a list of dicts, one per real entry found, in file order:
         {"text": <str, the full "LANGIDX^NAME" text, NOT including the
                  trailing NUL>,
