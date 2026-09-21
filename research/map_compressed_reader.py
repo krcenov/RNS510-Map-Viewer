@@ -2894,6 +2894,25 @@ def decode_topology(raw, declen=None, features=None):
     for what it indexes (candidates: byte offsets into a 4-byte-stride
     table, or a scaled point/vertex reference).
 
+    ==== UPDATE, a still-later session: "scaled point/vertex reference"
+    hypothesis tested directly -- REFUTED on a 2nd tile ====
+    Divided each value by 4 and checked against the feature's own real
+    point indices (`decode_features()`): on the ORIGINAL Vladimir Bashev
+    tile, all 98 resulting indices (49-211) fall inside its valid 0-390
+    point range, and cross-referencing against `resolve_topology_
+    adjacency()`'s own per-point degree shows a WEAK bias toward
+    junctions (degree-3 points: 42.9% of the referenced set vs. 37.8%
+    tile-wide) -- suggestive, not conclusive. **Tested the same
+    hypothesis on the Sofia-airport tile (`gt2_91124`) and it fails
+    cleanly**: the equivalent run there (found immediately after zone
+    3a, same monotonic-multiples-of-4 shape, 134 values) produces
+    indices up to 423, but this tile's feature has only 306 real points
+    (0-305) -- 423 is not a valid point index at all. A real, clean
+    refutation of "these are point indices" as a general rule (the
+    apparent fit on the first tile was coincidental range overlap, not
+    a real structural match). Still open; the weak junction-degree bias
+    on the original tile remains unexplained by this refuted hypothesis.
+
     **Sub-zone 3c (zone-3 bytes 1018-2074, 1,056 bytes): partially
     characterized, itself probably not uniform.** 528 `u16 LE` values,
     signed-looking (roughly half negative). The first ~349 values are
