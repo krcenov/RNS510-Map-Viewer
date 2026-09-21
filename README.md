@@ -2585,9 +2585,24 @@ directly cross-referencing this schema**:
   file (`('bul', 1, 13, 5)`) — the prefix is the language index written
   as literal ASCII digits, not a raw byte. Almost certainly district/
   neighborhood labels (not the street's own name), consistent with a
-  "which area is this tile in" lookup. The small numeric header
-  preceding each name entry, and the exact consumer of this label,
-  remain undecoded — a concrete follow-up for a future session.
+  "which area is this tile in" lookup.
+
+  **Header partially cracked, a later session — one field real and
+  validated.** Found the same name-table convention in 2 more tiles (25
+  real entries total across 3 tiles), including a 2nd independently
+  confirmed language index: `24^` = `eng` (English, `eeu.abc` index 24),
+  correctly appearing on English-only entries (`24^SOFIA AIRPORT
+  CENTER`) and paired with Bulgarian on bilingual ones (`13^TERMINAL 2/
+  24^TERMINAL 2`) — real-world-plausible for an international airport.
+  The header is a fixed 17 bytes: `[X: u16 LE][Y: u16 LE][0x01][0x00]
+  [ZZ: 1 byte][WW: 1 byte][9 zero bytes]`. **`WW` is REAL and VALIDATED:
+  exactly `len(text) - 1`** (the string's own length, excluding its NUL)
+  — confirmed on all 25 entries, 100% exact match. `[0x01][0x00]` is a
+  constant marker on every entry. `ZZ` is binary (only 16 or 17, no
+  clean correlation found yet); `X` is always odd and sits close to
+  `WW+18` or `WW+19`; `Y` increases monotonically per-tile but its
+  jumps don't match cumulative string length — all 3 still open for a
+  future session with more samples.
 
   **Zone 2's own `(tag, subidx)` slots characterized by value
   distribution — one clean binary flag found.** `tag=0xf4, subidx=1`

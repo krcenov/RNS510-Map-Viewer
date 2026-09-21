@@ -3033,6 +3033,53 @@ def decode_topology(raw, declen=None, features=None):
     future session, not attempted further here given the scope already
     covered.
 
+    ==== UPDATE, same session, immediately following: the name-table
+    header PARTIALLY cracked -- one field REAL and VALIDATED, others
+    characterized but not yet named ====
+    Found 2 more tiles with the SAME `<header><lang-idx>^<NAME>\x00`
+    convention (`mp0` tile at file offset 1,003,495,557, a 306-point
+    feature near Sofia Airport with 19 real matches -- richest sample by
+    far; `mp0` tile at file offset 972,122,528, 3 matches) -- 25 real
+    name entries total across 3 tiles, giving enough samples to compare
+    headers directly rather than guess from 2-3 examples. Confirms the
+    format generalizes (not a one-tile fluke): real Sofia place names
+    throughout, including a 2nd, INDEPENDENTLY confirmed language index
+    -- `24^` (English: `eeu.abc` index 24 == `eng`, checked directly
+    against the real file, exactly the way `13`==`bul` was confirmed
+    earlier) -- correctly appearing on English-only entries
+    (`24^SOFIA AIRPORT CENTER`) and paired with Bulgarian on others
+    (`13^TERMINAL 2/24^TERMINAL 2`), a real-world-plausible split for a
+    bilingually-signed international airport.
+
+    The header immediately preceding each name string is a FIXED 17
+    bytes (an occasional apparent 18th leading byte is just the previous
+    entry's own trailing padding, not part of THIS entry's header --
+    confirmed by aligning on the last 17 bytes uniformly): `[X: u16 LE]
+    [Y: u16 LE][0x01][0x00][ZZ: 1 byte][WW: 1 byte][9 zero bytes]`.
+
+    **`WW` is a REAL, VALIDATED crack: it exactly equals `len(the
+    "LANGIDX^NAME" text) - 1`** (i.e. the string's own length NOT
+    counting its trailing NUL) -- confirmed on ALL 25 real entries
+    across all 3 tiles, 100% exact match, zero exceptions. A genuine
+    field name, not a guess.
+
+    Characterized, not yet named: `[0x01][0x00]` is a constant marker on
+    every single entry (25/25). `ZZ` is BINARY -- only 2 values ever seen
+    (16 or 17) -- but does not cleanly correlate with single- vs.
+    multi-language strings, nor with which language tag appears first;
+    left unexplained. `X` is ALWAYS ODD (every one of the 25 samples) and
+    sits close to `WW + 18` or `WW + 19` (never anything else) -- a real,
+    tight numeric relationship to the string length, but the extra
+    +18/+19 offset and why it alternates isn't understood. `Y` increases
+    MONOTONICALLY within each tile (e.g. 9, 45, 71, 72, 73, 104, 151...
+    on the airport tile) but its jump sizes don't match cumulative string
+    length or any other already-decoded field tried -- most likely a
+    running id, offset, or index into a separate structure this project
+    hasn't located yet. A real, worthwhile follow-up for a future
+    session: gather MORE tiles' worth of these entries (cheap now that
+    the regex `[0-9]{1,3}\^[ -~]{3,40}\x00` reliably finds them) to get
+    enough samples to pin down `X`/`Y`/`ZZ` the same way `WW` was solved.
+
     ==== UPDATE: firmware emulation used to probe byte1's real role ====
     Built a Unicorn-based (UC_ARCH_PPC/UC_MODE_BIG_ENDIAN) "emulation
     classifier" over `FHDD6.FLI`'s real code region (see
