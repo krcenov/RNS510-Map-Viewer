@@ -6747,6 +6747,31 @@ self.on_close)` handler — `App.on_close()` calls `self.data.close()`
 the cleanup `on_open_iso()` already did correctly when switching ISOs.
 `test_map_viewer.py` re-run in full after the fix — all tests pass.
 
+### v25 → v26: "Show tile boundaries" checkbox (this session, user-requested)
+
+Prompted directly by the real cross-tile adjacency gap found this
+session (§8 item 5): a user-reported road connection crossed from `mg4`
+tile 2384 into tile 2385 entirely — a class of gap `resolve_topology_
+adjacency()` has no mechanism for at all. `MapData.active_tile_bboxes()`
+computes each currently-pooled tile's own bounding box from its
+already-decoded points (`tile_caches`, no extra disk I/O) — no real
+per-tile grid bbox is stored on-disc for these layers (checked:
+`decode_tile_header()`'s own 12-word header has no such field), so
+this is a pragmatic, data-derived box, not a claim about the format's
+own exact tile-grid geometry. **Sanity-checked directly against the
+real cross-tile report**: tile 2384's computed bbox ends at lon
+23.45547; tile 2385's begins at lon 23.4555 — a near-exact match, and
+the reported point 132 (lon 23.45508) sits almost exactly on that
+edge, confirming the boundary overlay will genuinely help spot more
+candidates like it. New "Show tile boundaries" checkbox draws each box
+as a thin outline rectangle, rasterized into the same single `PIL`
+image as every other overlay (never individual canvas items — a wide,
+zoomed-out viewport can pool 1,000+ tiles, and this project already
+learned the hard way, "v17 → v18", that per-item Tk canvas overhead at
+that scale is a real, measured freeze). Drawn first, under all
+points/roads, so it never obscures real data. OFF by default.
+`test_map_viewer.py` re-run in full, all tests pass.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

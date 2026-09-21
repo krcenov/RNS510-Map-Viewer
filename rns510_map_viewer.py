@@ -653,6 +653,9 @@ SEG_PREDICT_NONDIVIDED_COLOR = "#1565c0"   # strong blue -- predicted non-divide
 SEG_PREDICT_UNKNOWN_COLOR = "#9e9e9e"      # neutral gray -- no prediction (parse
 # failed, too few 8-byte records, or not an mg4 tile) -- deliberately NOT one of
 # the 2 prediction colors, so "no opinion" is never mistaken for a real guess.
+TILE_BOUNDARY_COLOR = "#9c8f6b"  # muted tan -- visible against the light
+# background without competing with road/label colors; a debugging aid, not
+# a primary map feature.
 ROAD_LABEL_COLOR = "#3a2f18"
 CITY_DOT_COLOR = "#20304a"       # dark navy square markers (photo #4 style, adapted to light bg)
 CITY_LABEL_COLOR = "#141c28"
@@ -1704,6 +1707,44 @@ class MapData:
             (lats >= lat_min) & (lats <= lat_max)
         )
         return [int(t) for t in tile_ids[mask]]
+
+    def active_tile_bboxes(self):
+        """"Show tile boundaries" feature (later session, prompted by
+        the real cross-tile adjacency gap found this session -- see
+        `research/map_compressed_reader.py`'s `decode_topology()`
+        docstring, "CONCRETE CROSS-TILE EXAMPLE" -- this makes it easy
+        to SEE candidate cross-tile dead-ends directly on the map,
+        rather than only after a right-click report). No known real
+        per-tile grid bounding box is stored on-disc for these layers
+        (checked: `decode_tile_header()`'s own 12-word header has no
+        such field) -- so this computes each tile's bbox PRAGMATICALLY,
+        from the min/max (lon, lat) of its own already-decoded points
+        (`self.tile_caches`), same data already used for rendering, no
+        extra disk I/O or re-decoding. Only covers `self.active_
+        tile_ids` (the tiles the last `ensure_area_loaded()` call
+        pooled) -- purely a display aid, not a claim about the real
+        on-disc tile grid's own exact geometry.
+
+        Returns {(layer, tile_id): (lon_min, lon_max, lat_min, lat_max)},
+        omitting any tile with fewer than 2 total points (no meaningful
+        box) or that failed to decode. Never raises."""
+        boxes = {}
+        for layer, tile_ids in (self.active_tile_ids or {}).items():
+            cache = self.tile_caches.get(layer, {})
+            for tid in tile_ids:
+                feats = cache.get(tid)
+                if not feats:
+                    continue
+                lons = []
+                lats = []
+                for feat in feats:
+                    for lon, lat in feat.get("points", ()):
+                        lons.append(lon)
+                        lats.append(lat)
+                if len(lons) < 2:
+                    continue
+                boxes[(layer, tid)] = (min(lons), max(lons), min(lats), max(lats))
+        return boxes
 
     def decode_tile(self, layer, tile_id, want_adjacency=False, want_seg_predict=False):
         """Decompress and decode_features() one tile by its geo-index/
@@ -3050,6 +3091,27 @@ class App:
             font=("Segoe UI", 9), highlightthickness=0)
         self.show_seg_predict_cb.pack(side="left", padx=(10, 0))
 
+        # ---- "Show tile boundaries" checkbox (later session) ---- prompted
+        # directly by the real cross-tile adjacency gap found this session
+        # (a user-reported road that connects across 2 DIFFERENT tiles --
+        # resolve_topology_adjacency() has no mechanism at all for that).
+        # Draws each currently-pooled tile's own bounding box (computed from
+        # its already-decoded points, see MapData.active_tile_bboxes()) as a
+        # thin outline rectangle -- makes it easy to visually spot a
+        # dead-end point sitting right on a tile edge, a strong hint it's a
+        # candidate cross-tile connection worth reporting. OFF by default,
+        # same reasoning as the other debugging/investigation-aid overlays.
+        self.show_tile_boundaries_var = tk.BooleanVar(value=False)
+        self._status_divider(layers_row)
+        self.show_tile_boundaries_cb = tk.Checkbutton(
+            layers_row, text="Show tile boundaries",
+            variable=self.show_tile_boundaries_var,
+            onvalue=True, offvalue=False, command=self._on_show_tile_boundaries_changed,
+            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
+            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
+            font=("Segoe UI", 9), highlightthickness=0)
+        self.show_tile_boundaries_cb.pack(side="left", padx=(10, 0))
+
         # ---- "Hide decode garbage" checkbox (README S10 "v10 -> v11") ----
         # User request (verbatim, after asking whether every real point was
         # being shown): "lets fix 2, add a checkbox that enables and
@@ -3918,6 +3980,22 @@ class App:
         # (BG_COLOR), so there's no need for a real alpha channel here.
         img = Image.new("RGB", (w, h), BG_COLOR)
         draw = ImageDraw.Draw(img)
+
+        # "Show tile boundaries" overlay (later session, see the checkbox's
+        # own comment in _build_widgets() for why): drawn FIRST, before any
+        # point/road pixel, so it never obscures real data -- just thin
+        # outline rectangles under everything else. Rasterized into the
+        # same image as everything else (never individual canvas items) --
+        # a wide, zoomed-out viewport can easily pool 1,000+ tiles, and
+        # this project already learned the hard way (README §10 "v17 ->
+        # v18") that per-item Tk canvas overhead at that scale is a real,
+        # measured freeze, not a hypothetical concern.
+        if self.show_tile_boundaries_var.get() and self.data is not None:
+            for (layer, tile_id), (lon_min, lon_max, lat_min, lat_max) in \
+                    self.data.active_tile_bboxes().items():
+                x0, y0 = self._to_canvas(lon_min, lat_max)  # top-left: min lon, MAX lat (screen y grows downward)
+                x1, y1 = self._to_canvas(lon_max, lat_min)  # bottom-right: max lon, min lat
+                draw.rectangle([x0, y0, x1, y1], outline=TILE_BOUNDARY_COLOR, width=1)
 
         placed = []  # [(name, x, y), ...] already-drawn labels, for de-dup
 
@@ -4830,6 +4908,16 @@ class App:
         if self.data is None or self.center_lon is None:
             return  # nothing loaded yet -- the checkbox state is remembered for when it is
         self._maybe_reload_viewport(force=True)
+
+    def _on_show_tile_boundaries_changed(self):
+        """Checkbutton command for "Show tile boundaries" (later session).
+        Unlike the other overlay checkboxes above, this needs NO reload --
+        `MapData.active_tile_bboxes()` computes purely from data already in
+        `tile_caches` for the currently-pooled tiles, so a plain redraw is
+        enough to show/hide the boundary rectangles."""
+        if self.data is None or self.center_lon is None:
+            return  # nothing loaded yet -- the checkbox state is remembered for when it is
+        self._redraw()
 
     # ------------------------------------------- oscillation filter (v10 -> v11)
 
