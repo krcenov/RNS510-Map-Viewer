@@ -2819,11 +2819,34 @@ def decode_topology(raw, declen=None, features=None):
     `subidx=1` for dozens of consecutive `idx` values in a row) --
     exactly the shape of a per-direction attribute pair (forward/
     backward), though which real-world attribute `value` encodes is
-    NOT yet identified (this tile's one confirmed fact, that Vladimir
-    Bashev itself is ONE-WAY, hasn't yet been cross-checked against
-    which of the 3 idx-groups it actually is or whether one direction's
-    records go systematically missing there -- a concrete, promising
-    next step).
+    NOT yet identified.
+
+    **UPDATE, same session: the "missing subidx=1 marks the one-way
+    direction" hypothesis was tested directly and CLEANLY REFUTED.** For
+    each of the 2 fully-analyzable groups (group 2 is cut off almost
+    immediately by this zone's own boundary, only 1 record visible),
+    checked whether `idx` values missing a `subidx=1` record (i.e. only
+    `subidx=0` present) cluster into a contiguous run -- the shape a
+    real one-way STRETCH of a street would produce -- or scatter
+    randomly. **Group 0**: 475 records, 284 distinct idx, 106 "only
+    subidx=0" idx values (37%) vs. 174 "has both" (61%). **Group 1**:
+    473 records, 239 distinct idx, 115 "only subidx=0" (48%) vs. 103
+    "has both" (43%). In BOTH groups, the "only subidx=0" idx values are
+    scattered essentially at random throughout the whole idx range (e.g.
+    group 0: 34, 51, 52, 77, 83, 87, 88, 97, 98, 100, 102, 106... --
+    interleaved with "has both" idx values the entire way, no contiguous
+    block). A real directional (one-way) property should show up as a
+    contiguous run where the reverse direction is systematically absent,
+    not scattered presence/absence -- this is a clean, real refutation,
+    not just inconclusive noise. **Revised interpretation**: `subidx`
+    presence more likely reflects a sparse PER-SEGMENT ATTRIBUTE FLAG
+    (present on some individual segments, absent on others, independent
+    of neighboring segments) than forward/backward direction -- e.g. a
+    signage or local-restriction marker. Whether Vladimir Bashev's own
+    one-way status is encoded here at all (vs. elsewhere, e.g. `eeu.mod`'s
+    own `restr_left`/`restr_right` fields already tested and refuted
+    against `mg4`, or a completely different part of `mp0`'s own record)
+    remains open.
 
     **Still open**: zone 1 (tail bytes 0-3788) and zone 3 (tail bytes
     12,312-14,393, ~2,074 bytes) both remain uncharacterized -- zone 3
