@@ -864,6 +864,42 @@ fraction of this codebase's functions -- something no technique in this
 project has achieved before, VNode/`db_vid_get_map_id_V000` included
 (not yet checked against this specific table; a natural next test).
 
+**UPDATE, immediately following, same session: that natural next test
+WAS run, AT SCALE (26,323 records) -- the "position 4 = code address"
+rule is confirmed as a real, dominant signal in aggregate, but NOT
+reliable enough yet to trust for any single specific record, including
+the highest-value one.** Rebuilt the full known-good prologue set
+(7,757 `stwu`+`mflr` addresses, whole 24MB region) and, for every
+parsed record, checked whether EACH of its 5 trailing fields lands on
+a known-good prologue. Position 4 (the last field) wins decisively: 35
+hits vs. 3-6 for positions 0-3, all far above the ~0.05-hit uniform-
+chance baseline for this sample size -- a real, non-coincidental
+structural signal, not a repeat of the earlier 1-case anecdote.
+**However**: extracted `readNodeMP0__9RoutePathUiR5VNode`'s own record
+this way (the single highest-value name this table could recover,
+given this whole investigation's original goal) and its position-4
+field does NOT resolve to valid code -- it lands on more pointer-
+looking data (`0xf7de9cf0...`), and none of its OTHER 4 fields resolve
+to valid code either (one even decodes as `std`, a 64-bit-only
+instruction invalid on this platform's 32-bit PowerPC 603e --
+definitely not real code). A 2nd occurrence of the substring
+`readNodeMP0` exists elsewhere in the file (offset `0xbf58c2`) with NO
+preceding marker at all -- a plain, unrelated string occurrence, not a
+2nd table entry. **Honest conclusion**: this table's field-role mapping
+is real and mostly correct in aggregate, but almost certainly has
+MULTIPLE record "kinds" with different field layouts (plausibly keyed
+by the marker's confirmed-variable 4th byte, or by argument-count/
+name-length parity) that this session did not have time to
+discriminate. Recovering `readNodeMP0`'s real address specifically
+needs that discrimination done first -- claiming its address from the
+naive single-layout extraction would be overclaiming past what the
+evidence supports, so it is deliberately NOT reported as found here.
+Concrete next step: classify this table's records by kind (start from
+the ~35 confirmed-correct position-4 hits as a "known good, single
+layout" training set, and diff their exact byte structure against
+records like `readNodeMP0`'s that don't fit) -- genuinely promising,
+but unfinished.
+
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
 properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,

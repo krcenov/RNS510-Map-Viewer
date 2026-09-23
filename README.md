@@ -465,6 +465,22 @@ large fraction of this codebase, unmatched by anything found so far —
 is now this project's single most promising concrete next step. Full
 details: `research/swl_5238_reader.py`.
 
+**That rule was tested at scale (26,323 records), immediately after —
+confirmed real in aggregate, but NOT yet reliable for the one function
+that matters most.** Position 4 wins decisively over positions 0-3 (35
+hits vs. 3-6, all far above the ~0.05-hit chance baseline) — a real
+signal. But `readNodeMP0__9RoutePathUiR5VNode`'s own record — the
+single highest-value name this whole investigation was after — has
+NONE of its 5 fields resolve to valid code (one even decodes as `std`,
+a 64-bit-only instruction invalid on this 32-bit PowerPC platform).
+Honest conclusion: this table almost certainly has multiple record
+"kinds" with different field layouts that haven't been discriminated
+yet — claiming `readNodeMP0`'s address from the naive single-layout
+extraction would overclaim past the evidence, so it's deliberately
+NOT reported as found. Full details and the concrete next step
+(classify record kinds using the confirmed-correct hits as a training
+set): `research/swl_5238_reader.py`.
+
 ---
 
 ## 3. Map database findings
