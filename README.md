@@ -546,6 +546,24 @@ rather than code. `getNodeVidArmMP0`'s own logic remains fully traced
 and understood; its callees are just as unreachable as `readNodeMP0`
 itself. Full details: `research/swl_5238_reader.py`.
 
+**A 4th function fully traced: `AdasDBAccess::ResolveUnsetNodeID`**
+(file offset `0x828940`) — the largest and most complex one yet, but
+real and reaching a genuine `blr`. Checks a "resolved" field on its own
+argument; if unset, makes a virtual call then performs substantial real
+tree/list insertion logic (a `sizeof`+allocator call pair, pointer
+field wiring, a chain-walk loop, and a branchless XOR-based conditional
+swap consistent with a self-balancing tree rotation) — consistent with
+"if this node's id hasn't been resolved yet, compute it and insert the
+result into a cache/index structure." One boundary honestly flagged as
+uncertain: its already-set path pops its stack frame and falls directly
+into a different function's own prologue with no call instruction
+between them (a real GCC tail-call optimization, not a mistake, but it
+means the exact function boundary there isn't fully pinned down). Full
+exact disassembly (all 4 functions): the wiki's
+[Firmware Reversing](https://github.com/krcenov/RNS510-Map-Viewer/wiki/Firmware-Reversing)
+page — per-function instruction listings that would otherwise dominate
+this README were moved there.
+
 ---
 
 ## 3. Map database findings

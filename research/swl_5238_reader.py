@@ -1050,6 +1050,31 @@ virtual-call targets are genuinely unreachable with the current
 technique too. Corrected here, in the README, and on the wiki's
 `Firmware-Reversing` page (all 3 repeated the same magnitude error).
 
+**A 4th function fully traced, immediately following, same session:
+`AdasDBAccess::ResolveUnsetNodeID`** (file offset `0x828940`, found via
+the loose catalog same as `getNodeVidArmMP0`, true start located the
+same backward-scan way). The largest, most complex function traced this
+session -- real, reaches a genuine `blr`. Checks offset+4 of its own
+argument against zero (a "resolved" flag, matching its own name); if
+unset, makes a virtual call (`0x828978`, passing `this+0x28`) then
+performs substantial real pointer/tree manipulation: an `li r3,0x18` /
+`li r5,0x19` pair immediately before a virtual call (`0x828aa0`) reads
+as a real `sizeof`+alignment pair feeding an allocator, followed by
+linked pointer-field stores, a chain-walk loop (`lwz r11,0(r11)` until
+NUL), and a branchless XOR-based conditional-swap idiom
+(`0x828c64`-`0x828c7c`) -- the shape a self-balancing tree's insert/
+rotate step takes. Consistent with "if this node's id hasn't been
+resolved yet, compute it and insert the result into a cache/index
+structure." **One boundary honestly flagged as uncertain**: the
+already-set path pops its stack frame (`addi r1,r1,0x30` at `0x82899c`)
+and falls DIRECTLY into what looks like a separate function's own
+prologue (`stmw r28,0x20(r1)` at `0x8289a8`) with no call instruction
+in between -- consistent with a real GCC tail-call optimization, not a
+mistake, but it means this function's own exact boundary there isn't
+fully pinned down. None of its own virtual-call targets have been
+checked yet. Full exact disassembly: the wiki's `Firmware-Reversing`
+page.
+
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
 properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,
