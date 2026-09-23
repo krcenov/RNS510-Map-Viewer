@@ -4147,8 +4147,37 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     make real cross-feature edges structurally expected, not accidental.
     Even a tile where every one of its features individually resolves at
     "high" confidence would still miss this class of edge today -- a real,
-    separate gap from the per-feature "found: False" issue above, and not
-    yet attempted in any session.
+    separate gap from the per-feature "found: False" issue above.
+
+    ==== UPDATE, a still-later session: the "shared link-id VALUE across
+    features" mechanism TESTED DIRECTLY and REFUTED as a cross-feature
+    edge detector ====
+    The natural next hypothesis, given the "NOT SOLVED" section's own
+    546==392+154 observation: if node-ids really are a tile-GLOBAL space,
+    two dead-end points in DIFFERENT features of the same tile that are
+    geographically close might share a link-id VALUE the same way two
+    adjacent points within one feature do -- i.e. the existing shared-
+    value mechanism might just work across features too, unmodified.
+    Tested at scale (Bulgaria-wide bbox, 3 layers, 646 multi-feature
+    tiles with >=2 features each independently resolving a topology
+    table): for every dead-end-point pair from different features in the
+    same tile, checked for a shared non-zero field value, split into
+    NEAR (<=150m apart, i.e. plausible real edges) vs FAR (>150m, a
+    background/control rate -- these pairs are NOT expected to be real
+    edges). If the mechanism were real, NEAR should hit far more often
+    than FAR. It does NOT: mg4 NEAR 1/306 (0.33%) vs FAR 77/13,381
+    (0.58%); mg2 NEAR 3/1,009 (0.30%) vs FAR 278/83,104 (0.33%); mp0
+    NEAR 4/736 (0.54%) vs FAR 529/77,232 (0.68%) -- FAR is equal to or
+    HIGHER than NEAR in all 3 layers, the opposite of what a real signal
+    would show. Confirmed structurally too: many "hits" pair points
+    26,000m-54,000m apart (e.g. tile 2515, feat9.pt17<->feat48.pt74,
+    54,510m), impossible for a genuine edge. CONCLUSION: two different
+    features' own link-id value spaces are independent small-integer
+    ranges that collide by pure chance at a low, distance-INDEPENDENT
+    rate -- not evidence of a shared global id space, despite the
+    546==392+154 coincidence that originally motivated the hypothesis.
+    Cross-feature (and by extension cross-tile) adjacency remains
+    unsolved; this specific mechanism is ruled out, not just untried.
 
     CONCRETE CROSS-TILE EXAMPLE, a still-later session, user-reported,
     investigated directly: an even BIGGER version of the same

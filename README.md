@@ -4144,6 +4144,25 @@ original exactly.
    write-up, `decode_topology()`'s and `resolve_topology_adjacency()`'s
    docstrings in `map_compressed_reader.py`.
 
+   **Cross-FEATURE edges (same tile, different feature): the obvious
+   mechanism tested and REFUTED, a still-later session.** A structural
+   hint (node-ids in one feature's table have been observed going as
+   high as the tile's *combined* point total across all its features)
+   raised the hypothesis that the existing shared-link-id mechanism
+   might just work across features too, unmodified — i.e. two nearby
+   dead-end points in different features of the same tile might share a
+   link-id value. Tested at scale (Bulgaria-wide bbox, `mg4`/`mg2`/`mp0`,
+   646 qualifying multi-feature tiles): compared the shared-value hit
+   rate for geographically NEAR (≤150m) dead-end pairs against a FAR
+   (>150m) control. If real, NEAR should hit far more often — it
+   doesn't: `mg4` 0.33% near vs 0.58% far; `mg2` 0.30% vs 0.33%; `mp0`
+   0.54% vs 0.68% — far is equal to or HIGHER in every layer, and many
+   "hits" pair points 26km-54km apart (impossible for a real edge).
+   **Conclusion: pure small-integer coincidence, not a real mechanism.**
+   Cross-feature adjacency remains unsolved; this specific approach is
+   closed, not just untried. Full numbers: `resolve_topology_adjacency()`'s
+   docstring in `research/map_compressed_reader.py`.
+
    **Real, user-reported CROSS-TILE example, a still-later session**: an
    even bigger version of the same gap — `resolve_topology_adjacency()`
    only ever resolves adjacency WITHIN one feature/tile; it has no
