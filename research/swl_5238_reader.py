@@ -900,6 +900,40 @@ layout" training set, and diff their exact byte structure against
 records like `readNodeMP0`'s that don't fit) -- genuinely promising,
 but unfinished.
 
+**UPDATE, immediately following, same session: the record-kind
+hypothesis was tested directly -- REFUTED as the explanation; the REAL
+reason `readNodeMP0` fails is a region limit, now precisely
+characterized, not a record-layout mismatch.** Compared `readNodeMP0`'s
+own record structure (marker 4th byte `0x00`, 13 bytes between name and
+the 5 trailing fields) against the 54 confirmed-good records found
+above: it matches the SAME "kind" as many of them exactly (e.g. `Dump__
+15EHDatagramGraphi`, identical marker byte and identical 13-byte middle
+section) -- so a record-layout mismatch is NOT the problem. Checked
+instead where ALL 35 confirmed-good position-4 hits' implied addresses
+actually land: **100% (35/35) are under 9MB; ZERO are at or beyond
+9MB.** `readNodeMP0`'s own implied address (~11.4MB) falls squarely in
+that untested territory. Tried the whole-file sliding-window's
+alternate base (`0xf687a020`) on the same field -- lands on different
+but still non-code content (readable text, `"...lTraffic..."`), not
+valid code either. Searched a generous +/-200,000-byte window around
+the naive target address for ANY real `stwu`+`mflr` prologue at all:
+**zero found** -- not "off by a small calibration delta," a genuinely
+empty stretch of a few hundred KB with no recognizable function starts.
+This is fully consistent with, and now sharpens, the project's own
+earlier prologue-density finding ("match density drops from
+900-1,235/MB [1-9MB] to essentially zero from 9MB onward -- the real
+code region is ~1.2MB-9MB"): the symbol table's records DO correctly
+point at real code for functions living in the verified 1.2MB-9MB
+range (confirmed 35 times over), but for functions whose code lives
+beyond that range (like `readNodeMP0`), this project has no working
+address-resolution technique at all -- not a wrong formula, a genuine
+absence of recognizable code at that location under any base tried so
+far. Closing this specific thread here: reaching `readNodeMP0`'s real
+implementation needs either a fundamentally different base for the
+9MB+ region (no candidate found despite trying the one alternate this
+project has) or ground truth (a real symbol map, hardware access) this
+project doesn't have.
+
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
 properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,

@@ -481,6 +481,24 @@ NOT reported as found. Full details and the concrete next step
 (classify record kinds using the confirmed-correct hits as a training
 set): `research/swl_5238_reader.py`.
 
+**That next step was tried immediately after — record-kind mismatch
+REFUTED as the cause; the real issue is a precisely-characterized
+region limit.** `readNodeMP0`'s record structurally matches several
+confirmed-good records exactly (same marker byte, same field spacing),
+ruling out a layout mismatch. The real finding: **all 35 confirmed-good
+hits land under 9MB; zero land at or beyond 9MB** — and `readNodeMP0`'s
+own implied address (~11.4MB) falls in that untested territory. A
+generous ±200,000-byte search around the naive target found **zero**
+real function prologues at all — not a small calibration error, a
+genuinely code-free stretch. This sharpens (doesn't contradict) the
+project's own earlier finding that real code density drops to
+essentially zero beyond 9MB. **Closing this thread here**: the symbol
+table reliably resolves real code for anything living in the verified
+1.2MB-9MB range, but reaching `readNodeMP0` itself needs either a
+different base for the 9MB+ region (no working candidate found) or
+ground truth this project doesn't have. Full detail:
+`research/swl_5238_reader.py`.
+
 ---
 
 ## 3. Map database findings
