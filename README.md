@@ -4185,6 +4185,16 @@ original exactly.
    Verified directly: real rasterized connected-roads line pixels
    increased in a live redraw test (667→1,183 and 1,055→1,460 at 2
    zoom levels) — more real edges drawn, confirmed not a regression.
+
+   **Follow-up tested and rejected, same session**: whether the
+   interleaved-parallel-chains structure behind the (72, 74) fix
+   generalizes into a divided-road detector (scan for alternating
+   gap=2 edges). Checked against the project's 4 existing
+   human-confirmed ground-truth sites (A1 x2, Hemus, A6) at their
+   *exact* reported points: only 1 of 3 divided sites (Hemus) shows
+   the pattern right at its reported location; the other 2 look
+   mostly sequential, and the non-divided control isn't clean either.
+   Real but inconsistent — not usable, not pursued further.
 6. ~~`.rt`/`.rl` semantics~~ **`.rl`/`.prl` SOLVED and validated at scale; `.rt`'s node
    format also now CRACKED and cross-validated, with a few fields/edge cases still
    open** — see §3.7. `.rl` (12-byte records: candidate `.rd` index + validated `.prl`

@@ -4303,6 +4303,32 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     a real false-positive long edge ever turns up on `mg4`/`mg3`
     specifically.
 
+    ==== UPDATE, same later session: tested whether "interleaved parallel
+    chains" is a usable, general divided-road DETECTOR -- TESTED AND
+    REJECTED ====
+    The (72, 74) case above is a genuine interleaved-2-chain structure.
+    That raised an obvious question: does a divided road always encode
+    this way, so a tile could be scanned for "alternating gap=2 edges" to
+    flag divided/undivided status independently of the `seg_list` byte1-3
+    signal (also inconclusive -- see elsewhere)? Tested directly against
+    the project's existing human-confirmed ground truth (A1 x2 divided
+    segments, Hemus/A2 divided, A6 non-divided under construction), first
+    with a wide point window (misleading -- window choice alone produced
+    a "gap=2 dominant" look for 2 of 3 divided sites), then re-checked
+    against the EXACT reported ground-truth point indices' own real
+    neighbors: Hemus (points 177/179) does show genuine gap=2 both
+    directions; but A1 segment 2's own reported point 71 has neighbors
+    70 and 72 -- plain gap=1 sequential, no interleaving at all; A1
+    segment 1's reported points 158-171 are almost entirely gap=1
+    chained with scattered gap=2/3/5 mixed in, not a clean alternating
+    pattern; and the non-divided A6 control shows a gap=8 edge (point 65
+    <-> point 57) just as "skippy" as some divided cases. CONCLUSION:
+    real but inconsistent -- 1 of 3 divided ground-truth sites shows the
+    interleaved signature at its exact reported location, the other 2
+    don't, and the non-divided control isn't clean either. Not a usable
+    detector; not pursued further. Documented here specifically so this
+    doesn't get re-investigated from scratch in a future session.
+
     PRACTICAL CONSEQUENCE: this closes the concrete gap blocking README §8
     item 5 -- given a feature's decoded points and topology table, this
     function now tells you which OTHER real points a given point is
