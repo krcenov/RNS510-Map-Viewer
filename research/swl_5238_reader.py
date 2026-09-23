@@ -799,6 +799,71 @@ concrete, well-scoped next step for a future session, now that both a
 working load base AND a real catalog of live, code-referenced symbol
 names exist -- neither was available before this session.
 
+============================================================================
+**UPDATE, immediately following, same session: tracing `findSegIndex`'s
+caller found a MUCH bigger structure -- a real, large-scale per-function
+symbol/EH-descriptor table, ~25,769+ entries, confirmed genuine on at
+least 1 case, exact record layout NOT yet fully nailed down**
+============================================================================
+Disassembled the `findSegIndex`-referencing function (file offset
+`0x815a80`) in full: a real, complete function with normal prologue/
+epilogue, ending `blr`. It reads the SAME argument pointer twice and
+compares it to itself (always true -- a defensive/paranoid-check idiom,
+not a bug), constructs a 0x38-byte object via a virtual call, then calls
+2-3 more virtual methods (`mtlr`+`blrl`) checking a small integer return
+code against {1, 2, -5}, writing a result into `*arg2` on one success
+path. This is a C++ container/iterator "find" pattern operating on
+ALREADY-PARSED in-memory objects -- architecturally a level above the
+raw on-disk `seg_list` bytes, so it does NOT explain the topology
+link-id values' on-disk encoding (the original motivating question);
+it's a genuine but orthogonal finding.
+
+Searching for `findSegIndex`'s own caller (`bl`/`lis`+`addi` scan of the
+full 24MB region, plus a whole-85.6MB-file literal-pointer scan) found
+NO direct call, but DID find one raw literal occurrence of its exact VA
+at file offset 12,887,552. The surrounding bytes turned out to be a
+repeating record format, NOT a simple vtable: a `0x0010,05,<var>`
+3-byte-fixed/1-byte-variable marker, a NUL-terminated mangled C++ name,
+several header fields, a monotonically-INCREASING 4-byte ordinal
+counter (confirmed: 0x6fe6 -> 0x6fe7 -> 0x6fe8 on 3 consecutive records
+-- this table has entries in a real, deliberate sequence, not scattered
+coincidence), then 5 more 4-byte fields before the next record's marker.
+**Real, unambiguous symbol names found this way, independent of and far
+beyond the earlier 330-candidate catalog**: `getPOIAlongGuidedRoute__
+8MapRouteiii`, `PSD_Ges_Ueberholverbot__C12PSD_Database` (a real German
+"no-overtaking" traffic-rule database -- "PSD" un-expanded), `__dl__
+13MDPOIDatabasePv` (a real `operator delete` for `MDPOIDatabase`),
+`processGetScaleUnitReq__C23CfcMapConfiguration`, `uncompress`,
+`vp_set_off_road_or_off_map__FP10master_rec` (directly relevant --
+"master_rec" and "off road/off map" strongly suggest a real GPS
+map-matching status function). **Scale**: a plain 4-byte marker search
+(`\x00\x10\x05\x00` only, the one confirmed variant) already finds
+25,769 occurrences file-wide -- since the marker's last byte is
+CONFIRMED variable (one real record used `0x0a` not `0x00`), the true
+total is higher; this search under-counts.
+
+**What's confirmed vs. still open**: the table's existence, its real
+content, and its deliberate/sequential nature (the ordinal counter) are
+all confirmed, not speculative. For exactly ONE record (`findSegIndex`)
+the LAST of its 5 trailing pointer fields was independently verified to
+equal that function's own real, already-disassembled start address.
+Tested whether this "last field = code address" rule generalizes on a
+2nd record (`getPOIAlongGuidedRoute`): NONE of its 5 fields matched the
+strict `stwu`/`mflr` prologue signature -- inconclusive rather than a
+refutation, since simple leaf functions can validly omit that exact
+prologue shape (no stack frame needed), so this doesn't rule the rule
+out, it just isn't confirmed a 2nd way yet. **The exact record
+layout/field-role mapping is NOT yet reliably established for general
+use** -- building a real bulk name-to-address extractor needs either
+more independently-known addresses to cross-validate field position, or
+a looser prologue detector (not just the exact `stwu`/`mflr` byte
+pattern) to test candidate fields against. This is the single most
+promising concrete next step this project now has: if this table can be
+parsed reliably at scale, it would give real symbolic names for a large
+fraction of this codebase's functions -- something no technique in this
+project has achieved before, VNode/`db_vid_get_map_id_V000` included
+(not yet checked against this specific table; a natural next test).
+
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
 properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,

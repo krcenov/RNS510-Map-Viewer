@@ -442,6 +442,29 @@ complete understanding yet — a concrete, well-scoped next step for a
 future session. Full catalog and every verification command:
 `research/swl_5238_reader.py`.
 
+**Tracing `findSegIndex` further, immediately after, found something
+bigger: a real, large-scale (~25,769+ entries) per-function symbol/EH-
+descriptor table** — a repeating record format (a 4-byte marker, a
+NUL-terminated mangled name, header fields, a monotonically-increasing
+ordinal counter confirmed across 3 consecutive real records, then 5
+trailing pointer fields). Real names recovered this way, independent of
+and beyond the 330-candidate catalog above: `getPOIAlongGuidedRoute__
+8MapRoute`, `PSD_Ges_Ueberholverbot__C12PSD_Database` (a real German
+no-overtaking traffic-rule database), `__dl__13MDPOIDatabasePv`,
+`processGetScaleUnitReq__C23CfcMapConfiguration`,
+`vp_set_off_road_or_off_map__FP10master_rec`. **Confirmed real, not
+speculative** — `findSegIndex`'s own record has one field exactly
+equal to its independently-verified, already-disassembled function
+start address. **Not yet confirmed at scale**: that same "field 5 =
+code address" rule didn't validate on a 2nd test record (inconclusive,
+not refuted — likely because that record's function is a simple leaf
+function that validly omits the exact prologue byte pattern this
+project checks against). Building a reliable bulk name-to-address
+extractor from this table — which would give real symbolic names for a
+large fraction of this codebase, unmatched by anything found so far —
+is now this project's single most promising concrete next step. Full
+details: `research/swl_5238_reader.py`.
+
 ---
 
 ## 3. Map database findings
