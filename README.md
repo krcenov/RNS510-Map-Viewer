@@ -4172,8 +4172,18 @@ original exactly.
    specifically) correspond to anything in `eeu.rd`'s own record layout
    remains untested: `eeu.rd` has 16 bytes per 67-byte record (offsets
    0-7 and 16-23) not yet mapped to any known field (see §3.1's `eeu.rd`
-   write-up) that could plausibly hold such an id — a concrete, scoped
-   next step if this thread is picked back up.
+   write-up) that could plausibly hold such an id.
+
+   **Tested directly, immediately following, same session — REFUTED.**
+   Built a full in-memory exact-coordinate index over all 8,809,081
+   `eeu.rd` records (~50s) and compared each matched point's `eeu.rd`
+   record bytes 16-20/20-24 (uint32 LE, confirmed to hold small
+   plausible integers on inspection) against its link-id value set.
+   Across 2,963 qualifying points: only **20 matches (0.67%)** —
+   actually below the ~1.6% naive chance-collision rate for value sets
+   this size. `eeu.rd` bytes 16-24 are NOT the link-id's external
+   reference. Bytes 0-8 remain uninspected but have no positive lead
+   pointing at them.
 
    **Cross-FEATURE edges (same tile, different feature): the obvious
    mechanism tested and REFUTED, a still-later session.** A structural

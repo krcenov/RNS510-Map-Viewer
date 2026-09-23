@@ -4405,6 +4405,24 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     known field -- a concrete, scoped next step if this thread is picked
     back up.
 
+    ==== UPDATE, immediately following, same session: tested that concrete
+    next step directly -- REFUTED ====
+    Built a full in-memory exact-coordinate index over all 8,809,081
+    `eeu.rd` records (~50s, dominated by the single-pass file read) and,
+    for every tile point with BOTH an exact `eeu.rd` coordinate match and
+    a resolved link-id value, compared the `eeu.rd` record's own bytes
+    16-20 and 20-24 (decoded as uint32 LE -- confirmed to hold small,
+    plausible-looking integers, e.g. 67/43, 325/370, 122/83 on a real
+    sample) against that point's link-id value set. Across 2,963
+    qualifying points (all 3 layers, Bulgaria-wide): only **20 matches
+    (0.67%)** -- actually BELOW the naive chance-collision rate for
+    value sets this size (~1.6%, given typical 2-4 values per point over
+    a range of a few hundred). **Refuted**: `eeu.rd` bytes 16-24 are NOT
+    the link-id's external reference; whatever they encode, it isn't
+    this. Bytes 0-8 of an `eeu.rd` record remain uninspected and are the
+    next candidate if this thread is picked up again, but with no
+    positive lead pointing at them specifically.
+
     Args:
         raw, declen: as for decode_features()/decode_topology().
         features: optional, decode_features(raw, declen) if not given.
