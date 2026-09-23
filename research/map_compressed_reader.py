@@ -3366,21 +3366,45 @@ def decode_topology(raw, declen=None, features=None):
     `seg_list`-specific code, so they were not traced further.
 
     Tried to locate `0x1f95d0`'s own caller 3 independent ways, all
-    negative: (1) direct `bl` cross-reference scan of the 9MB code
-    region -- only finds its own 3 internal calls; (2) `lis`/`addi`
-    absolute-address-load scan (same region) -- zero matches; (3) raw
-    4-byte big-endian literal-pointer search across the ENTIRE 85MB
-    firmware image -- zero matches. A genuine, 3-way-confirmed dead end
-    for this specific candidate, not a lack of effort. Also tried to
-    read the real byte contents of the 3 lookup tables this function
-    itself indexes into (computed their absolute addresses from the
-    `lis`/`addi` pairs: ~`0xf6a51878`-`0xf6a5f3b8`) -- these fall far
-    outside the 85MB file's own size, confirming they're RAM/data
-    addresses in a completely different address range than the code
-    region (where file-offset-as-VA has worked reliably so far); this
-    project has no known file-offset-to-RAM-address mapping for static
-    data, so these tables' real contents remain unreadable from the
-    file. A 4th genuine wall for this specific lead.
+    negative (at the time): (1) direct `bl` cross-reference scan of the
+    9MB code region -- only finds its own 3 internal calls; (2)
+    `lis`/`addi` absolute-address-load scan (same region) -- zero
+    matches; (3) raw 4-byte big-endian literal-pointer search across the
+    ENTIRE 85MB firmware image -- zero matches. Also tried to read the
+    real byte contents of the 3 lookup tables this function itself
+    indexes into (computed their absolute addresses from the
+    `lis`/`addi` pairs: ~`0xf6a51878`-`0xf6a5f3b8`) -- these fell far
+    outside the 85MB file's own size when treated AS raw file offsets
+    (no load base was known yet), so they were unreadable at the time.
+
+    ==== UPDATE, a still-later session: the load base was recovered
+    (`research/swl_5238_reader.py`'s own "load base WAS recovered"
+    section, `VA = file_offset + 0xf688dcf4`) -- these "unmappable RAM
+    addresses" now resolve to REAL, readable content, strengthening
+    (not overturning) the name/label-resolver hypothesis ====
+    Re-disassembled `0x1f95d0` (file offset 2,069,968) directly with a
+    working base. Its 2 clearest `lis`/`addi` absolute-address loads
+    now resolve to real, in-bounds file offsets: `0xf6a5f3b8` ->
+    file offset 1,906,372, landing on real readable text (a C++-mangled
+    name fragment, `...et3ram6Buffer...`); `0xf6a51878` -> file offset
+    1,850,244 -- this is the EXACT SAME byte offset as this project's
+    own independently load-base-VALIDATED real UI button-label table
+    (`"PLAY      \x00\x00SEARCHBACK\x00\x00SEARCHFOR \x00\x00STOP..."`,
+    see `swl_5238_reader.py`). This function's own code treats that
+    address as a 0x60-byte-stride STRUCT ARRAY (`add r11,r11,r9` /
+    `lha r3,0x5c(r11)`, indexed by a value derived from its own arg1),
+    not as flat padded strings -- consistent with a real UI/menu
+    "named item" descriptor table that embeds a short display name
+    alongside binary fields in each fixed-size record (exactly the
+    shape a name/label resolver would walk). This is genuine, positive,
+    NEW evidence for the existing "name/label or junction-connectivity
+    resolver" read of this function -- it isn't touching arbitrary RAM,
+    it's touching the SAME real string-table memory this project has
+    independently confirmed twice now. The caller search (all 3 methods
+    above) has NOT been re-run with the new base; that is the concrete
+    next step if this candidate is revisited, since a working base
+    could surface indirect-call setup sequences the old, base-less scan
+    had no way to recognize.
 
     Disassembled the other 5 remaining emulation-classifier candidates
     from the same "1-byte read at offset 1/2/3" filter (see
