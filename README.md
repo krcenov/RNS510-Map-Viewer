@@ -517,6 +517,28 @@ catalog above should be read as "touches this string," never as
 "does what this string suggests." Full correction and the reusable
 extractor: `research/swl_5238_reader.py`.
 
+**The loose catalog (no strict-prologue filter, 8,041 entries) turned
+up a large, genuinely new routing/VID catalog living INSIDE the
+reliable <9MB range** — unlike `readNodeMP0`, these are structurally
+reachable. Most directly relevant: **`getNodeVidArmMP0__9RoutePath
+UiRUlRi`**, whose name combines "Vid" (this project's own `vnodeID`
+terminology), "Arm" (a junction's connected segment), and "MP0" — the
+single most directly-named VID-resolution lead found so far. Also
+found: `ResolveUnsetNodeID__12AdasDBAccessP4vsegi`, `getIndexOfVid__
+9RoutePath...`, `calculateManeuvers__24ManeuverGeneratorManager...`,
+`addSegmentData__16DYNA_SegmentListP8_tmc_segUsiP4vsegRUi`, and many
+more real `RoutePath`/segment/maneuver methods — a large, newly-opened
+catalog for a future session. **`getNodeVidArmMP0` disassembled and
+confirmed real**: a complete, well-formed function (clean prologue and
+epilogue, no invalid bytes) whose 3rd argument is tested for zero, then
+walked bit-by-bit (a 31-entry power-of-2 table built on the stack, then
+`andi.`/`srawi.` testing successive bits), calling a virtual method for
+each SET bit — consistent with "resolve the VID of each requested arm
+in a caller-supplied bitmask." Not yet traced further, but a concrete,
+well-scoped, genuinely promising next step — its own virtual-call
+targets are themselves within the reliable range. Full details:
+`research/swl_5238_reader.py`.
+
 ---
 
 ## 3. Map database findings

@@ -993,6 +993,51 @@ name field, by contrast, IS the function's real, compiler-assigned
 identity (via RTTI/EH descriptor generation) -- authoritative where it
 resolves.
 
+============================================================================
+UPDATE, immediately following, same session: the LOOSE catalog (no
+strict-prologue requirement, 8,041 entries) surfaced a large, genuinely
+new, directly relevant routing/VID catalog -- and one strong new lead,
+`getNodeVidArmMP0`, disassembled and confirmed real
+============================================================================
+The loose catalog (`parse_symbol_table(fli, require_prologue=False)`,
+83.1% of whose entries at least decode as SOME valid instruction) turned
+up dozens of real `RoutePath`/`vseg`/maneuver-generator names living
+INSIDE the verified 1.2MB-9MB range -- unlike `readNodeMP0` itself,
+these are structurally reachable. Most directly relevant:
+`getNodeVidArmMP0__9RoutePathUiRUlRi` (file offset `0x80c87c` from the
+naive field-4 lookup) -- its name explicitly combines "Vid" (virtual
+id, this project's own `vnodeID` terminology) with "Arm" (a junction's
+connected road segment) and "MP0" (this project's own already-cracked
+tile format), making it the single most directly-named VID-resolution
+lead found so far. Also found in the same pass: `ResolveUnsetNodeID__
+12AdasDBAccessP4vsegi`, `getIndexOfVid__9RoutePath...`,
+`calculateManeuvers__24ManeuverGeneratorManagerP19CfcJourneyInterface...`,
+`addSegmentData__16DYNA_SegmentListP8_tmc_segUsiP4vsegRUi`,
+`filterToggleSeg__FP4vseg`, `getSegProperty__9RoutePathUiR12
+_SegProperty`, and many more real `RoutePath`/segment/maneuver methods
+-- a genuinely large, newly-opened catalog for a future session to work
+through, all in principle reachable (unlike the 9MB+ names).
+
+`getNodeVidArmMP0` disassembled and confirmed real: the naive field-4
+address (`0x80c87c`) landed 168 bytes INTO the function, not at its
+start (a real, if imprecise, limitation of the naive lookup -- the true
+start, `0x80c7d4`, was found by scanning backward for the nearest real
+`stwu`+`mflr` prologue). The full function is genuine, complete,
+well-formed code (clean prologue, matching clean epilogue, no invalid
+bytes in between): its 3rd argument is tested for zero, then a 31-entry
+POWER-OF-2 lookup table is built on the stack (`1, 2, 4, 8, ...` via a
+`slwi`-by-1 loop, 0x1f/31 iterations) and a bit-by-bit walk of that
+argument follows (`andi. r0,r31,1` tests the low bit, `srawi. r31,r31,1`
+shifts to the next one), with a virtual method call made for each SET
+bit found. This is consistent with **iterating a caller-supplied
+BITMASK of requested arms and resolving each one's VID individually**
+-- exactly the shape "get the VID of node arms N, given a bitmask of
+which arms to resolve" would take. Not yet traced further (what the virtual calls themselves do -- their
+computed targets, e.g. `0xbce5d8`/`0xbce5a8`, are both themselves within
+the verified <9MB range and so should be reachable the same way) -- a
+concrete, well-scoped, genuinely promising next step, distinct from and
+more tractable than the 9MB+-blocked `readNodeMP0` thread.
+
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
 properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,
