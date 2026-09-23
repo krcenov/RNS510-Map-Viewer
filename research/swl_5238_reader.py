@@ -645,6 +645,75 @@ MAP_COMPRESSED's own tile directory -- a real, concrete validation path
 that didn't exist before this session's firmware findings, even though
 it wasn't executed here.
 
+============================================================================
+**UPDATE, a still-later session: the load base WAS recovered --
+the earlier "no consistent load base" conclusion is OVERTURNED**
+============================================================================
+The earlier `lis`/`addi` correlation attempt (39,715 candidate pairs,
+tested against 7 known `db_*` accessor STRING offsets) failed for a
+real, now-confirmed reason: those specific strings are a DWARF-
+`.debug_str`-style pool genuinely never touched by executing code, so
+there was NOTHING for any `lis`/`addi` pair to legitimately match
+against them -- that technique was sound, but its anchor points were
+structurally unreachable. This session used a DIFFERENT technique that
+doesn't need a known anchor at all: disassembled the 24MB native
+region's code-dense sub-range (offsets 1.2MB-9MB, matching the
+prologue-finder's own density map) instruction-by-instruction at every
+4-byte-aligned offset (capstone, no linear-stream drift), collected
+every `lis rX,HI16` immediately followed (within 10 instructions) by
+`addi rX,rX,LO16` targeting the same register (34,652 such pairs from
+116,383 `lis` instructions), and ran a BRUTE-FORCE sliding-window scan
+over the sorted set of computed absolute targets: for a candidate
+window width of 24,000,000 (the native region's own size), find the
+window position containing the most targets. **Result: 32,966/34,652
+pairs (95.1%) cluster inside ONE 24MB window** -- 170x the count a
+uniform-random distribution across the full 32-bit address space would
+predict (170.2x expected chance rate). This is not a subtle signal.
+
+**Exact base recovered and independently verified 3 ways, byte-exact,
+zero discrepancy each time**: `VA = file_offset_within_FHDD6.FLI +
+0xf688dcf4` (mod 2^32). Verification: (1) a real runtime log string
+`"bootMgrLax : Now I'm going to create the image -"` -- found via plain
+search at file offset 0x2f5c (12,124); one of the 34,652 pairs computes
+target `0xf6890c50` from a completely different file location, and
+`0xf6890c50 - 0xf688dcf4 == 12124` EXACTLY. (2) A real, fixed-width
+UI button-label table (`"PLAY      \x00\x00SEARCHBACK\x00\x00
+SEARCHFOR \x00\x00STOP      \x00\x00PAUS..."`) sits exactly at the file
+offset a different pair's target (`0xf6a51878`) implies, byte-for-byte,
+with the same 4 repeated references from 4 different call sites landing
+on the exact same table start. (3) Spot-checking the wider 24MB-window
+sample independently found coherent, real content at implied offsets
+without cherry-picking: C++ mangled class names (`...19SampleRate
+ConverterRC...`), more XML-like `idref="G.NNNN"` state-machine
+fragments (consistent with the already-known `.debug_str`-adjacent
+config data), and further real UI/config strings. **This base is
+DIFFERENT from anything the string-length-6 `lis`/`addi` correlation
+attempt could ever have found**, because it was never anchored to the
+unreachable debug-string pool -- it was recovered purely from code's
+OWN real references to LIVE data (UI strings, log strings, RTTI names),
+which the earlier technique never tried using as anchors.
+
+**What this does and doesn't unblock**: this is a real, verified,
+byte-exact file-offset-to-VA mapping for (at least) the 1.2MB-9MB
+code-dense sub-range's own absolute references, reopening real
+disassembly of this region with capstone (previously blocked entirely).
+It does NOT yet locate any SPECIFIC named function (`db_vid_get_map_id_
+V000`, `readNodeMP0`, etc) -- those names live in the confirmed-
+unreferenced debug-string pool, so finding the CODE that implements them
+still needs a different approach (e.g. the 7,757-candidate prologue
+list, now finally disassemblable with a real base, cross-referenced
+against what each candidate's own absolute references resolve to -- a
+concrete, newly-unblocked next step that didn't exist before this
+finding). Whether this SAME base (or a nearby, cleanly-derived one)
+also holds for the 9MB-24MB tail or the 24MB-85.6MB Java/VxWorks-kernel
+regions is untested; the whole-file 85.6MB sliding-window pass found a
+similarly strong but NOT identical peak (`0xf687a020`, 96.3% at 48.3x
+chance), consistent with the already-documented "mixes ROM-resident
+code with runtime-relocated structures" caveat -- i.e. more than one
+base may be in play across the full image, and this finding should not
+be assumed to extend past the specific 1.2MB-9MB range it was derived
+and verified against.
+
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
 properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,

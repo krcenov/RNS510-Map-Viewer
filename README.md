@@ -385,6 +385,37 @@ layer_range_V005`/`db_fea_read_parcels_V005`/etc, confirming `eeuz.fea`'s
 own `ParcelHeader`/layer/scale/subindex structure (§3.10) the same way.
 Full details: `research/swl_5238_reader.py`.
 
+**BREAKTHROUGH, a still-later session: the load base WAS recovered,
+overturning §2.4's "no recoverable load base" conclusion for
+`FHDD6.FLI`'s 0-24MB native region's code-dense 1.2MB-9MB sub-range.**
+The earlier `lis`/`addi` string-cross-reference attempt failed for a
+real, now-understood reason: its 7 anchor strings are genuinely
+never referenced by executing code (a DWARF-`.debug_str`-like pool).
+A different technique sidesteps that: disassembled the region
+instruction-by-instruction (capstone, every 4-byte-aligned offset
+independently, no linear-stream drift), collected 34,652 `lis`+`addi`
+absolute-address pairs, and ran a brute-force sliding-window scan over
+the sorted targets — **95.1% (32,966/34,652) cluster inside one 24MB
+window, 170x the uniform-random chance rate.** Exact base recovered and
+verified 3 independent ways, byte-exact, zero discrepancy: `VA =
+file_offset + 0xf688dcf4`. A pair's computed target lands EXACTLY on a
+real runtime log string (`"bootMgrLax : Now I'm going to create the
+image -"`) found independently by plain search; another lands EXACTLY
+on a real, fixed-width UI button-label table (`PLAY`/`SEARCHBACK`/
+`SEARCHFOR`/`STOP`/...), hit identically by 4 separate call sites; a
+broader spot-check turned up more coherent real content (C++ mangled
+class names, XML-like config fragments) without cherry-picking. This
+reopens real disassembly of this sub-range with capstone — previously
+blocked entirely. Does NOT yet locate any specific named accessor
+(those names live in the confirmed-unreferenced debug-string pool);
+whether the same base holds outside the verified 1.2MB-9MB range is
+untested, and the whole-file sliding-window pass found a close but
+NOT identical peak (`0xf687a020`), consistent with the region mixing
+more than one addressing base. Full details, all verification
+commands, and the concrete newly-unblocked next step (disassembling
+the 7,757 known prologue candidates for real, now that a base exists):
+`research/swl_5238_reader.py`.
+
 ---
 
 ## 3. Map database findings
