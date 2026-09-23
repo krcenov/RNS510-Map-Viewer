@@ -4163,6 +4163,28 @@ original exactly.
    example is preserved as ground truth for that future attempt. Full
    coordinates: `decode_topology()`'s docstring in
    `research/map_compressed_reader.py`.
+
+   **A predicted-but-unobserved limitation of `max_edge_m` CONFIRMED
+   and FIXED, a still-later session.** User-reported: 2 `mg4` points
+   (tile offset 6,546,198, feature 0, points 72 and 74) with "I think
+   there should be more points" between them, then correctly "these 2
+   must be connected" once cross-checked. Investigation found the real
+   topology here is genuinely 2 INTERLEAVED PARALLEL CHAINS (a divided
+   road's 2 carriageways, one correctly dead-ending) — the shared-
+   link-id mechanism itself works right — but the real edge `(72, 74)`,
+   1,518m apart, was being dropped by `resolve_topology_adjacency()`'s
+   own `max_edge_m=200` default. That default was calibrated ENTIRELY
+   from `mg2`/`mp0` ground truth (dense layers, every real edge under
+   110m) and applied uniformly to every layer — never validated against
+   `mg4`, the coarsest layer, where 200m-2,000m between shape points is
+   normal. Auditing just this one feature found **28 real, legitimate
+   edges (200m-1,810m) silently dropped**. Fixed at the caller level
+   (not the function's own default, which stays correct for the layers
+   it was validated against): the viewer's `MAX_EDGE_M_BY_LAYER` now
+   passes 5,000m for `mg4`/`mg3`, unchanged 200m for `mg2`/`mg1`/`mp0`.
+   Verified directly: real rasterized connected-roads line pixels
+   increased in a live redraw test (667→1,183 and 1,055→1,460 at 2
+   zoom levels) — more real edges drawn, confirmed not a regression.
 6. ~~`.rt`/`.rl` semantics~~ **`.rl`/`.prl` SOLVED and validated at scale; `.rt`'s node
    format also now CRACKED and cross-validated, with a few fields/edge cases still
    open** — see §3.7. `.rl` (12-byte records: candidate `.rd` index + validated `.prl`
@@ -6797,6 +6819,29 @@ gone `App` handler, preserving the same real coverage (toggling
 actually re-decodes and changes the real point count, caches correctly
 invalidated) with no UI involved. `test_map_viewer.py` re-run in full,
 all tests pass.
+
+### v27 → v28: a real, confirmed bug fixed — `max_edge_m=200` was wrongly dropping real `mg4`/`mg3` edges (this session, user-reported)
+
+Continuation of the user's "missing points" report (§8 item 5 has the
+full investigation): a real `mg4` edge (points 72↔74, 1,518m, a genuine
+divided-road carriageway transition) was being silently dropped by
+`resolve_topology_adjacency()`'s own `max_edge_m=200` default, which
+was calibrated only against `mg2`/`mp0` ground truth and never
+validated against `mg4`/`mg3` (the coarsest layers, where long real
+edges between shape points are normal). Auditing just one feature found
+28 real edges dropped this way. **Fixed at the call-site level**: new
+`MAX_EDGE_M_BY_LAYER` dict (`mg4`/`mg3`: 5,000m; `mg2`/`mg1`/`mp0`:
+unchanged 200m), threaded into both of `MapData`'s own
+`resolve_topology_adjacency()` call sites via the `layer` already in
+scope there — the function's own default is untouched, so its existing
+`mg2`/`mp0` ground-truth validation still applies unchanged. Verified
+with a real, live redraw test: rasterized connected-roads line pixels
+increased at 2 different Sofia-area zoom levels (667→1,183, 1,055→
+1,460) — confirmed more real edges now drawn, re-run twice for
+determinism, not a regression. `test_map_viewer.py` re-run in full
+(twice, since one run hit an unrelated, non-reproducing timing flake in
+the Address Entry panel-visibility check — confirmed NOT caused by
+this change by a clean re-run), all tests pass.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 

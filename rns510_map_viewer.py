@@ -417,6 +417,36 @@ HEAVY_LAYER = "mp0"
 
 ALL_LAYERS = FAST_LAYERS + [HEAVY_LAYER]
 
+# Real bug found and fixed (later session, user-reported "missing
+# points"/"these must be connected" investigation): `resolve_topology_
+# adjacency()`'s own `max_edge_m` default (200.0) was calibrated ONLY
+# against `mg2`/`mp0` ground truth (dense local-street layers, every
+# real human-verified edge under 110m) and applied UNIFORMLY to every
+# layer by both viewer call sites -- never validated against `mg4`
+# (the COARSEST layer, real highways), where long real edges between
+# shape points are completely normal. Confirmed directly: one single
+# real `mg4` feature (tile offset 6,546,198, feature 0) had **28 real,
+# legitimate edges (200m-1,810m) silently dropped** by the default
+# 200m cap -- including the exact edge (points 72<->74, 1,518m) a user
+# reported as "missing" ("these 2 must be connected", correctly, per
+# the real topology data once the cap is relaxed). Per-layer override,
+# same "generous safety margin over the longest known real edge"
+# principle the original 200m used (there: ~2x the longest of 104.2m;
+# here: ~2.8x the longest of 1,810m observed so far) -- `mg1`/`mg2`/
+# `mp0` keep the already-validated 200m default (not touched); `mg4`/
+# `mg3` (the 2 coarsest layers, real highways/main roads, never
+# ground-truth-validated at this specific threshold) get a much wider
+# cap. Not a formal derivation -- like the original 200m, empirically
+# justified, revisit if a real false-positive long edge turns up on
+# either of these 2 layers specifically.
+MAX_EDGE_M_BY_LAYER = {
+    "mg4": 5000.0,
+    "mg3": 5000.0,
+    "mg2": 200.0,
+    "mg1": 200.0,
+    "mp0": 200.0,
+}
+
 # Cumulative scale thresholds -- (scale_upper_bound_exclusive, n_fast_layers).
 # `scale` is pixels/degree, the same value App.scale already tracks for zoom.
 # Reuses the exact boundary VALUES this project already measured and
@@ -1823,7 +1853,7 @@ class MapData:
         if want_adjacency:
             try:
                 topo = mcr.decode_topology(raw, declen, features)
-                adj_full = mcr.resolve_topology_adjacency(raw, declen, features, topo)
+                adj_full = mcr.resolve_topology_adjacency(raw, declen, features, topo, max_edge_m=MAX_EDGE_M_BY_LAYER.get(layer, 200.0))
                 self.topo_caches[layer][tile_id] = [adj_full[i] for i in keep_idx]
             except Exception:
                 self.topo_caches[layer][tile_id] = [dict(_NO_ADJACENCY) for _ in kept]
@@ -1892,7 +1922,7 @@ class MapData:
                 keep_idx = _feature_keep_indices(features, anchor)
                 self._predecode_caches[layer][tile_id] = (raw, declen, features, keep_idx)
             topo = mcr.decode_topology(raw, declen, features)
-            adj_full = mcr.resolve_topology_adjacency(raw, declen, features, topo)
+            adj_full = mcr.resolve_topology_adjacency(raw, declen, features, topo, max_edge_m=MAX_EDGE_M_BY_LAYER.get(layer, 200.0))
             result = [adj_full[i] for i in keep_idx]
         except Exception:
             n_kept = len(self.tile_caches[layer].get(tile_id, ()))

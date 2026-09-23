@@ -4260,6 +4260,49 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     exactly how many edges this filter removed for a given feature, so a
     caller/future session can audit or retune the threshold.
 
+    ==== UPDATE, a still-later session: the predicted "long rural edge
+    wrongly dropped" failure mode above -- CONFIRMED, with a real,
+    concrete example, and traced back to a real methodology gap ====
+    User-reported, investigated directly: right-clicked 2 `mg4` points
+    (tile offset 6,546,198, feature 0, points 72 and 74) reporting "I
+    think there should be more points" between them, then "these 2 must
+    be connected" once independent evidence (below) confirmed the gap is
+    real in the source data, not a decode bug. Investigation found the
+    real topology graph around this stretch is genuinely a pair of
+    INTERLEAVED PARALLEL CHAINS (a divided road's 2 carriageways encoded
+    as alternating vertices: `...68->70->72->74->75...` is one
+    carriageway, `...69->71->73` is the other, correctly dead-ending at
+    73) -- the shared-link-id mechanism itself is working exactly right
+    here. But the REAL edge `(72, 74)`, 1,518m apart, was being dropped
+    entirely by the default `max_edge_m=200`. Re-running with
+    `max_edge_m=2000` recovered it immediately, and auditing this ONE
+    feature's full edge set found **28 real, legitimate edges (200m to
+    1,810m) silently dropped** by the 200m default -- not a single
+    isolated case.
+
+    **Root cause**: `max_edge_m=200`'s own justification above was built
+    ENTIRELY from `mg2`/`mp0` ground truth (dense local-street layers,
+    every real human-verified edge under 110m) and then applied
+    UNIFORMLY to every layer by every caller -- never validated against
+    `mg4` (the COARSEST layer, real highways), where 200m-2,000m between
+    shape points is completely normal, not suspicious. This is exactly
+    the predicted-but-not-yet-observed limitation from the paragraph
+    above, now confirmed with a real example. **Fixed at the caller
+    level, not by changing this function's own default** (which remains
+    correctly validated for the layers it was calibrated against):
+    `rns510_map_viewer.py`'s `MAX_EDGE_M_BY_LAYER` now passes a
+    per-layer value (5000m for `mg4`/`mg3`, the coarsest 2 layers;
+    unchanged 200m for `mg2`/`mg1`/`mp0`) at both of its own call sites.
+    Verified directly: rendering with the higher `mg4` cap increased
+    real rasterized connected-roads line pixels in a live redraw test
+    (e.g. one Sofia-area sample went from 667 to 1,183 line pixels at
+    one zoom level, 1,055 to 1,460 at another) -- more real edges now
+    drawn, not a regression. Like the original 200m, 5000m is an
+    empirically-justified safety margin (roughly 2.8x the longest real
+    edge observed so far, 1,810m) over a formal derivation -- revisit if
+    a real false-positive long edge ever turns up on `mg4`/`mg3`
+    specifically.
+
     PRACTICAL CONSEQUENCE: this closes the concrete gap blocking README §8
     item 5 -- given a feature's decoded points and topology table, this
     function now tells you which OTHER real points a given point is
