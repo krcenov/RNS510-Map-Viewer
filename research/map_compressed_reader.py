@@ -3400,11 +3400,32 @@ def decode_topology(raw, declen=None, features=None):
     NEW evidence for the existing "name/label or junction-connectivity
     resolver" read of this function -- it isn't touching arbitrary RAM,
     it's touching the SAME real string-table memory this project has
-    independently confirmed twice now. The caller search (all 3 methods
-    above) has NOT been re-run with the new base; that is the concrete
-    next step if this candidate is revisited, since a working base
-    could surface indirect-call setup sequences the old, base-less scan
-    had no way to recognize.
+    independently confirmed twice now.
+
+    **The caller search was re-run with the working base, immediately
+    following, same session -- STILL zero hits, now a stronger negative
+    result than before.** All 3 methods, this time over the FULL 24MB
+    native region (not just the earlier 1.2MB-9MB slice) with real
+    absolute-address resolution available: (1) `bl` direct-call scan
+    for any branch targeting `0x1f95d0`'s VA (`0xf6a872c4`) -- 0 hits;
+    (2) `lis`/`addi` absolute-load scan for the same target VA, same
+    24MB region -- 0 hits; (3) raw 4-byte big-endian literal-pointer
+    search across the ENTIRE 85.6MB file -- 0 hits. Unlike the original
+    attempt, this is no longer confounded by "we had no working base" --
+    the base is verified correct (this very function's own lookup
+    tables resolve through it to real content, see above), the scan
+    covers the WHOLE native region this time, not a sub-slice, and the
+    literal-pointer method needs no disassembly or base at all. This
+    function is genuinely not called via a direct `bl`, a computed
+    `lis`/`addi` load, or a static literal pointer table anywhere in
+    this 85.6MB image. Most likely explanations: it's reached through a
+    RUNTIME-CONSTRUCTED function-pointer table (e.g. C++ vtable/static-
+    initializer machinery building the real dispatch table in RAM at
+    boot, never existing as flat data in the image), or its caller lives
+    outside the 0-24MB native region entirely (the 24-76MB Java region
+    via JNI, or the 76-85.6MB VxWorks kernel region) -- both would need
+    tooling or ground truth this project doesn't have. A genuine,
+    now doubly-confirmed dead end for this specific candidate.
 
     Disassembled the other 5 remaining emulation-classifier candidates
     from the same "1-byte read at offset 1/2/3" filter (see
