@@ -4419,9 +4419,24 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     value sets this size (~1.6%, given typical 2-4 values per point over
     a range of a few hundred). **Refuted**: `eeu.rd` bytes 16-24 are NOT
     the link-id's external reference; whatever they encode, it isn't
-    this. Bytes 0-8 of an `eeu.rd` record remain uninspected and are the
-    next candidate if this thread is picked up again, but with no
-    positive lead pointing at them specifically.
+    this.
+
+    Also tested `eeu.rd`'s other 2 documented "unresolved" candidate
+    fields (README §3.1) against the same 2,963-point sample, same
+    session: `bytes[5:8]` (3-byte LE, previously noted as "often shared
+    across same-name records" -- a plausible shared-geometry pointer)
+    turned out to hold values around 3.6-7.7 MILLION on real records --
+    far outside any plausible link-id magnitude, 0/2,963 matches, ruled
+    out on magnitude alone. `bytes[1:5]` (4-byte LE, the road-class/
+    one-way-flag candidate already ruled out against `eeu.typ`/`eeu.si`
+    in an earlier session) also scored 0/2,963. This is now a COMPLETE
+    sweep of every field `eeu.rd` documents as unresolved or candidate:
+    none of them are the topology link-id's external reference. Only
+    `byte[0]` alone (1 byte, "high entropy") remains untested, but its
+    8-bit range is too small relative to observed link-id magnitudes
+    (up to several hundred) to plausibly be the source, and too small a
+    range to produce a meaningful signal either way if tested. The
+    link-id values' own independent meaning remains genuinely open.
 
     Args:
         raw, declen: as for decode_features()/decode_topology().

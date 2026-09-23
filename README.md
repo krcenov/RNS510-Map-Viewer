@@ -4182,8 +4182,19 @@ original exactly.
    Across 2,963 qualifying points: only **20 matches (0.67%)** —
    actually below the ~1.6% naive chance-collision rate for value sets
    this size. `eeu.rd` bytes 16-24 are NOT the link-id's external
-   reference. Bytes 0-8 remain uninspected but have no positive lead
-   pointing at them.
+   reference.
+
+   Also tested `eeu.rd`'s other 2 documented "unresolved" candidate
+   fields against the same sample: `bytes[5:8]` (previously noted above
+   as "often shared across same-name records," a plausible
+   shared-geometry pointer) holds values around 3.6-7.7 million on real
+   records — far outside any plausible link-id magnitude, 0/2,963
+   matches, ruled out on magnitude alone. `bytes[1:5]` (the road-class
+   candidate already ruled out against `eeu.typ`/`eeu.si` above) also
+   scored 0/2,963. **This is now a complete sweep of every field
+   `eeu.rd` documents as unresolved or candidate** — none of them are
+   the topology link-id's external reference. The link-id values' own
+   independent meaning remains genuinely open.
 
    **Cross-FEATURE edges (same tile, different feature): the obvious
    mechanism tested and REFUTED, a still-later session.** A structural
