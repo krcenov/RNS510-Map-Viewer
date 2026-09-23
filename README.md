@@ -4144,6 +4144,37 @@ original exactly.
    write-up, `decode_topology()`'s and `resolve_topology_adjacency()`'s
    docstrings in `map_compressed_reader.py`.
 
+   **Link-id value characterization AT SCALE, a still-later session** (a
+   direct follow-up to the "still open" question above): sampled 402
+   clean single-feature high-confidence tiles (≥30 points, all 3 layers,
+   Bulgaria-wide bbox) and classified every non-zero link-id value by how
+   many points share it. **74.2% (91,767/123,618) are shared by EXACTLY
+   2 points** — a clean pairwise edge, confirming the core mechanism's
+   design at far larger scale than the original hand-verified ground
+   truth. **25.4% (31,423) are "orphans"**: present in only 1 point's own
+   record, no local partner in this feature — meaning still unresolved
+   (unused padding field? a stub for a cross-feature/cross-tile link
+   that doesn't resolve locally? a different field role entirely?).
+   Only 0.3% form groups of 3+ (real junctions, matching the earlier
+   degree-vs-tag-complexity finding). Also found a **second sentinel
+   pattern**, distinct from the already-known `0` padding value: values
+   near the uint16 ceiling (>65,000) show up in some tiles and badly
+   skew naive "value range" stats (e.g. a 39-point feature with values
+   spanning `[4, 65455]`) — but confirmed harmless: checked 597
+   qualifying tiles and found **zero** cases of a near-65535 value
+   forming a spurious 2-point group, so it never produces a false edge
+   under the existing mechanism (it's always either an orphan or part of
+   an already-filtered 7+-point group) — no code change needed, pure
+   characterization. Clean tiles' value ranges are dense (`[1, K]`, no
+   gaps) with `K` roughly 1.2-1.8x the feature's point count — consistent
+   with a per-tile-authored LOCAL numbering scheme, not an obviously
+   external stable key. Whether the values (or the 25.4% orphans
+   specifically) correspond to anything in `eeu.rd`'s own record layout
+   remains untested: `eeu.rd` has 16 bytes per 67-byte record (offsets
+   0-7 and 16-23) not yet mapped to any known field (see §3.1's `eeu.rd`
+   write-up) that could plausibly hold such an id — a concrete, scoped
+   next step if this thread is picked back up.
+
    **Cross-FEATURE edges (same tile, different feature): the obvious
    mechanism tested and REFUTED, a still-later session.** A structural
    hint (node-ids in one feature's table have been observed going as

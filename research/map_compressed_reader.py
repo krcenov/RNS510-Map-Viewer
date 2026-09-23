@@ -4372,6 +4372,39 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     to discover it per feature cheaply. All three are reasonable follow-ups
     for a future session but are NOT required to use this function's output.
 
+    ==== UPDATE, a still-later session: link-id values characterized AT
+    SCALE -- 74.2% clean pairwise edges, a new "orphan" 25.4%, and a
+    second (harmless) sentinel pattern found ====
+    Direct follow-up to the paragraph above. Sampled 402 clean single-
+    feature high-confidence tiles (>=30 points, all 3 layers, Bulgaria-
+    wide bbox) and classified every non-zero link-id value by how many
+    points share it (123,618 (tile, value) pairs total): **74.2%
+    (91,767) shared by exactly 2 points** -- a clean edge, validating the
+    core mechanism at far larger scale than the original hand-verified
+    ground truth. **25.4% (31,423) are "orphans"**: present in only 1
+    point's own record, no local partner -- meaning still unresolved
+    (unused padding field? a stub for a link that doesn't resolve
+    locally? a different field role?). Only 0.3% form groups of 3+ (real
+    junctions, consistent with the earlier degree-vs-tag-complexity
+    finding). Also found a SECOND sentinel pattern, distinct from the
+    already-known `0` padding value: some tiles have values near the
+    uint16 ceiling (>65,000) that badly skew naive value-range stats
+    (e.g. one 39-point feature: range `[4, 65455]`). Checked whether this
+    is a bug like the original `0`-sentinel false-edge problem: audited
+    597 qualifying tiles for any near-65535 value forming a spurious
+    2-point group -- found ZERO. It's always either an orphan or part of
+    an already-filtered 7+-point group, so it never produces a false
+    edge under the existing `max_group` filter -- confirmed harmless, NO
+    code change needed. Clean tiles' value ranges are dense (`[1, K]`, no
+    gaps), `K` roughly 1.2-1.8x the feature's point count -- consistent
+    with a per-tile-authored LOCAL numbering scheme, not an obviously
+    external stable key. Whether the values (or specifically the 25.4%
+    orphans) correspond to anything in `eeu.rd`'s own record layout is
+    UNTESTED: `eeu.rd` has 16 bytes per 67-byte record (offsets 0-7 and
+    16-23, see `road_naming.py`'s `RD_*` constants) not yet mapped to any
+    known field -- a concrete, scoped next step if this thread is picked
+    back up.
+
     Args:
         raw, declen: as for decode_features()/decode_topology().
         features: optional, decode_features(raw, declen) if not given.
