@@ -499,6 +499,24 @@ different base for the 9MB+ region (no working candidate found) or
 ground truth this project doesn't have. Full detail:
 `research/swl_5238_reader.py`.
 
+**Turned into a real, reusable function (`parse_symbol_table()`) and
+run at scale — corrects `findSegIndex`'s identity and finds an
+important, broader lesson.** 8,041 entries resolve in the verified
+1.2MB-9MB range (35 with strict prologue confirmation). Cross-checking
+those 35 against the earlier 330-string-reference catalog found 4
+overlaps — and for every one, **the symbol table's real name has
+nothing to do with the string that function's own code merely
+referenced**. `0x815a80` (earlier called "the `findSegIndex`-referencing
+function") is really `CfcMsgStreamedServicePoint::getId` — `findSegIndex`
+was just an internal debug-trace tag inside its own lookup algorithm,
+not its name. **Broader lesson, confirmed 4-for-4 with zero
+exceptions**: a function's own string references tell you almost
+nothing reliable about its identity — only the symbol table's explicit
+name assignment is authoritative. Every entry in the 330-candidate
+catalog above should be read as "touches this string," never as
+"does what this string suggests." Full correction and the reusable
+extractor: `research/swl_5238_reader.py`.
+
 ---
 
 ## 3. Map database findings

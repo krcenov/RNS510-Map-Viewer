@@ -300,7 +300,7 @@ generations against one firmware build. Real function names:
 `cleanupDBAL__9MapLoader`.
 
 **A catalog of 77 distinct, real, VERSIONED `db_*_V0NN` accessor
-function names** was extracted (regex `db_[A-Za-z_]+_V\d{3}` over the
+function names** was extracted (regex `db_[A-Za-z_]+_V\\d{3}` over the
 same region) — direct, compiled-code confirmation of exactly the kind
 of per-field accessor this project has inferred only from `eeu.mod`'s
 own authoring-tool schema dictionary (README S3.16) until now. Most
@@ -934,6 +934,65 @@ implementation needs either a fundamentally different base for the
 project has) or ground truth (a real symbol map, hardware access) this
 project doesn't have.
 
+============================================================================
+UPDATE, a still-later session: `parse_symbol_table()` written and run
+at scale -- CORRECTS this whole section's `findSegIndex` identity, and
+finds an important, broader methodological lesson
+============================================================================
+Turned the manual extraction above into a real, reusable function
+(`parse_symbol_table()`, this module, plus `find_prologues()` factored
+out of the earlier ad-hoc prologue scans). Restricted to the verified
+1.2MB-9MB range (per the confirmed limit above): **8,041 entries**
+resolve to a plausible in-range address; requiring the STRICT
+`stwu`/`mflr` prologue match narrows that to **35 high-confidence
+entries** (leaf functions without that exact frame shape are real but
+excluded by the strict filter, expected and documented in the
+function's own docstring).
+
+**Direct, important correction**: cross-checked the 35 strict entries
+against the earlier "330 candidates reference a readable string"
+catalog (this section's own "UPDATE... 330 real, CODE-REFERENCED C++
+symbol names" above) -- 4 addresses appear in both. For EVERY one of
+those 4, **the symbol table's own confirmed name has NOTHING to do
+with the string the function's own code happened to reference**:
+
+| address | symbol table's REAL name (authoritative) | string it merely referenced (misleading on its own) |
+|---|---|---|
+| `0x815a80` | `getId__C26CfcMsgStreamedServicePoint` | `"findSegIndex"` |
+| `0x5c00f4` | `isController__22CfcCtrlControllerProxy` | an unrelated fragment (`"...Positioning...Future"`-shaped) |
+| `0x6c31e8` | `__vn__21CfcTypeStageDistancesUi` (operator `new[]`) | a generic `%08x`-format debug-log string |
+| `0x82c4a8` | `SetScrollType__13MapController...` | `"...CfcTypeNavMediaRequestCopyDatabase"` |
+
+**This directly corrects the earlier identification of `0x815a80` as
+"the `findSegIndex`-referencing function"** (the section above, "tracing
+`findSegIndex` further..."). Its real, confirmed identity is
+`CfcMsgStreamedServicePoint::getId`. "`findSegIndex`" was never this
+function's name -- it's a string the function's own implementation
+happens to compute the address of, almost certainly an internal debug/
+trace tag for one step of its own multi-table lookup algorithm (which
+now reads naturally as "resolve a streamed service-point's real id by
+walking cached lookup tables" -- consistent with everything already
+disassembled about this function, just under the right name). The
+disassembly itself was accurate; only the assumed IDENTITY was wrong,
+and it was always flagged as an assumption, not asserted as confirmed
+-- but it should still be corrected now that real evidence exists.
+
+**The broader, more important lesson, confirmed 4-for-4 with zero
+exceptions**: a function's own string references (the 330-candidate
+catalog's whole basis) tell you almost NOTHING reliable about that
+function's identity or purpose -- real code routinely references
+unrelated debug tags, generic log-format strings, and other functions'
+names in ways that have no bearing on its own role. **Every name in the
+330-candidate catalog elsewhere in this file should be read as "this
+function touches this string somewhere," never as "this function does
+what this string suggests"** -- that catalog's entries are real and
+useful as raw material, but none of their earlier framing implied
+identity beyond what evidence supported; this makes that caveat
+explicit and evidenced rather than just implied. The symbol table's own
+name field, by contrast, IS the function's real, compiler-assigned
+identity (via RTTI/EH descriptor generation) -- authoritative where it
+resolves.
+
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
 properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,
@@ -1178,3 +1237,124 @@ container-format notes) followed by a standard 40-byte
 unlike `dbal/*.OUT`, this file's `e_shoff` is directly trustworthy.
 Disassembly: `capstone.Cs(capstone.CS_ARCH_PPC, capstone.CS_MODE_BIG_ENDIAN | capstone.CS_MODE_32)`.
 """
+
+# `FHDD6.FLI`'s recovered load base for its 0-24MB native-PowerPC region's
+# code-dense 1.2MB-9MB sub-range: VA = file_offset + FHDD6_LOAD_BASE.
+# Verified byte-exact 3 independent ways (see this module's own docstring,
+# "the load base WAS recovered" section). Do NOT assume this holds beyond
+# ~9MB -- see parse_symbol_table()'s own docstring for the confirmed limit.
+FHDD6_LOAD_BASE = 0xf688dcf4
+
+# Real function-prologue signature for this codebase's compiler (GCC 2.96,
+# PowerPC 603gnu): `stwu r1,-N(r1)` (bytes 0x94 0x21, N in bytes 2-3)
+# immediately followed by `mflr r0` (fixed bytes 0x7c 0x08 0x02 0xa6).
+# Finds 7,757 real, low-false-positive candidates across the whole 24MB
+# native region (README S2.6). Does NOT catch every real function --
+# simple leaf functions can validly skip this exact frame-setup shape.
+_PROLOGUE_TAIL = b"\x7c\x08\x02\xa6"
+
+
+def find_prologues(data, offset_base=0):
+    """Scan `data` for the `stwu r1,-N(r1)` + `mflr r0` byte signature at
+    every 4-byte-aligned offset. Returns a set of absolute offsets
+    (`offset_base` + position within `data`). See `_PROLOGUE_TAIL`'s own
+    comment for what this does and doesn't catch."""
+    hits = set()
+    for off in range(0, len(data) - 8, 4):
+        if data[off] == 0x94 and data[off + 1] == 0x21 and data[off + 4:off + 8] == _PROLOGUE_TAIL:
+            hits.add(offset_base + off)
+    return hits
+
+
+def parse_symbol_table(fli_bytes, base=FHDD6_LOAD_BASE, max_code_offset=9_000_000,
+                        require_prologue=False, prologue_set=None):
+    """Parse `FHDD6.FLI`'s real, large-scale (~26,000+ entry) per-function
+    symbol/EH-descriptor table -- discovered this session by tracing a
+    literal-pointer reference to a known function (`findSegIndex`) found
+    via `find_prologues()`. NOT documented anywhere else; this is the
+    first parser for it. See this module's own docstring, "a real,
+    large-scale... symbol/EH-descriptor table" section, for the full
+    discovery writeup and validation numbers.
+
+    Record format (empirically derived, not from any spec): a 3-byte-
+    fixed/1-byte-variable marker (`\\x00\\x10\\x05<var>`), a NUL-terminated
+    mangled C++ name, variable-length header fields (compiler-generated,
+    role not fully decoded), a monotonically-increasing 4-byte ordinal
+    counter (confirmed sequential across real records), then 5 trailing
+    4-byte fields ending right before the next record's marker. Field
+    INDEX 4 (the last of the 5) is the function's own real code address
+    for records whose code lives in the verified 1.2MB-9MB range --
+    confirmed via a 7,757-known-prologue cross-check: position 4 wins
+    decisively (35 hits vs. 3-6 for positions 0-3, ~700x the ~0.05-hit
+    chance baseline for that sample size).
+
+    **CONFIRMED LIMIT, load-bearing, do not ignore**: this resolution
+    ONLY works for code living in the load-base-verified 1.2MB-9MB range.
+    ALL 35 confirmed-good hits land under 9MB; ZERO land at or beyond.
+    `readNodeMP0`'s own record (the VNode-pipeline's single highest-value
+    target) implies an address ~11.4MB in -- a +/-200,000-byte search
+    around that target found ZERO real prologues at all, confirming this
+    isn't a calibration issue but a genuine absence of resolvable code
+    there under any base tried so far. Passing `max_code_offset` narrower
+    than the default is more conservative; widening it past ~9MB will
+    silently include unreliable entries -- this function does NOT
+    validate that for you beyond the simple range check.
+
+    Args:
+        fli_bytes: the whole `FHDD6.FLI` file's bytes (not just a slice --
+            record fields can reference content anywhere in the file, and
+            name text is read directly from `fli_bytes` too).
+        base: load base for VA-to-file-offset conversion.
+        max_code_offset: only return entries whose field-4 implied file
+            offset falls below this -- see the CONFIRMED LIMIT above for
+            why the default is 9,000,000, not the full 24,000,000.
+        require_prologue: if True, only return entries whose field-4
+            offset ALSO matches `find_prologues()`'s strict signature
+            (highest confidence, but excludes real leaf functions that
+            don't use that exact shape -- this is why it defaults False).
+        prologue_set: required if `require_prologue=True` -- pass
+            `find_prologues(fli_bytes[:24_000_000])`'s own return value.
+
+    Returns:
+        {name: file_offset} for every record whose field-4 implied
+        address falls in `[0, max_code_offset)` (and, if
+        `require_prologue`, also matches a known-good prologue).
+        Later records with a duplicate name overwrite earlier ones (this
+        table has genuine duplicate/overloaded-method entries -- callers
+        wanting every occurrence should not use this function as-is).
+    """
+    if require_prologue and prologue_set is None:
+        raise ValueError("require_prologue=True needs prologue_set")
+
+    prefix = b"\x00\x10\x05"
+    markers = []
+    idx = 0
+    while True:
+        idx = fli_bytes.find(prefix, idx)
+        if idx == -1:
+            break
+        markers.append(idx)
+        idx += 1
+
+    results = {}
+    for i in range(len(markers) - 1):
+        m = markers[i]
+        next_m = markers[i + 1]
+        span = next_m - m
+        if span < 20 or span > 4000:
+            continue  # implausible record size -- marker collision or unrelated data
+        name_end = fli_bytes.find(b"\x00", m + 4, m + 4 + 200)
+        if name_end == -1:
+            continue
+        fields_start = next_m - 20
+        if fields_start < name_end:
+            continue
+        code_va = int.from_bytes(fli_bytes[fields_start + 16:fields_start + 20], "big")
+        fo = code_va - base
+        if not (0 <= fo < max_code_offset):
+            continue
+        if require_prologue and fo not in prologue_set:
+            continue
+        name = fli_bytes[m + 4:name_end].decode("latin-1")
+        results[name] = fo
+    return results
