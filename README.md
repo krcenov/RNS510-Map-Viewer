@@ -534,10 +534,17 @@ epilogue, no invalid bytes) whose 3rd argument is tested for zero, then
 walked bit-by-bit (a 31-entry power-of-2 table built on the stack, then
 `andi.`/`srawi.` testing successive bits), calling a virtual method for
 each SET bit — consistent with "resolve the VID of each requested arm
-in a caller-supplied bitmask." Not yet traced further, but a concrete,
-well-scoped, genuinely promising next step — its own virtual-call
-targets are themselves within the reliable range. Full details:
-`research/swl_5238_reader.py`.
+in a caller-supplied bitmask."
+
+**Its own virtual-call targets were checked, immediately after —
+correcting this section's own error that they were reachable.** They
+resolve to ~12.4MB in, past the confirmed 9MB boundary — the same
+already-known limitation `readNodeMP0` hits, not new territory. Neither
+is a valid prologue, no real function start exists within 3,000 bytes
+of either, and one lands on readable text (a mangled-name fragment)
+rather than code. `getNodeVidArmMP0`'s own logic remains fully traced
+and understood; its callees are just as unreachable as `readNodeMP0`
+itself. Full details: `research/swl_5238_reader.py`.
 
 ---
 

@@ -1032,11 +1032,23 @@ shifts to the next one), with a virtual method call made for each SET
 bit found. This is consistent with **iterating a caller-supplied
 BITMASK of requested arms and resolving each one's VID individually**
 -- exactly the shape "get the VID of node arms N, given a bitmask of
-which arms to resolve" would take. Not yet traced further (what the virtual calls themselves do -- their
-computed targets, e.g. `0xbce5d8`/`0xbce5a8`, are both themselves within
-the verified <9MB range and so should be reachable the same way) -- a
-concrete, well-scoped, genuinely promising next step, distinct from and
-more tractable than the 9MB+-blocked `readNodeMP0` thread.
+which arms to resolve" would take.
+
+**UPDATE, immediately following, same session: its own virtual-call
+targets were checked -- CORRECTING an error in this section's own
+first-pass claim that they were reachable.** The 2 computed call
+targets (`0xbce5d8`/`0xbce5a8`) are actually ~12.4MB in -- this
+section originally, wrongly, called them "within the verified <9MB
+range"; they are not (12,379,608 and 12,379,560 respectively, both
+past the confirmed 9MB boundary). Consistent with that: neither
+resolves to a valid prologue, a backward search of 3,000 bytes found
+no real function start near either, and `0xbce5d8` itself lands on
+readable text (`"...iptor__C..."`, a mangled-name fragment) rather
+than code. This is the SAME already-understood 9MB+ limitation
+`readNodeMP0` hits, not a new anomaly -- `getNodeVidArmMP0`'s own
+virtual-call targets are genuinely unreachable with the current
+technique too. Corrected here, in the README, and on the wiki's
+`Firmware-Reversing` page (all 3 repeated the same magnitude error).
 
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
