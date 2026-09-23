@@ -714,6 +714,91 @@ base may be in play across the full image, and this finding should not
 be assumed to extend past the specific 1.2MB-9MB range it was derived
 and verified against.
 
+============================================================================
+**UPDATE, immediately following, same session: the "newly-unblocked
+next step" above WAS executed -- 330 real, CODE-REFERENCED C++ symbol
+names found, a qualitatively new catalog beyond pure string-mining**
+============================================================================
+Regenerated the full 7,757-candidate prologue list (same `stwu r1,-N(r1)`
++ `mflr r0` signature) across the WHOLE 24MB native region this time
+(not a sub-slice), disassembled the first ~200 bytes of each with the
+recovered base, and resolved every `lis`/`addi` absolute-address pair
+against the FULL 85.6MB file (not just the 24MB region -- string data
+can live past it). **330 of 7,757 candidates (4.3%) reference at least
+one address landing on readable text.** This is a fundamentally
+DIFFERENT, and more useful, catalog than the earlier plain-string-scan
+inventory (the 1,476 `.cpp`/`.h` basenames, the 77 `db_*_V0NN`
+accessors): those were found by scanning for text patterns anywhere in
+the file, with NO way to tell if real code ever touched them (and for
+the specific `db_*`/VNode names, direct testing proved they don't).
+This new catalog is the OPPOSITE: every entry is a string some real
+function's OWN disassembled code actually computes the address of --
+guaranteed live, not just present.
+
+**Real, meaningful hits directly relevant to this project's routing/
+topology questions** (C++ symbols are GCC-2.x-mangled -- a leading
+digit is a length prefix, e.g. `9RoutePath` = the 9-character class
+name `RoutePath`, already known from the VNode pipeline write-up
+above):
+  - `_vt$8MapRoute` and `_vt$13VpRouteGetter` -- real VIRTUAL TABLE
+    symbols (the `_vt$<len><Class>` mangling is GCC 2.x's vtable-symbol
+    convention) for `MapRoute` and `VpRouteGetter` classes -- their
+    existence as vtables means these are real, instantiated,
+    polymorphic classes, not just names in a debug pool.
+  - `getThinnedRoute_internal__9RoutePathiiii` -- a real `RoutePath`
+    method, referenced by a genuine, fully-disassembled function
+    (file offset 0x79f364) with a normal prologue/epilogue and several
+    virtual (`mtlr`+`blrl`) calls with return-code branching (-5, 1, 2
+    checked) -- confirmed via direct disassembly, not just the string
+    hit.
+  - `newRoutePath__C17MapFlyRouteAccessPQ217M...` -- a `newRoutePath`
+    factory-style method on `MapFlyRouteAccess`.
+  - `copyRoutePaths: pRoutePathFirs[t]` -- a real runtime debug-log
+    string about copying route paths.
+  - `findSegIndex` -- referenced by a real, fully-disassembled function
+    (file offset 0x815a80) doing exactly the same virtual-call/return-
+    code-branching shape as the RoutePath function above.
+  - `_14CfcTypeSegment$TYPE_DESCRIPTOR` -- a real RTTI type descriptor
+    for a `CfcTypeSegment` class (the `Cfc*` prefix appears throughout
+    this catalog -- a large, real application framework this project
+    hadn't previously named at this granularity).
+  - `_13CFlowSegStore`, `rackSegList` (likely `trackSegList`),
+    `eeNodePool` (likely `TreeNodePool`) -- segment/node storage
+    classes.
+  - `avGraphMatch` (likely `navGraphMatch`) -- a real graph-matching
+    function name, directly relevant to route calculation.
+  - `heR16ParcelPercentageP15MapRendererBase` (`ParcelPercentage`) and
+    `__tf26MDCacheParcelSpanC` (`MDCacheParcelSpan`) -- real parcel-
+    cache classes, extending this project's own `eeuz.fea`
+    `ParcelHeader` understanding from the code side.
+  - `sendSoftWaypointManeuver__C19GuidanceManagerImpl` and
+    `nceManeuverProximityFuture8Callback` -- real `GuidanceManagerImpl`
+    methods, confirming and naming the maneuver-generator subsystem the
+    earlier `mv_*` string catalog only named from debug strings.
+  - **One false-lead worth recording so it isn't rechecked**: a real,
+    code-referenced string `"No Link available!!!"` was found (2
+    separate call sites) -- given this project's own extensive
+    same-session "link-id" topology work, this looked like a possible
+    confirmation that "link" is the real internal term for a graph
+    edge. Checked the surrounding bytes directly: it sits right next to
+    `<A HREF="/%s/%d">`/`</A>` HTML-anchor-tag text -- this is an HTML
+    HYPERLINK error message (probably from an embedded help/browser
+    view), unrelated to routing graph edges. Coincidental word overlap,
+    not a real lead.
+
+**Not yet done**: only ~200 bytes per candidate were disassembled (one
+string-reference pass, not full function bodies), and only 2 of the 330
+candidates were followed up with a complete disassembly (`findSegIndex`
+and `getThinnedRoute_internal`'s callers, both real but not yet fully
+understood). None of the 330 were cross-checked against the specific
+VNode-pipeline names (`db_vid_get_map_id_V000` etc.) -- this
+catalog was found independently of that search and doesn't itself
+locate those specific functions. Tracing any of these `Route`/`Seg`/
+`Node`/`Parcel` classes' real method implementations in full is a
+concrete, well-scoped next step for a future session, now that both a
+working load base AND a real catalog of live, code-referenced symbol
+names exist -- neither was available before this session.
+
 Also found in the same scan: `db_fea_map_V000`, `db_fea_get_layer_
 range_V005`, `db_fea_get_file_header_V005`, `db_fea_get_layer_
 properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,

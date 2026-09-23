@@ -416,6 +416,32 @@ commands, and the concrete newly-unblocked next step (disassembling
 the 7,757 known prologue candidates for real, now that a base exists):
 `research/swl_5238_reader.py`.
 
+**That next step was executed immediately after, same session: 330 of
+7,757 prologue candidates (4.3%) reference at least one real,
+CODE-LIVE string** — a fundamentally different, more useful catalog
+than the earlier pure-string-scan inventory, since every entry is
+something a real function's own disassembled code actually computes
+the address of (guaranteed referenced, unlike the confirmed-dead
+`db_*_V0NN`/VNode-pipeline debug-string pool). Real hits directly
+relevant to this project's own routing/topology questions: `_vt$8MapRoute`/
+`_vt$13VpRouteGetter` (real vtables — confirmed instantiated,
+polymorphic classes), `getThinnedRoute_internal__9RoutePath` and
+`newRoutePath__C17MapFlyRouteAccess` (real `RoutePath` methods, one
+fully disassembled and confirmed as a genuine virtual-call-driven
+function), `findSegIndex`, `_14CfcTypeSegment$TYPE_DESCRIPTOR`,
+`_13CFlowSegStore`, `eeNodePool` (likely `TreeNodePool`), `avGraphMatch`
+(likely `navGraphMatch`), `heR16ParcelPercentageP15MapRendererBase`
+(`ParcelPercentage`) and `MDCacheParcelSpan` (real parcel-cache classes),
+and `sendSoftWaypointManeuver__C19GuidanceManagerImpl` (naming, not just
+string-hinting, the maneuver-generator subsystem). One false lead
+recorded so it isn't rechecked: a real, code-referenced `"No Link
+available!!!"` string turned out to be an HTML-hyperlink error message
+(sits beside literal `<A HREF=...>` markup), not a routing-graph "link"
+despite the tempting word match. None of the 330 have been traced to a
+complete understanding yet — a concrete, well-scoped next step for a
+future session. Full catalog and every verification command:
+`research/swl_5238_reader.py`.
+
 ---
 
 ## 3. Map database findings
