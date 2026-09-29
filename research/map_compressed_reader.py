@@ -4367,7 +4367,7 @@ def _haversine_ish_m(p1, p2):
 
 def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
                                 max_shift_scan=None, implausible_median_m=2000,
-                                max_edge_m=200.0):
+                                max_edge_m=200.0, max_gap_ratio=0.10, gap_floor_m=200.0):
     """CRACKED (this session) -- resolves the node-id<->coordinate mapping
     that decode_topology() explicitly could NOT (see that function's long
     "NOT SOLVED" section). Returns, per feature, a real point-index adjacency
@@ -4804,6 +4804,55 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     detector; not pursued further. Documented here specifically so this
     doesn't get re-investigated from scratch in a future session.
 
+    ==== UPDATE, a still-later session: a 4th real false edge found --
+    a plain 2-point value collision this time, not 0 and not a
+    contaminated clique -- fixed with a NEW per-edge filter, the
+    point-index GAP RATIO, found via a genuinely clean 2D signal ====
+    User-reported, investigated directly: `mg4` tile 2387, points 98
+    ("OKOLOVRASTEN PAT" -- literally Bulgarian for "Ring Road") and 126,
+    reported and confirmed 772.8m apart. Root cause: they share link-id
+    value 100 with NO third point involved (a plain 2-point clique) --
+    not `0` (the already-fixed sentinel), not a contaminated 3+-point
+    clique (the previous fix's target), and well under `mg3`/`mg4`'s
+    loose 5000m `max_edge_m` cap, so none of the 3 existing filters
+    touched it. **The key new observation**: `decode_features()`'s own
+    point order is mostly sequential, so real edges usually connect
+    nearby indices -- but real EXCEPTIONS exist on both ground-truth
+    tiles (`mp0` 91124 has real edges with index gaps up to 21). Gap
+    alone is therefore NOT a safe discriminator (21 real vs. this
+    edge's 28 is too thin a margin). **But cross-referencing gap against
+    distance reveals a clean, two-dimensional split that never
+    overlaps in any validated real data**: every real edge with a LARGE
+    gap (up to 21, both ground-truth tiles combined) has a SMALL
+    distance (<=104.2m); every real edge with a LARGE distance (up to
+    the already-documented 1,810m interleaved-parallel-chains case
+    above) has a TINY gap (2). This false edge is the one combination
+    that never occurs validated: gap 28 (ratio 28/167=0.168) AND
+    distance 772.8m, BOTH large simultaneously. Using the RATIO
+    (gap / feature's own point count) rather than a raw gap count gives
+    an even cleaner margin across differently-sized features: the real
+    validated max ratio is 0.069 (`mp0` 91124's own gap=21 out of 306
+    points); this false edge's ratio (0.168) is 2.4x higher.
+
+    **FIX**: a new per-edge filter, `max_gap_ratio` (default 0.10,
+    ~1.45x above the real validated max of 0.069) and `gap_floor_m`
+    (default 200.0, ~4.4x above the real large-gap edges' own max
+    distance of 45.3m) -- an edge is dropped only when BOTH its gap
+    ratio exceeds `max_gap_ratio` AND its distance exceeds
+    `gap_floor_m`, applied alongside (not instead of) the existing
+    `max_edge_m` filter. Deliberately conjunctive, not either/or: a
+    short high-gap edge (real, validated) or a long low-gap edge (real,
+    the interleaved-parallel-chains case) must each survive untouched.
+    Re-validated: both ground-truth tiles unchanged (`mg2` 20597 still
+    16/16, `mp0` 91124 still 16/18 -- including their own real high-gap
+    edges, gap up to 21, correctly NOT dropped since their distances
+    stay under `gap_floor_m`), all 7 previously-confirmed false edges
+    (the 5 original sentinel/collision cases plus the 2 clique cases)
+    still excluded, this new `mg4` 2387 case now excluded too, AND the
+    interleaved-parallel-chains real 1,518m edge (`mg4` tile 2385,
+    points 72<->74, gap=2) confirmed to still survive (its tiny gap
+    ratio never trips the filter regardless of its long real distance).
+
     PRACTICAL CONSEQUENCE: this closes the concrete gap blocking README §8
     item 5 -- given a feature's decoded points and topology table, this
     function now tells you which OTHER real points a given point is
@@ -4906,6 +4955,13 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
             affect shift selection or the `confidence`/`median_edge_m`
             fields, which are still computed from the full, unfiltered
             edge set for the winning shift.
+        max_gap_ratio, gap_floor_m: see the later "4th real false edge"
+            UPDATE above -- an edge is ALSO dropped (same effect as
+            `max_edge_m`, same "does not affect shift selection" caveat)
+            when its point-index gap ratio (`abs(b-a)/n_points`) exceeds
+            `max_gap_ratio` (default 0.10) AND its distance exceeds
+            `gap_floor_m` (default 200.0) -- conjunctive, so a short
+            high-gap edge or a long low-gap edge each survive untouched.
 
     Returns a list of dicts, one per feature, in the same order as
     `features`:
@@ -4920,11 +4976,12 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
                   exceeds it, "none" if not found at all -- computed from
                   the unfiltered edge set, same as median_edge_m>,
          "edges": [(point_i, point_j), ...] (i < j, deduplicated, AFTER
-                  the per-edge max_edge_m distance filter above),
+                  the per-edge max_edge_m AND gap-ratio filters above),
          "adjacency": {point_index: sorted[neighbor_point_index, ...]}
                   (built from the same filtered "edges"),
          "edges_dropped_implausible": <int, how many edges the max_edge_m
-                  filter removed for this feature -- 0 if none/not found>}
+                  and/or gap-ratio filters removed for this feature -- 0
+                  if none/not found>}
     """
     if declen is None:
         declen = len(raw)
@@ -4986,13 +5043,37 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
         # make it into the RETURNED "edges"/"adjacency", dropping any
         # individual edge whose two endpoints are further apart than
         # `max_edge_m` regardless of the feature's own aggregate median.
+        # Per-EDGE point-index-gap-ratio filter (found this session via a
+        # real user-reported false edge, `mg4` tile 2387, points 98<->126,
+        # sharing a plain 2-point non-zero value -- not caught by the
+        # 0-exclusion or clique-consistency fixes above, and well under
+        # `max_edge_m` on mg3/mg4's loose 5000m cap). See this function's
+        # own "PER-EDGE FALSE-POSITIVE FILTER"/gap-ratio writeup below for
+        # the full investigation -- summary: real edges with a large
+        # point-index gap (`decode_features()`'s own point order, up to a
+        # validated 21 on BOTH ground-truth tiles combined) always have a
+        # SMALL distance (<=104.2m); real edges with a large distance (up
+        # to the already-documented 1,810m interleaved-parallel-chains
+        # case) always have a TINY gap (2) -- the one combination that
+        # never occurs in any validated real data is BOTH large gap AND
+        # large distance, which is exactly what this false edge is (gap
+        # 28/167=0.168, dist 772.8m). `max_gap_ratio` (default 0.10,
+        # comfortably above the real validated max of 0.069) only applies
+        # when distance ALSO exceeds `gap_floor_m` (default 200.0, a large
+        # margin over the real large-gap edges' own max of 45.3m) -- a
+        # short high-gap edge or a long low-gap edge are both left alone.
         filtered_edges = []
         dropped = 0
         for a, b in best_edges:
-            if _haversine_ish_m(points[a], points[b]) <= max_edge_m:
-                filtered_edges.append((a, b))
-            else:
+            dist = _haversine_ish_m(points[a], points[b])
+            if dist > max_edge_m:
                 dropped += 1
+                continue
+            gap_ratio = abs(b - a) / n_points
+            if gap_ratio > max_gap_ratio and dist > gap_floor_m:
+                dropped += 1
+                continue
+            filtered_edges.append((a, b))
 
         adjacency = {}
         for a, b in filtered_edges:

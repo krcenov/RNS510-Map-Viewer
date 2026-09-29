@@ -976,6 +976,51 @@ def main():
     log("mg3 tile 9237's 2nd user-reported false connected-roads edge confirmed EXCLUDED, real " \
         "sibling edge confirmed PRESERVED, by the clique distance-consistency fix -- PASSED")
 
+    # --- 8d-quater. A FOURTH, later-session false edge -- a DIFFERENT tile
+    #         (`mg4` 2387) and a DIFFERENT mechanism again: user right-
+    #         clicked point 98 ("OKOLOVRASTEN PAT", Bulgarian for "Ring
+    #         Road") reported connected to point 126, confirmed 772.8m
+    #         apart. Root cause: a PLAIN 2-point value collision (link-id
+    #         100) -- not 0, not a contaminated 3+-point clique, and well
+    #         under mg4's loose 5000m max_edge_m cap, so none of the 3
+    #         earlier fixes caught it. The one new, real signal: this
+    #         edge's point-index gap (28 out of 167 points, ratio 0.168)
+    #         is far above the real validated max ratio (0.069, from
+    #         mp0 91124's own real gap=21 edge) -- but gap alone isn't
+    #         safe (real gaps go up to 21), so the fix is CONJUNCTIVE:
+    #         only drop an edge when BOTH its gap ratio is large AND its
+    #         distance is large (see resolve_topology_adjacency()'s own
+    #         updated docstring for the full numbers). Must NOT affect
+    #         the real long-distance-but-tiny-gap interleaved-parallel-
+    #         chains edge (mg4 tile 2385, points 72<->74, gap=2) from
+    #         the earlier v27->v28 session.
+    mg4_kept = data.decode_tile("mg4", 2387, want_adjacency=True)
+    mg4_feat = next((f for f in mg4_kept if len(f["points"]) > 126), None)
+    assert mg4_feat is not None, "mg4 tile 2387: expected a feature with at least 127 points"
+    mg4_result = data.topo_caches["mg4"][2387][mg4_feat["feature_index"]]
+    mg4_bad_edge = (98, 126)
+    mg4_present = mg4_bad_edge in set(mg4_result["edges"])
+    log("false-edge check (OKOLOVRASTEN PAT <-> unnamed, reported ~773m apart, mg4 gap-ratio " \
+        "case): mg4 tile 2387 feature %d, edge %s -- confidence=%s, still present=%s (must be " \
+        "False)" % (mg4_feat["feature_index"], mg4_bad_edge, mg4_result["confidence"], mg4_present))
+    assert not mg4_present, \
+        "mg4 tile 2387: the reported false edge %s (shared value 100, plain 2-point collision) " \
+        "must be excluded by the gap-ratio fix" % (mg4_bad_edge,)
+    log("mg4 tile 2387's user-reported false connected-roads edge confirmed EXCLUDED by the " \
+        "gap-ratio fix -- PASSED")
+
+    mg4_2385_kept = data.decode_tile("mg4", 2385, want_adjacency=True)
+    mg4_2385_feat = next((f for f in mg4_2385_kept if len(f["points"]) > 74), None)
+    if mg4_2385_feat is not None:
+        mg4_2385_result = data.topo_caches["mg4"][2385][mg4_2385_feat["feature_index"]]
+        real_long_edge = (72, 74)
+        real_long_present = real_long_edge in set(mg4_2385_result["edges"])
+        log("real interleaved-parallel-chains edge (mg4 tile 2385, %s, gap=2, ~1518m) still " \
+            "present after gap-ratio fix: %s (must be True)" % (real_long_edge, real_long_present))
+        assert real_long_present, \
+            "mg4 tile 2385: the REAL long-distance edge %s must survive the gap-ratio fix " \
+            "(tiny gap ratio should never trip it)" % (real_long_edge,)
+
     # --- 8e. Performance: real cost of `want_adjacency=True` at tile-decode
     #         time (README §10 "v9 -> v10" -- "measure, don't assume"). Two
     #         FRESH MapData instances, each loaded independently (so

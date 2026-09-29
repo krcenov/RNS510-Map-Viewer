@@ -7599,6 +7599,33 @@ against the real disc: the same viewport that returned 203/109/54/24
 tiles (`mg1`/`mg2`/`mg3`/`mg4`) with the hint test active now returns
 104/44/26/14 — back to bbox-driven scale.
 
+### v37 → v38: a FOURTH real false edge found and fixed — a plain 2-point value collision, caught with a new joint gap-ratio + distance filter (this session, user-reported)
+
+User right-clicked point 98 ("OKOLOVRASTEN PAT" — Bulgarian for "Ring
+Road") on `mg4` tile 2387, reported connected to point 126, confirmed
+772.8m apart. Root cause: a plain 2-point collision (shared link-id
+value 100, no 3rd point involved) — not `0`, not a contaminated 3+-point
+clique, and well under `mg4`'s loose 5000m `max_edge_m` cap, so none of
+the 3 previous fixes caught it. Gap alone (`decode_features()`'s own
+point-index distance, 28 here) isn't a safe signal by itself — real
+validated edges on `mp0` 91124 already reach a gap of 21. But
+cross-referencing gap against distance reveals a clean split that never
+overlaps in any real data: every validated edge with a large gap (up to
+21) has a small distance (≤104.2m); every validated edge with a large
+distance (up to the already-documented 1,810m interleaved-parallel-
+chains case) has a tiny gap (2). This false edge is the one combination
+that never occurs for real: gap ratio 0.168 (28/167 points) AND
+distance 772.8m, both large at once. **Fixed**: a new conjunctive filter
+— `max_gap_ratio` (default 0.10) and `gap_floor_m` (default 200m) — drops
+an edge only when BOTH its gap ratio exceeds the threshold AND its
+distance exceeds the floor, so a short high-gap edge or a long low-gap
+edge each survive untouched. Re-validated: both ground-truth tiles
+unchanged (`mg2` 20597 still 16/16, `mp0` 91124 still 16/18, including
+its own real gap-21 edge), all 7 previously-confirmed false edges still
+excluded, this new case excluded too, and the real 1,518m interleaved-
+parallel-chains edge (`mg4` tile 2385, points 72↔74, gap=2) confirmed to
+survive. New regression tests in `test_map_viewer.py` ("8d-quater").
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can
