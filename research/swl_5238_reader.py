@@ -1084,6 +1084,134 @@ properties_V005`, `db_fea_read_parcels_V005`, `db_fea_init_V005`,
 actively used, same pattern of confirmation as the `db_seg_*` catalog.
 
 ============================================================================
+UPDATE, a still-later session: the MAP_COMPRESSED spatial index's real
+ARCHITECTURE identified -- a genuine R-TREE (`MDCacheTIRTree`) -- but
+its exact byte-level node/MBR layout remains unreachable, same 9MB+
+wall, now confirmed to extend to the whole rendering subsystem too
+============================================================================
+Direct follow-up to README §8 item 1/3 (the still-uncracked pre-table
+"geo-index prefix" region in `.mp0`/`.mg1`-`.mg4`, and the still-
+approximate `find_tile_for_coord()`/`tile_ids_in_bbox()`) -- user asked
+to find out exactly how the real firmware reads this region and make
+the viewer work the same way. The `db_get_parcel_dir_V005`/`db_load_
+pcl_dir_V005`/`db_page_pcl_V000`/`db_map_dir_V000` catalog (this
+session's own "MAP_COMPRESSED parcel directory" bullet, several
+sections up) was checked against `parse_symbol_table()` first and
+refuted as a path forward: none of them have ANY resolvable code
+address in the symbol table, at any range (unlike `readNodeMP0`, which
+at least has a table entry, just in the already-confirmed-unreachable
+9MB+ zone) -- worse off than the routing-graph problem, not better.
+
+**The real breakthrough came from the LOOSE catalog's much larger
+`CfcMapViewProxy`/`MapViewImpl`/`MapController`/`MapCache`/`MDCache*`
+cluster** (586 matches for a `Map*`-family keyword sweep, 120 of them
+in the verified-reachable <9MB range -- by far the largest coherent,
+reachable, directly-relevant cluster this project has found). Real,
+unambiguous R-tree terminology confirmed present as actual mangled
+C++ symbols, not inference: `findNode__14MDCacheTIRTreeRC7MapRectPP18`
+(a class LITERALLY named "TIRTree", taking a `MapRect` query and
+returning node pointers -- exactly `find_tile_for_coord()`'s own real
+counterpart), `enlargeMBR__C33MDCacheQSortForRTreeCreationTIJamR7MapRecti`
+/ `enlargeMBR__C27MDCacheQSortForRtreeTIIconsR7MapRecti` (MBR = minimum
+bounding rectangle, the textbook R-tree term), `splitNodeElements__
+32MDCacheQSortForRTreeCreationBase...` (R-tree node splitting, the core
+bulk-load step), `intersectsRecursive__C12MDCacheTIJamRC7MapRectPC16
+MDCacheTIJamNodeRiT3` (recursive rectangle-intersection tree walk,
+against a real `MDCacheTIJamNode` type), and `calcFromBoundingRect__
+24MDCacheTIConvertLoc2GlobR7MapRect`. `QSortForRTreeCreation`'s own name
+("quicksort for R-tree creation") reads as this codebase's real STR
+(sort-tile-recursive) bulk-loading implementation -- a well-known real
+R-tree construction algorithm, not a guess. **This is a genuinely new,
+correct architectural finding**: the still-uncracked pre-table region
+in `.mp0`/`.mg1`-`.mg4` is almost certainly a serialized R-tree (or
+R-tree-adjacent structure), explaining properties already observed
+empirically and previously unexplained -- variable-length per-tile
+records (R-tree nodes hold a variable child count), and the ascending-
+counter walk's own collision/breakdown after ~10-32 entries (multiple
+interleaved counters at different tree levels/node-splits, not one flat
+per-tile sequence, is exactly what a real multi-level tree would
+produce).
+
+**Disassembly of every REACHABLE candidate near this cluster was
+attempted directly (capstone installed this session) -- real progress,
+but the exact `MapRect`/R-tree-node byte layout was NOT reached**:
+- `enlargeMBR` (TIJam variant, file offset 8,705,104): genuine, valid,
+  well-formed code (confirmed real start via the established backward-
+  prologue-scan technique) -- but a large function (640-byte stack
+  frame) whose visible body batch-processes ~19 fields at a regular
+  8-byte stride via `lhz`/`add`/`sth`, not a simple 2-rectangle MBR
+  union -- its exact semantics need more register-level tracing than
+  this session had time for.
+- `enlargeMBR` (TIIcons variant): the naive backward-prologue-scan
+  landed on a **false-positive prologue match in non-code data**
+  (confirmed: the very next word decodes as an invalid PowerPC opcode,
+  `0x00670019`) -- a concrete, caught instance of this project's own
+  already-acknowledged `find_prologues()` false-positive risk, not a
+  new technique failure.
+- The `CfcTypeMapWindow` `getLeft`/`getTop`/`getRight`/`setTop`/
+  `setRight`/`setBottom` accessor cluster all resolved to the SAME
+  single address, which turned out to be a cross-task RPC proxy/stub
+  dispatch routine (real code, matches this subsystem's own `CfcMap
+  ViewProxy`/`CfcMapViewStub`/`processXxxReq` naming, i.e. this whole
+  `Cfc*` layer marshals requests to a different task rather than
+  touching fields directly) -- a genuine, new architectural fact (this
+  codebase's UI-facing map API is IPC-proxied, not a direct in-process
+  accessor layer), but not the byte layout being sought.
+- `getVisibleArea__C6MapAPIP16CfcTypeMapWindow` (file offset 8,676,584,
+  a `MapAPI` method writing a `CfcTypeMapWindow*` OUTPUT parameter --
+  the single most directly promising target tried): genuine, short, real
+  code, but its body makes exactly 2 indirect calls (computed via `lis`/
+  `addi`/`mtlr`/`blrl`, the shape of a matched lock()/unlock() pair
+  around a critical section, given the identical `r4=2` argument both
+  times) and returns -- **both computed call targets land at ~12.84MB**,
+  resolved and directly checked: zero decodable instructions there
+  either. The actual field-copying logic this function exists to run is
+  bracketed by, but not itself contained in, code below 9MB.
+
+**Net, honestly stated**: this session materially deepened the
+project's own understanding of the 9MB+ wall -- it was previously
+characterized only against the VNode/routing-graph subsystem
+(`readNodeMP0` etc, earlier in this section); it now is CONFIRMED, via
+4 independently-traced call sites across a completely different
+subsystem (map rendering/spatial-cache), to be the SAME wall, not a
+narrower one specific to routing. Every reachable (<9MB) function found
+near this cluster is a thin wrapper (RPC proxy, lock/unlock pair, sort
+helper) that itself calls into the unreachable zone to do its real
+work, rather than touching struct fields directly. Reaching the actual
+`MapRect`/R-tree-node byte layout this way would mean solving the same
+underlying problem already on record as attempted-and-failed (a valid
+load base for the 9MB+ region) -- not a matter of trying more
+individual functions. **Concrete, valuable output despite this**: the
+R-TREE ARCHITECTURE ITSELF is now real, confirmed, citable fact (not
+inference) for any future session -- a fundamentally better starting
+model than "unknown ascending-counter structure" for a fresh attempt at
+the raw region bytes, and a short list of real class/method names
+(`MDCacheTIRTree::findNode`, `MDCacheQSortForRTreeCreation*::
+enlargeMBR`/`splitNodeElements`) to specifically target if a working
+9MB+ disassembly technique is ever found.
+
+**UPDATE, immediately following, same session: the "fresh attempt at the
+raw region bytes" this section just predicted was made -- PARTIALLY
+successful, without needing the blocked 9MB+ disassembly at all.** See
+`research/map_compressed_reader.py`'s `scan_native_geo_hints()` (and
+README §8 item 1's matching update) for the full mechanism and
+validation numbers. Short version: the R-tree architecture confirmed
+above directly motivated re-testing the region's already-documented
+small-integer pairs as `(tile_id, tile_id+1)` REFERENCES (using the
+SAME flat-directory-table numbering, not a separately-sorted rank) --
+confirmed true for a large fraction of them, and built into a working,
+no-decompression-needed partial native geo-index reader, cross-
+validated at ~42% exact-match coverage on two independent files (`mg4`,
+`mg3`). A separate, more exciting-looking hypothesis tried in the same
+pass -- that a record's trailing field was a recursive pointer to
+ANOTHER instance of the same structure -- was tested at real scale
+(2,275 records) and cleanly refuted (0.6% hit rate); noted here so nobody
+re-chases it. This is genuine, partial, validated progress on the
+region's byte-level format from a completely different angle than
+disassembly -- informed by, but not dependent on, the architectural
+finding above.
+
+============================================================================
 `.FRG`'s own `b"ZZZZ"` container -- CRACKED (a later session): the fixed
 64-byte header, validated exact across 5 independent files spanning 2
 different ECU targets and a 94x size range

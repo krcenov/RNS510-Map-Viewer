@@ -4151,20 +4151,157 @@ original exactly.
 ## 8. Open problems / next steps
 
 1. **Continental's own geo-index prefix region** in `.mp0`/`.mg1`-`.mg4`
-   (byte 80 → `table_start`) — still not cracked, but **no longer a practical
-   blocker**: every tile carries its own absolute anchor coordinate (see §3.6), so
-   `build_geo_index()` + `find_tile_for_coord()` now give a working, validated
-   coordinate→tile lookup for mg2/mg3/mg4/mp0 without needing this region at all. Only
-   worth revisiting if the nearest-anchor approximation (see gap below) proves too
-   imprecise in practice.
+   (byte 80 → `table_start`) — still not byte-level cracked, but **no longer a
+   practical blocker**: every tile carries its own absolute anchor coordinate (see
+   §3.6), so `build_geo_index()` + `find_tile_for_coord()` now give a working,
+   validated coordinate→tile lookup for mg2/mg3/mg4/mp0 without needing this region
+   at all. Only worth revisiting if the nearest-anchor approximation (see gap below)
+   proves too imprecise in practice.
+
+   **UPDATE, a later session (user-asked "find out exactly how [the firmware] is
+   working... have our viewer work the same way")**: this region's real ARCHITECTURE
+   is now confirmed, not guessed — it's a genuine **R-tree** (`MDCacheTIRTree`,
+   `findNode(MapRect)`, `enlargeMBR`, `splitNodeElements`, `intersectsRecursive`,
+   all real mangled C++ symbols in the firmware's own `FHDD6.FLI`, found via
+   `research/swl_5238_reader.py`'s `parse_symbol_table()`) — see that module's own
+   "the MAP_COMPRESSED spatial index's real ARCHITECTURE identified" section for
+   the full disassembly attempt and evidence. This directly explains two properties
+   already observed empirically here and previously unexplained: the region's
+   variable-length per-tile records (real R-tree nodes hold a variable child count)
+   and why the earlier ascending-counter walk collides/breaks down after only
+   ~10-32 entries (multiple interleaved counters at different tree levels, not one
+   flat sequence, is exactly what a real multi-level tree produces). **The exact
+   byte-level node/MBR layout was NOT reached**: every function found in the
+   verified-reachable (<9MB) code range near this cluster turned out to be a thin
+   wrapper (RPC proxy, mutex lock/unlock pair, sort helper) whose own real work
+   happens via a call into the SAME already-documented unreachable 9MB+ region
+   (§2.6's `readNodeMP0`/`db_vid_get_map_id` wall) — confirmed directly by resolving
+   and checking two of `getVisibleArea`'s own computed call targets, both landing at
+   ~12.84MB with zero decodable code. This is now confirmed, not just suspected, to
+   be the SAME wall across two independent subsystems (routing-graph AND rendering/
+   spatial-cache), not something narrower. Reaching the byte-exact layout needs the
+   same still-missing piece already on record: a valid load base for the 9MB+
+   region. Concrete, valuable output despite this: the R-tree architecture itself,
+   plus real class/method names to target specifically if that piece is ever found.
+
+   **UPDATE, immediately following, same session (user-asked "can we try to resolve
+   the file using the R-tree approach"): the raw region bytes PARTIALLY cracked
+   directly, informed by the architecture above, without needing the blocked
+   disassembly at all.** Pivoted from "read the firmware code" (blocked) to "use the
+   now-known R-tree architecture to make a smarter guess at the raw bytes, then
+   validate at scale" — the project's own established methodology elsewhere.
+   Searched the region for known real tile bbox bounds (from `build_bbox_index()`)
+   and found that a large fraction of the region's already-documented, previously
+   unexplained small-integer pairs are literally `(tile_id, tile_id + 1)` — this
+   region's leaf-level records reference tiles by the SAME numbering the flat
+   directory table already uses, not a separately-sorted spatial rank (an earlier,
+   more exciting-looking hypothesis this session — that a trailing field was a
+   recursive child pointer to another instance of the same record — was tested at
+   scale, on 2,275 real records, and REFUTED outright: 0.6% hit rate, indistinguishable
+   from noise; flagged here specifically so a future session doesn't re-chase it).
+   Built `scan_native_geo_hints()` (`research/map_compressed_reader.py`) on the
+   `(tile_id, tile_id+1)` finding: scans for `[coord][n][n+1]` triples with NO tile
+   decompression at all. **Validated directly against `build_bbox_index()`'s own
+   already-validated bounds, on two independent files**: `mg4` 2,796 candidates,
+   1,151/2,729 checkable exact-matched a real `lon_max`/`lat_max` (42.2%); `mg3`
+   8,000 candidates, 3,316/7,881 checkable matched (42.1%) — both files landing
+   within 0.1 points of each other confirms this is real and reproducible, not a
+   one-file fluke. **~20-100x faster than the full-decompress approach** (0.29s vs
+   6.6s on `mg3`'s 16,503 tiles — the gap would be far larger on `mp0`, where
+   `build_geo_index()`/`build_bbox_index()` already cost tens of seconds to several
+   minutes). **Honestly scoped**: recovers one bound (lon_max or lat_max, not
+   distinguishable from the value alone) for ~42-46% of tiles, not a full bbox and
+   not every tile — the ~58% non-matches aren't necessarily wrong, just not
+   individually validated (plausibly min-corner entries or internal-node MBRs this
+   pass didn't test) — a caller should treat the result as "candidates worth
+   checking," not "guaranteed." Not wired into `build_geo_index()`/
+   `build_bbox_index()`.
+
+   **UPDATE, a still-later session (user-asked "wire it to the viewer"): wired into
+   `tile_ids_in_bbox()` as a 3rd union test, then REVERTED again the same session
+   (real, user-reported performance regression)** — see §10's v33→v34 and v36→v37
+   changelog entries for the full story. Short version: testing a hint's single,
+   axis-ambiguous coordinate against the query bbox's lon range OR lat range
+   independently looked fine on a small hand-picked test box but inflated the
+   real pooled-tile count 4.5-10x at realistic viewport scale (confirmed
+   structural across box sizes from ~170m to ~21km, not a large-viewport-only
+   problem) — every extra tile costs a real decode, which is exactly what the
+   reported slowdown was. `scan_native_geo_hints()` itself is unaffected and
+   still built by `load_heavy_layer()` (available in `MapData.native_hints`),
+   just no longer consumed by `tile_ids_in_bbox()`. The natural next step, if
+   this is revisited, is a fast first-pass hint layer with a properly
+   2D-correlated containment test (not two independent 1D tests), falling back
+   to full decompression only for tiles this
+   doesn't resolve.
+
+   **UPDATE, a still-later session: 4 more structural hypotheses tested against the
+   real region bytes, all REFUTED — plus one genuine new confirmed fact.** Full
+   details and numbers in `scan_native_geo_hints()`'s own updated docstring
+   (`research/map_compressed_reader.py`); summary: **confirmed** this mechanism
+   encodes ONLY max-corner coordinates, never min-corner ones (0/3,034 candidates
+   matched a real `lon_min`/`lat_min`, vs. 652+499 matching `lon_max`/`lat_max`) —
+   consistent with `enlargeMBR`'s own real semantics (a running maximum, not a
+   full rectangle). **Refuted**: a width/height delta hidden in another field of
+   the same record (0/500 tiles); a tile storing BOTH axes as two separate records
+   (0/705 tiles with a confirmed hit had a second one); consecutive tile_ids
+   sharing an STR-bulk-load "strip" axis (median 1.4° spread across
+   5-consecutive-tile_id windows — nowhere near strip-tight, re-confirming tile_id
+   file order isn't a clean spatial order). **Still open, no hypothesis queued**:
+   why a tile's record picks `lon_max` vs `lat_max` (no discriminating rule found),
+   and what the ~40% of non-matching candidates that aren't even in the loose
+   geographic neighborhood of their own tile actually are (plausibly pure scan
+   false positives, not confirmed). A future session needs a genuinely new idea
+   here, not more of the same trial-and-error.
 2. ~~`mp0` geo-index coverage~~ **SOLVED** — full-file run, 194,650/194,705 tiles
    (99.97%), ~55s; see §3.6 for the structural fix (`_looks_like_real_chain()`
    verification, needed because `mp0`'s sub-index is dense rather than sparse).
 3. **True tile bounding boxes** — `find_tile_for_coord()` currently does
    nearest-anchor matching, not exact containment, since no tile extent/size was
-   recovered (the still-undecoded `0x02-0x17` per-tile header is the likely home for
-   this). A coordinate near a tile boundary might resolve to the wrong neighboring
-   tile as a result.
+   recovered. (The `0x02-0x17` per-tile header once suspected as "the likely home for
+   this" is now fully accounted for by `decode_tile_header()` — see §3.6 — and none of
+   its 12 words are a width/height; that lead is closed, not just unexplored.) A
+   coordinate near a tile boundary might resolve to the wrong neighboring tile as a
+   result.
+
+   **UPDATE, a later session (user-asked "can we try crack this")**: no stored
+   width/height FIELD was found, but a real, validated, PRACTICAL alternative was —
+   `build_bbox_index()` + `find_tile_for_coord_bbox()` in
+   `research/map_compressed_reader.py`. The insight: real road geometry is clipped
+   exactly at tile boundaries (already established by this project's own cross-tile
+   topology investigation, §8 item 5's "user right-clicked 2 real points... expected
+   connected... different tiles" case — a road cut in half exactly at a tile edge), so
+   a tile's own decoded CONTENT bbox (`decode_features()`'s point-cloud envelope,
+   nothing new to crack) frequently extends all the way to the tile's true edge on any
+   side with a populated neighbor. **Measured, not assumed**, at full-layer scale on
+   BOTH `mg3` (16,203/16,503 tiles) and `mg2` (33,677/34,209 tiles), in BOTH the lon
+   ("right neighbor") and lat ("up neighbor") directions (4 measurements total): median
+   gap between geographically-adjacent tiles' own content bboxes is **8-24 meters** in
+   every case (`mg2` lon: 0.00008°; `mg3` lat: 0.00024°) — roughly half of ALL measured
+   neighbor pairs touch within ~85m, 61-66% within 170m, 72-78% within 425m. Built on
+   this: `find_tile_for_coord_bbox(bbox_index, geo_index, lon, lat, pad_deg=0.002)`
+   prefers a tile whose own (0.002°-padded) content bbox actually contains the query
+   point (breaking ties by smallest bbox area), falling back to the existing plain
+   nearest-anchor `find_tile_for_coord()` when no bbox matches — a **strict**
+   improvement, never worse than before. Validated directly: a real point drawn from
+   inside a known tile's own content correctly resolves back to that exact tile; a
+   point in open ocean (no real data nearby) correctly falls back to nearest-anchor
+   rather than a false containment match; 200 random real interior points sampled
+   across `mg3` resolved to their own originating tile 196/200 times (98%) via the
+   `"bbox"` method, the 4 misses being genuine small-tile-inside-larger-tile bbox
+   overlap ambiguity, not a bug. **Honestly scoped**: this is a statistically validated
+   proxy built from already-decodable data, not a decoded format field — a sparse/rural
+   tile whose content doesn't reach a particular edge will still under-report its true
+   extent on that side (exactly why the nearest-anchor fallback exists, rather than
+   ever trusting a bbox *miss* as proof).
+
+   **UPDATE, a still-later session (user-asked "can we make the viewer use it?"): wired
+   into the viewer's real tile-selection path**, `tile_ids_in_bbox()` — see §10's
+   changelog for the full mechanism and validation. `find_tile_for_coord()`/
+   `find_tile_for_coord_bbox()` themselves remain unused by any real caller (no
+   single-point "which tile is this coordinate in" need currently exists in the viewer)
+   — the actual integration point turned out to be `tile_ids_in_bbox()`, the function
+   that decides which tiles to pool for a given VIEWPORT rectangle, which had the exact
+   same "single anchor point" limitation at rectangle scale.
 4. **`eeuz.fea`'s directory and per-record coordinates** — see §3.10 for this
    session's full findings (reusable module `research/feature_reader.py`).
    Headline result: `.fea` is CRACKED at the "what is it" level — a
@@ -7294,6 +7431,173 @@ disk where the OS could page it — accepted as a reasonable cost for a
 desktop tool. With this, the entire map viewer reads every file directly
 out of the 6.48GB `.ISO`; only the road editor (`rns510_gui.py`, which
 needs a real mutable local copy) still extracts anything.
+
+### v32 → v33: `tile_ids_in_bbox()` now also matches on real tile CONTENT, not just a single anchor point — fewer roads silently missing near a viewport/tile edge (this session, user-asked "can we make the viewer use it?")
+
+See §8 item 3 for the underlying `build_bbox_index()` mechanism and its
+full validation numbers (median real neighboring-tile content-bbox gap:
+8-24m, measured on two full layers). `tile_ids_in_bbox()` — the function
+that decides which tiles to pool for the current viewport, called on
+every pan/zoom — used to test only whether each tile's single geo-index
+ANCHOR point fell inside the query rectangle; a tile whose anchor sat
+just outside the viewport but whose real road content still extended
+into it could be silently skipped. Now it's the UNION of that original
+test with a new one: does the tile's own real content bbox OVERLAP the
+query rectangle. The bbox test is a strict superset of the anchor test
+wherever both exist (a tile's bbox always contains its own anchor by
+construction), so this can only ADD tiles the old test missed, never
+drop any — confirmed directly against `CD_8555.ISO`: the exact same
+small query box that returned 1 tile via the old anchor-only test
+returned 4 via the new union test.
+
+Rolled out as **two new background tasks**, deliberately NOT built
+synchronously during "Open Map ISO" (a full decode-every-tile pass,
+timed directly, would have roughly doubled that step's own cost):
+`MapData.load_bbox_indexes()` builds `FAST_LAYERS`' (`mg1`-`mg4`) bbox
+indexes right after `load()` returns (`App._start_bbox_index_load()`,
+same deferred pattern as the existing mp0/POI background loads, a new
+status-bar slot alongside theirs). `mp0`'s own bbox index is built
+separately, as a tail step of the EXISTING `load_heavy_layer()`
+BackgroundTask, deliberately AFTER `mp0_ready` is already set — timed
+directly on the real 194,705-tile file: `build_geo_index()` (what
+`mp0_ready` already waits on) vs. the new `build_bbox_index()` differ by
+close to an order of magnitude (tens of seconds vs. several minutes),
+so mp0 staying exactly as fast to become usable as before was a
+deliberate, measured design choice, not an oversight — the bbox
+improvement simply arrives a few minutes later, picked up automatically
+the moment `self.bbox_indexes` gets an `"mp0"` entry (no new readiness
+flag needed; a missing/incomplete bbox index for any layer just falls
+back to the original anchor-only behavior, never an error). Verified
+end-to-end via a real `MapData` run against `CD_8555.ISO`: `load()`'s
+own timing is unaffected (bbox building genuinely happens later, in the
+background), all 4 `FAST_LAYERS`' bbox indexes build successfully
+(coverage 97-98.5% each, consistent with `build_bbox_index()`'s own
+documented coverage), and the union-test result for a real query is
+confirmed to be an exact superset of the anchor-only result.
+
+### v33 → v34: `tile_ids_in_bbox()` gains a THIRD test — the native, no-decompression geo-hints from the pre-table region — for fast partial coverage while the real bbox index is still building (this session, user-asked "wire it to the viewer")
+
+See §8 item 1 for `scan_native_geo_hints()`'s own mechanism and
+validation (42-46% exact-match coverage against real tile bboxes, on
+two independent files). `tile_ids_in_bbox()` now unions a THIRD test
+onto the existing two: does a tile's native hint (a single real
+coordinate bound, axis-ambiguous by construction, read directly out of
+Continental's own pre-table region with NO tile decompression) fall
+inside the query rectangle on either axis. Purely additive, same "never
+drop a tile the old tests would have kept" philosophy as the bbox test
+before it — a hint can add an extra tile (occasionally a wrong one, on
+the "wrong" axis by coincidence, an accepted asymmetry since a spurious
+extra tile only costs a wasted decode while a missed real one costs
+visibly incomplete map content) but never removes one.
+
+**Where it's actually built**: for `FAST_LAYERS` (`mg1`-`mg4`), inside
+`load()` itself, SYNCHRONOUSLY — unlike the bbox index, this is cheap
+enough (measured 2.7s combined for all 4 layers on the reference disc)
+not to need its own background task, so it's available from the very
+first `tile_ids_in_bbox()` call after "Open Map ISO" returns. For `mp0`,
+inside `load_heavy_layer()` — see the immediately-following v34→v35
+entry for how that ordering changed one session later, making the hint
+scan the very FIRST thing built for `mp0`, not merely "before the bbox
+index." Verified end-to-end via a real `MapData` run: `load()`'s own
+timing is essentially unaffected, hint coverage on all 4 `FAST_LAYERS`
+matches `scan_native_geo_hints()`'s own already-documented numbers
+(45.8-52.5%), and the union result for a real query is confirmed to
+still be a strict superset once bbox+hints are both built, exactly as
+the anchor-only result was a subset of the bbox-only result before it.
+
+### v34 → v35: `mp0_ready` now waits on the native hint scan, not the original `build_geo_index()` — street-level detail usable in ~8s instead of 35-55s+ (this session, user-asked "can we use the primary to be native?" / "do we need the original?")
+
+`load_heavy_layer()` reordered: the native hint scan
+(`scan_native_geo_hints()`, v33→v34 above) now runs FIRST, and `mp0_ready`
+flips right after it — `build_geo_index()` (the original per-tile anchor
+scan) and `build_bbox_index()` (README §8 item 3) both now run
+AFTERWARD, as pure background enhancements, exactly like the bbox index
+already did relative to `mp0_ready` before this change. Justified by a
+real dependency fact, not just speed: `build_geo_index()`'s own anchor
+test in `tile_ids_in_bbox()` is a near-total SUBSET of `build_bbox_index()`'s
+content-bbox test wherever both exist (already established when the bbox
+test was added) — its only unique remaining value is the small sliver of
+tiles (~1-2%) where anchor-finding succeeds but content-bbox computation
+fails, not something worth blocking mp0's entire usability on. Verified
+directly against the real 194,705-tile `mp0` file, timed stage-by-stage
+in one `load_heavy_layer()` run: native hints finish at 7.8s (104,538
+tiles, 53.7% coverage) — **`mp0_ready` now flips here**, roughly 20x
+faster than before; `build_geo_index()` completes at 158.9s (194,650
+tiles) and `build_bbox_index()` at 613.2s (188,944 tiles), both now
+running after mp0 is already usable, unchanged in their own final
+coverage. Every stage still folds into `tile_ids_in_bbox()`'s existing
+UNION test automatically as it completes — no new readiness flags, no
+change to the union's own "never drop a tile" safety property.
+
+### v35 → v36: a THIRD real false edge found and fixed — a contaminated 3-point clique, not a sentinel value this time (this session, user-reported)
+
+Same tile as the two prior false-edge fixes (`mg3` 9237), a different
+mechanism: user right-clicked point 60 ("SITNYAKOVO") reported connected
+to point 211 ("HRISTOFOR KOLUMB"), confirmed 4,215.8m apart. Root cause:
+both share non-zero link-id value 11 with a 3rd point, 213 — but only
+the (211, 213) pair is real (23.4m apart); (60, 211) and (60, 213) are
+false, all three under `mg3`'s 5000m `max_edge_m` cap so the per-edge
+distance filter didn't catch it either. `_shared_value_edges()` used to
+treat any clique of size ≤ `max_group` as fully-connected (every pair an
+edge) — correct for a genuine small junction, wrong here, where point 60
+is simply an unrelated point that happens to also carry value 11. The
+exact same shape — one short real pair plus far outliers sharing the
+same value — was already on record in `resolve_topology_adjacency()`'s
+own docstring from an earlier ground-truth investigation ("one genuinely
+short real edge (38m) with several implausibly long ones (869m-1,345m)"
+for a different tile's own value-11 clique), so this isn't a one-off.
+**Fixed**: for any clique of size > 2, `_shared_value_edges()` now keeps
+only the pairs within `max(200m, 5× the clique's own shortest pairwise
+distance)` of each other, instead of accepting every pair uncritically —
+a real junction's members are mutually close (passes cleanly); a
+contaminated clique's outlier is dramatically farther from the real pair
+than the real pair's own span (cleanly rejected). Re-validated: both
+human-verified ground-truth tiles unchanged (`mg2` 20597 still 16/16,
+`mp0` 91124 still 16/18), all 6 previously-confirmed false edges still
+excluded, this new case excluded too, AND the real sibling edge (211,
+213) within the same contaminated clique confirmed to survive the fix
+(`pt211`→`[209, 213]`, `pt213`→`[211, 214]`, `pt60`→`[62, 63, 64]` —
+only the false connections removed). New regression test in
+`test_map_viewer.py` ("8d-ter").
+
+### v36 → v37: REVERTED v33's third `tile_ids_in_bbox()` test and v34's `mp0_ready` reordering — a real, user-reported performance regression, honestly measured and walked back
+
+User report: "Finding tiles covering the visible area..." hung for a
+long time with all layers enabled on a first search at a new location.
+Root cause, measured directly against the real disc: v33's native-hint
+test in `tile_ids_in_bbox()` (test the tile's single hint coordinate
+against the query bbox's lon range OR lat range, axis-ambiguous by
+construction) inflated the pooled tile count **4.5-10x** over the
+anchor-only test at a realistic Sofia-area viewport (`mg1` 41→203,
+`mg2` 23→109, `mg3` 13→54, `mg4` 6→24; `mp0` 563-683 hint-only tiles at
+the same viewport, no anchor comparison available since that's exactly
+the gap the reordering was meant to help). **Confirmed structural, not
+a large-viewport edge case**: re-measured at box sizes from a ~170m
+span up to ~21km, the 4.5-10x inflation held at every scale tested,
+including the smallest. Every one of those extra tiles costs a real
+`decode_tile()` call — this is exactly the reported slowdown, not a
+separate issue. The original small-test-box validation (v33's own
+entry, "1 tile→4 tiles") wasn't wrong, it just wasn't representative:
+a query box small enough that "either axis, independently" stays
+tight enough to behave like real 2D containment is not what a normal
+viewport looks like.
+
+**Reverted, not patched**: `tile_ids_in_bbox()` is back to the 2-test
+union (anchor + content-bbox) from before v33's hint test; `load_
+heavy_layer()`'s `mp0_ready` is back to waiting on `build_geo_index()`
+(v32's ordering), since without the hint test consuming it, flipping
+`mp0_ready` right after the much-faster hint scan (v34) would leave
+`mp0` "ready" but functionally empty for the ~150s gap until `geo_
+index` itself finishes — worse than the honest "still loading" state
+this restores. `scan_native_geo_hints()` itself is UNCHANGED and still
+a real, validated capability (`research/map_compressed_reader.py`,
+README §8 item 1) — `load_heavy_layer()` still builds it into `self.
+native_hints` for possible future use (cheap, ~4.35s, no longer gates
+anything) — it was specifically its use as a blind either-axis
+viewport filter that didn't hold up at real scale. Re-verified directly
+against the real disc: the same viewport that returned 203/109/54/24
+tiles (`mg1`/`mg2`/`mg3`/`mg4`) with the hint test active now returns
+104/44/26/14 — back to bbox-driven scale.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 

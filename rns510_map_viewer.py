@@ -296,9 +296,16 @@ What changed vs. the v1 raw-lines viewer (see README §10 for full details)
     for real test evidence and measured performance impact.
 
 Known v2 limitations (explicit, not oversights) -- see README §10:
-  - find_tile_for_coord()/tile_ids_in_bbox() are nearest-anchor/anchor-
-    inside-box, not exact tile-boundary containment (no tile extent was
-    ever recovered -- see map_compressed_reader.py).
+  - find_tile_for_coord() is still plain nearest-anchor (no consumer in
+    this file calls it). tile_ids_in_bbox() (a later session, README §8
+    item 3) now UNIONS that anchor-inside-box test with a real content-
+    bbox overlap test (mcr.build_bbox_index(), validated: median real
+    neighboring-tile gap 8-24m at full-layer scale) -- a real, measured
+    improvement (a small query box that returned only 1 tile via the old
+    test returned 4 via the new one, in a real check against CD_8555.ISO),
+    not exact tile-boundary containment either (still no per-tile
+    width/height FIELD was found, see map_compressed_reader.py), but a
+    strict superset of the old behavior, never worse.
   - Road "importance" styling is a vertex/run-length proxy, not a real
     road-class field (still unresolved, see README §3.1/§8).
   - decode_features() still can't split one rendered chain back into
@@ -1305,6 +1312,10 @@ class MapData:
         self.directories = {}       # {layer: mcr.read_directory() result}
         self.geo_indexes = {}       # {layer: {tile_id: (lon, lat, method)}}
         self._geo_arrays = {}       # {layer: (tile_ids_np, lons_np, lats_np)}
+        self.bbox_indexes = {}      # {layer: {tile_id: (lon_min,lon_max,lat_min,lat_max)}} -- README S8 item 3
+        self._bbox_arrays = {}      # {layer: (tile_ids_np, lon_min_np, lon_max_np, lat_min_np, lat_max_np)}
+        self.native_hints = {}      # {layer: {tile_id: coord_degrees}} -- mcr.scan_native_geo_hints(), README S8 item 1
+        self._hint_arrays = {}      # {layer: (tile_ids_np, coord_np)}
 
         self.mp0_ready = False      # True once HEAVY_LAYER's geo-index is built
         self.mp0_building = False   # True while load_heavy_layer() is running
@@ -1532,6 +1543,53 @@ class MapData:
             np.array([gi[t][1] for t in ids], dtype=np.float64),
         )
 
+    def _build_layer_bbox_index(self, layer):
+        """README §8 item 3 "true tile bounding boxes" -- builds this
+        layer's real per-tile CONTENT bbox index (mcr.build_bbox_index(),
+        validated: median neighbor-tile gap 8-24m at full-layer scale,
+        see that function's docstring) and its numpy-vectorized form for
+        tile_ids_in_bbox()'s fast overlap test below. Same one-time,
+        decode-every-tile cost model as _build_layer_geo_index() (they
+        could share one decode pass in principle, but are kept separate
+        calls for now -- see that function's own note about this)."""
+        bi = mcr.build_bbox_index(self.layer_paths[layer])
+        self.bbox_indexes[layer] = bi
+        ids = list(bi.keys())
+        self._bbox_arrays[layer] = (
+            np.array(ids, dtype=np.int64),
+            np.array([bi[t][0] for t in ids], dtype=np.float64),
+            np.array([bi[t][1] for t in ids], dtype=np.float64),
+            np.array([bi[t][2] for t in ids], dtype=np.float64),
+            np.array([bi[t][3] for t in ids], dtype=np.float64),
+        )
+
+    def _build_layer_native_hints(self, layer):
+        """README §8 item 1 "Continental's own geo-index prefix region" --
+        builds this layer's native geo-index hints (mcr.
+        scan_native_geo_hints(), README §8 item 1's later update):
+        real per-tile coordinate values read DIRECTLY from the pre-table
+        region with NO tile decompression at all, ~20-100x faster than
+        _build_layer_geo_index()/_build_layer_bbox_index() (measured
+        0.15-1.46s for the 4 FAST_LAYERS combined on the reference disc,
+        vs tens of seconds for the geo-index alone). Cheap enough to run
+        SYNCHRONOUSLY inside load() for FAST_LAYERS (unlike the bbox
+        index, deliberately NOT deferred to its own background task) --
+        see load()'s own call site. **Honestly scoped, per that
+        function's own docstring**: each hint is ONE bound (lon_max or
+        lat_max, not distinguishable from the value alone), validated at
+        only ~42-46% exact-match coverage against real tile bboxes, and
+        not individually guaranteed for any single tile -- treated
+        accordingly by tile_ids_in_bbox() below (an ADDITIONAL, purely
+        inclusive union test, never a replacement for the existing
+        anchor/bbox tests, and never used to EXCLUDE a tile)."""
+        hints = mcr.scan_native_geo_hints(self.layer_paths[layer])
+        self.native_hints[layer] = hints
+        ids = list(hints.keys())
+        self._hint_arrays[layer] = (
+            np.array(ids, dtype=np.int64),
+            np.array([hints[t] for t in ids], dtype=np.float64),
+        )
+
     def load(self, progress=None):
         """Resolve every FAST_LAYERS tile layer's byte extent directly
         inside the ISO (NO extraction to a temp file -- see
@@ -1580,6 +1638,10 @@ class MapData:
             if progress:
                 progress("%s geo-index ready: %d/%d tiles resolved." % (
                     layer, len(self.geo_indexes[layer]), self.directories[layer]["num_tiles"]))
+            self._build_layer_native_hints(layer)
+            if progress:
+                progress("%s native geo-hints: %d/%d tiles." % (
+                    layer, len(self.native_hints[layer]), self.directories[layer]["num_tiles"]))
 
         if progress:
             progress("Loading road name-search index (eeu.rd / eeu.il)...")
@@ -1612,7 +1674,16 @@ class MapData:
         "Open Map ISO". Sets mp0_ready=True on success; until then,
         available_layers() simply omits "mp0" from the pool -- once it
         flips True, mp0's tiles are folded ADDITIVELY into the same view
-        on the next reload (see App._maybe_reload_viewport)."""
+        on the next reload (see App._maybe_reload_viewport). ALSO builds
+        mp0's own bbox index (README §8 item 3) and native geo-hints
+        (README §8 item 1) as tail steps, AFTER mp0_ready is already True
+        -- see tile_ids_in_bbox()'s docstring for how the bbox index
+        arrives transparently once ready, and for why the native hints
+        are no longer consumed by that method at all (a real regression,
+        found and reverted in a later session: briefly making mp0_ready
+        wait on the hint scan instead of geo_index was tried and also
+        reverted, for the same reason -- see this method's own inline
+        comment at the `mp0_ready = True` line for the full history)."""
         self.mp0_building = True
         try:
             layer = HEAVY_LAYER
@@ -1636,10 +1707,80 @@ class MapData:
             if progress:
                 progress("Street-level geo-index ready: %d/%d tiles resolved." % (
                     len(self.geo_indexes[layer]), self.directories[layer]["num_tiles"]))
+            # mp0_ready flips True HERE, deliberately BEFORE the bbox index
+            # build below -- mp0 must stay exactly as fast to become usable
+            # as it always has been (README §8 item 3's bbox index adds a
+            # real extra ~6 minutes on the full 194,705-tile mp0, measured
+            # directly this session; nothing should wait on that). The bbox
+            # index is a pure quality improvement for tile_ids_in_bbox()'s
+            # UNION test (see that method's own docstring) that arrives
+            # later, picked up automatically the moment self.bbox_indexes
+            # gets an "mp0" entry -- no separate readiness flag needed.
+            #
+            # REVERTED, a still-later session (real user-reported
+            # regression): this briefly flipped mp0_ready right after the
+            # much-faster scan_native_geo_hints() instead (README's own
+            # v34->v35 entry), on the theory that geo_index's anchor test
+            # was a near-total subset of the bbox test and thus not worth
+            # blocking on. That reordering only made sense paired with
+            # tile_ids_in_bbox()'s 3rd (hint-based) union test, which was
+            # ALSO reverted in this same session (see that method's own
+            # docstring for why -- a real 4.5-10x pooled-tile-count
+            # inflation, confirmed structural, not a viewport-size edge
+            # case). Without that test, flipping mp0_ready before
+            # geo_index would leave mp0 "ready" but functionally EMPTY for
+            # the ~150s gap until geo_index itself finishes -- worse than
+            # the honest "still loading" state this reversion restores.
             self.mp0_ready = True
+            # scan_native_geo_hints() itself is unchanged and still built
+            # here -- a real, validated capability (research/
+            # map_compressed_reader.py, README §8 item 1) worth having
+            # available in self.native_hints for possible future use, even
+            # though tile_ids_in_bbox() no longer consumes it. Cheap
+            # (~4.35s on the full file) and no longer gates anything.
+            if progress:
+                progress(
+                    "Scanning native geo-hints for %d street-level tiles..." %
+                    self.directories[layer]["num_tiles"])
+            self._build_layer_native_hints(layer)
+            if progress:
+                progress("Street-level native geo-hints: %d/%d tiles." % (
+                    len(self.native_hints[layer]), self.directories[layer]["num_tiles"]))
+            if progress:
+                progress(
+                    "Building street-level bbox index (this can take several "
+                    "minutes -- mp0 is already usable in the meantime)...")
+            self._build_layer_bbox_index(layer)
+            if progress:
+                progress("Street-level bbox index ready: %d/%d tiles." % (
+                    len(self.bbox_indexes[layer]), self.directories[layer]["num_tiles"]))
             return True
         finally:
             self.mp0_building = False
+
+    def load_bbox_indexes(self, progress=None):
+        """Build FAST_LAYERS' bbox indexes (README §8 item 3, "true tile
+        bounding boxes") -- mp0's own is built separately, as a tail step
+        of load_heavy_layer() (see its docstring for why). Meant to run
+        in its OWN BackgroundTask, kicked off right after `load()`
+        returns (see App.on_open_iso/_start_bbox_index_load), same
+        deferred pattern as load_heavy_layer()/load_poi_data() so it
+        never blocks "Open Map ISO" -- measured at roughly the same cost
+        as FAST_LAYERS' own geo-index build (a few seconds to tens of
+        seconds combined, `mg1` being the largest). `tile_ids_in_bbox()`
+        picks up each layer's bbox index automatically the moment this
+        populates `self.bbox_indexes[layer]` -- no readiness flag to
+        check, unlike mp0_ready/poi_ready (a missing/incomplete bbox
+        index just means that layer's viewport query falls back to the
+        original anchor-only test, never an error)."""
+        for layer in FAST_LAYERS:
+            if progress:
+                progress("Building %s bbox index..." % layer)
+            self._build_layer_bbox_index(layer)
+            if progress:
+                progress("%s bbox index ready: %d/%d tiles." % (
+                    layer, len(self.bbox_indexes[layer]), self.directories[layer]["num_tiles"]))
+        return True
 
     def load_poi_data(self, progress=None):
         """Locate `EDB/POI/POI.DB3` (~1.1GB) inside the ISO and decode
@@ -1749,24 +1890,85 @@ class MapData:
     # ------------------------------------------------------------- tiles
 
     def tile_ids_in_bbox(self, layer, lon_min, lon_max, lat_min, lat_max):
-        """tile_ids in the given layer whose geo-index anchor falls inside
-        the given bbox (vectorized over that layer's whole geo-index with
-        numpy). Returns [] for a layer with no geo-index yet (e.g. mp0
-        before load_heavy_layer() finishes -- callers should not normally
-        hit this since available_layers() only includes "mp0" once
-        mp0_ready is True, but it's handled defensively rather than
-        raising)."""
-        arrays = self._geo_arrays.get(layer)
-        if not arrays:
-            return []
-        tile_ids, lons, lats = arrays
-        if len(tile_ids) == 0:
-            return []
-        mask = (
-            (lons >= lon_min) & (lons <= lon_max) &
-            (lats >= lat_min) & (lats <= lat_max)
-        )
-        return [int(t) for t in tile_ids[mask]]
+        """tile_ids in the given layer that could plausibly have content
+        visible in the given viewport bbox -- the UNION of two tests,
+        each vectorized with numpy over this layer's whole index:
+
+          1. (original test, kept as a floor) the tile's single geo-index
+             ANCHOR point falls inside the query bbox.
+          2. (README §8 item 3, a later session) the tile's own real
+             CONTENT bbox (`build_bbox_index()`, validated: neighboring
+             tiles' content generally touches within tens of meters --
+             see that function's docstring) OVERLAPS the query bbox.
+
+        Test 2 is a superset of test 1 whenever both indexes have an
+        entry for a tile (a tile's content bbox always contains its own
+        anchor by construction, so "anchor in query bbox" implies
+        "content bbox overlaps query bbox") -- it exists because test 1
+        ALONE can silently miss a tile whose single anchor point happens
+        to sit just outside the viewport while its real road content
+        still extends into it (a real, previously-unaddressed source of
+        roads going missing right at a viewport/tile edge during pan).
+        The union (not a plain replacement) is a deliberate safety
+        margin: it keeps working exactly as before for any tile whose
+        bbox index entry is missing (e.g. a layer whose bbox index
+        hasn't finished building yet, or an individual tile decode_
+        features() found no points for) rather than silently dropping
+        it. Returns [] if neither index has any entries for this layer
+        (e.g. mp0 before load_heavy_layer() finishes -- callers should
+        not normally hit this since available_layers() only includes
+        "mp0" once mp0_ready is True, but it's handled defensively
+        rather than raising).
+
+        **A THIRD test (README §8 item 1's `scan_native_geo_hints()`,
+        the tile's own single native geo-hint) was added here in a
+        later session and then REMOVED again in a still-later one, real
+        user-reported regression: it tested a hint coordinate against
+        the query bbox's lon range OR lat range independently (axis-
+        ambiguous by construction, since a hint alone doesn't say which
+        axis it is) -- measured directly against the real disc at a
+        realistic Sofia-area viewport, this inflated the pooled tile
+        count 4.5-10x over the anchor-only test (e.g. `mg1` 41->203,
+        `mp0` -- no anchor comparison available at that point in the
+        gap this was meant to help, but 563-683 hint-only tiles at the
+        same viewport), confirmed structural rather than a large-
+        viewport edge case (the SAME 4.5-10x range held at every box
+        size tested, from a ~170m box up to ~21km). Each spurious extra
+        tile costs a real `decode_tile()` call, which is exactly what
+        the user-reported "Finding tiles covering the visible area..."
+        slowdown (all layers enabled, first search at a location) turned
+        out to be. `scan_native_geo_hints()` itself is unchanged and
+        still a real, validated capability (research/
+        map_compressed_reader.py) -- it was specifically ITS USE HERE,
+        as a blind either-axis viewport filter, that didn't hold up.
+        See the matching revert of `load_heavy_layer()`'s `mp0_ready`
+        ordering (back to waiting on `build_geo_index()`, README's own
+        v35->v36 entry) -- without this test, flipping `mp0_ready` right
+        after the hint scan would have left mp0 "ready" but functionally
+        empty for the ~150s gap until `build_geo_index()` finishes."""
+        result_ids = set()
+
+        geo_arrays = self._geo_arrays.get(layer)
+        if geo_arrays:
+            tile_ids, lons, lats = geo_arrays
+            if len(tile_ids):
+                mask = (
+                    (lons >= lon_min) & (lons <= lon_max) &
+                    (lats >= lat_min) & (lats <= lat_max)
+                )
+                result_ids.update(int(t) for t in tile_ids[mask])
+
+        bbox_arrays = self._bbox_arrays.get(layer)
+        if bbox_arrays:
+            tile_ids, t_lon_min, t_lon_max, t_lat_min, t_lat_max = bbox_arrays
+            if len(tile_ids):
+                mask = (
+                    (t_lon_max >= lon_min) & (t_lon_min <= lon_max) &
+                    (t_lat_max >= lat_min) & (t_lat_min <= lat_max)
+                )
+                result_ids.update(int(t) for t in tile_ids[mask])
+
+        return list(result_ids)
 
     def active_tile_bboxes(self):
         """"Show tile boundaries" feature (later session, prompted by
@@ -3290,6 +3492,14 @@ class App:
                  font=("Segoe UI", 8)).pack(side="left", padx=8)
         self._status_divider(status_bar)
 
+        # Same pattern, for the background per-layer bbox index build
+        # (README §8 item 3, "true tile bounding boxes") -- see
+        # App._start_bbox_index_load().
+        self.bbox_status_var = tk.StringVar()
+        tk.Label(status_bar, textvariable=self.bbox_status_var, bg=STATUS_BAR_BG, fg="#8b93a0",
+                 font=("Segoe UI", 8)).pack(side="left", padx=8)
+        self._status_divider(status_bar)
+
         # Distance/scale indicator (photo #3/#4's rightmost segment) --
         # this tool derives it from the current view scale, see
         # _update_scale_bar()/nice_scale_step().
@@ -3598,6 +3808,7 @@ class App:
             self._set_controls_enabled(True)
             self._start_heavy_layer_load()
             self._start_poi_load()
+            self._start_bbox_index_load()
 
         BackgroundTask(self.root, do_load, self._set_status, done).start()
 
@@ -3623,6 +3834,33 @@ class App:
             self._redraw()
 
         BackgroundTask(self.root, do_load, lambda msg: self.poi_status_var.set(msg), done).start()
+
+    def _start_bbox_index_load(self):
+        """Kick off FAST_LAYERS' bbox-index build (README §8 item 3, "true
+        tile bounding boxes") in its OWN background BackgroundTask, same
+        deferred pattern as _start_poi_load()/_start_heavy_layer_load()
+        above -- the user can search/pan/zoom the whole time this runs
+        (typically tens of seconds, much cheaper than mp0's own bbox
+        index, which load_heavy_layer() builds separately as its own
+        tail step -- see that method's docstring). On success, re-checks
+        the current viewport so any tile tile_ids_in_bbox()'s new UNION
+        test newly qualifies gets folded in right away, with no user
+        action needed -- same reasoning as _start_heavy_layer_load()'s
+        own post-success refresh."""
+        self.bbox_status_var.set("Refining tile boundaries in the background...")
+
+        def do_load(progress):
+            return self.data.load_bbox_indexes(progress=progress)
+
+        def done(result, error):
+            if error:
+                self.bbox_status_var.set("Tile-boundary refinement unavailable (%s)." % error)
+                return
+            self.bbox_status_var.set("Tile boundaries refined.")
+            self.root.after(4000, lambda: self.bbox_status_var.set(""))
+            self._maybe_reload_viewport(force=True)
+
+        BackgroundTask(self.root, do_load, lambda msg: self.bbox_status_var.set(msg), done).start()
 
     def _start_heavy_layer_load(self):
         """Kick off HEAVY_LAYER ("mp0", street-level detail) extraction +

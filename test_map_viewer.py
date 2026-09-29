@@ -946,6 +946,36 @@ def main():
     log("mg3 tile 9237's user-reported false connected-roads edge confirmed EXCLUDED by the " \
         "zero-sentinel root-cause fix -- PASSED")
 
+    # --- 8d-ter. A THIRD, later-session false edge -- same tile as 8d-bis,
+    #         a DIFFERENT mechanism this time: user right-clicked another
+    #         rendered edge on `mg3` tile_id 9237, point 60 ("SITNYAKOVO")
+    #         <-> point 211 ("HRISTOFOR KOLUMB"), reported and confirmed
+    #         4,215.8m apart -- sharing non-zero value 11 with a 3rd point,
+    #         213, whose own pair (211, 213) is a real 23.4m edge. The
+    #         old code treated this 3-point clique as fully-connected
+    #         (every pair an edge), wrongly wiring 60 to both real members.
+    #         FIXED: `_shared_value_edges()` now filters a clique's own
+    #         pairs by distance-consistency (keep only pairs within
+    #         max(200m, 5x the clique's own shortest pair)) instead of
+    #         accepting every pair uncritically -- see that function's own
+    #         updated docstring. The real (211, 213) edge must survive.
+    mg3_result_2 = data.topo_caches["mg3"][9237][mg3_feat["feature_index"]]
+    mg3_bad_edge_2 = (60, 211)
+    mg3_real_edge_2 = (211, 213)
+    mg3_present_2 = mg3_bad_edge_2 in set(mg3_result_2["edges"])
+    mg3_real_present_2 = mg3_real_edge_2 in set(mg3_result_2["edges"])
+    log("false-edge check (SITNYAKOVO <-> HRISTOFOR KOLUMB, reported ~4216m apart, mg3 clique " \
+        "case): mg3 tile 9237 feature %d, edge %s -- still present=%s (must be False); real edge " \
+        "%s -- present=%s (must be True)" % (
+            mg3_feat["feature_index"], mg3_bad_edge_2, mg3_present_2, mg3_real_edge_2, mg3_real_present_2))
+    assert not mg3_present_2, \
+        "mg3 tile 9237: the reported false edge %s (shared value 11, contaminated clique) must be " \
+        "excluded by the clique distance-consistency fix" % (mg3_bad_edge_2,)
+    assert mg3_real_present_2, \
+        "mg3 tile 9237: the REAL edge %s (same value-11 clique) must survive the fix" % (mg3_real_edge_2,)
+    log("mg3 tile 9237's 2nd user-reported false connected-roads edge confirmed EXCLUDED, real " \
+        "sibling edge confirmed PRESERVED, by the clique distance-consistency fix -- PASSED")
+
     # --- 8e. Performance: real cost of `want_adjacency=True` at tile-decode
     #         time (README §10 "v9 -> v10" -- "measure, don't assume"). Two
     #         FRESH MapData instances, each loaded independently (so

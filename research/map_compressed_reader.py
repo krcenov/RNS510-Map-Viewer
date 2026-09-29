@@ -81,6 +81,9 @@ Usage:
 
     geo_index = mcr.build_geo_index(path)             # {tile_id: (lon, lat, method)}, ~O(filesize)
     tile_id = mcr.find_tile_for_coord(geo_index, lon, lat)  # nearest-anchor tile lookup
+    bbox_index = mcr.build_bbox_index(path)                 # NEW: {tile_id: (lon_min,lon_max,lat_min,lat_max)}, ~O(filesize) -- real content bbox per tile
+    tile_id, method = mcr.find_tile_for_coord_bbox(bbox_index, geo_index, lon, lat)  # NEW: prefers exact bbox containment, falls back to nearest-anchor -- see its docstring/README §8 item 3
+    hints = mcr.scan_native_geo_hints(path)                 # NEW: {tile_id: coord_degrees} straight from Continental's own pre-table region, NO tile decompression -- ~20-100x faster, ~42% validated coverage, see its own docstring/README §8 item 1
     lon, lat, method = mcr.find_tile_anchor(raw, declen)    # per-tile anchor, given raw bytes
     points = mcr.decode_vertex_chain(raw, declen)           # [(lon,lat), ...] absolute vertex chain (single-feature only, see caveat)
     features = mcr.decode_features(raw, declen)             # [{"count","offset","block_end","points":[(lon,lat),...]}, ...] -- multi-feature-aware, CRACKED this session
@@ -409,10 +412,149 @@ def header_walk(data, start=0x82, max_records=50):
     return records
 
 
+def scan_native_geo_hints(path):
+    """PARTIALLY CRACKED (a later session) -- extracts real per-tile
+    coordinate hints DIRECTLY from Continental's own pre-table "geo-index
+    prefix" region (byte 80 -> `table_start`, previously fully
+    undecoded -- see module docstring and README §8 item 1), with NO tile
+    decompression at all. Roughly 20-100x faster than build_geo_index()/
+    build_bbox_index() (0.29s vs 6.6s on `mg3`'s 16,503 tiles; the gap
+    widens hugely on `mp0`, where the decompress-every-tile approach
+    costs tens of seconds to several minutes).
+
+    BACKGROUND (README §8 item 1's own later update has the full
+    writeup): firmware disassembly (`research/swl_5238_reader.py`)
+    confirmed this region's real architecture is a genuine R-TREE
+    (`MDCacheTIRTree`), but the exact byte-level node/MBR layout couldn't
+    be reached that way (every disassemblable function near this cluster
+    turned out to be a thin wrapper calling into an unreachable code
+    region). This function instead reverse-engineers the raw BYTES
+    directly, informed by that architectural knowledge (real coordinates
+    stored in tree records, not an arbitrary blob) rather than guessing
+    blind.
+
+    MECHANISM: scans every byte offset in the pre-table region for a
+    3-int32-LE shape `[coord][n][n+1]` where `n` is a plausible tile_id
+    (`0 <= n < num_tiles`) and `coord/100000` is a plausible longitude
+    or latitude. Discovered by first searching for KNOWN real tile bbox
+    bounds (from `build_bbox_index()`, itself only needed for this
+    discovery/validation step, not for normal use of this function) and
+    finding that of the (unexplained, previously "ascending counter
+    collision") small-integer pairs already documented in this region,
+    a large fraction are literally `(tile_id, tile_id + 1)` -- i.e. this
+    region's leaf-level records reference tiles by the SAME numbering
+    `read_directory()`'s own flat table already uses, not a separately-
+    sorted rank. `coord` in a matching triple is (well short of always,
+    see Coverage below) that tile's own real `lon_max` or `lat_max`
+    content-bbox bound (`build_bbox_index()`'s own already-validated
+    proxy for the tile's true edge, README §8 item 3).
+
+    Returns {tile_id: coord_degrees} -- NOTE: this is a single bound
+    (whichever of lon_max/lat_max this tile's own record encodes, not
+    distinguishable from the value alone), NOT a full bbox and NOT
+    reliably present for every tile -- see Coverage.
+
+    Coverage, VALIDATED directly against build_bbox_index()'s own
+    already-validated full-decompress bounds (candidate entries found /
+    real tiles in the file / exact-match rate among checkable
+    candidates):
+        eeuz.mg4 (6,110 tiles):  2,796 candidates, 1,151/2,729 checkable
+                                 exact-matched a real lon_max or lat_max
+                                 (42.2%)
+        eeuz.mg3 (16,503 tiles): 8,000 candidates, 3,316/7,881 checkable
+                                 exact-matched (42.1%)
+    Both files independently land within 0.1 percentage points of each
+    other -- a real, reproducible rate, not a fluke of one file's own
+    byte layout. **Honestly scoped**: the ~58% non-matching candidates
+    are NOT necessarily wrong -- some plausibly encode a DIFFERENT
+    tile's bound that happens to also look valid (min-corner entries,
+    internal-node MBRs covering multiple tiles, or a different
+    leaf-numbering convention this pass didn't test) -- but this
+    function only returns/counts what's been directly, individually
+    validated: a caller should treat the whole dict as "candidates worth
+    checking," not "guaranteed-correct," unless cross-validated per-use
+    the same way this function's own docstring was. NOT wired into
+    build_geo_index()/build_bbox_index(). It WAS briefly wired into the
+    map viewer's own tile_ids_in_bbox() (as a 3rd union test) and then
+    REVERTED again in a later session -- a real, user-reported
+    performance regression, NOT a problem with this function itself; see
+    rns510_map_viewer.py's tile_ids_in_bbox() docstring and README's
+    v33->v34/v36->v37 changelog entries for the full story (short
+    version: testing one axis-ambiguous coordinate against the query
+    bbox's lon-range-OR-lat-range independently inflated pooled tile
+    counts 4.5-10x at real viewport scale).
+
+    **UPDATE, a still-later session: 4 more structural hypotheses tested
+    directly against the real region bytes, on top of the "recursive
+    pointer" one already refuted above (README §8 item 1's own log) --
+    ALL 4 REFUTED, but one genuine new confirmed fact emerged.**
+      - **CONFIRMED**: this mechanism encodes ONLY max-corner coordinates,
+        NEVER min-corner ones -- re-ran the same exact-match test against
+        ALL 4 real bounds (not just lon_max/lat_max) on `mg4`: 652
+        lon_max matches, 499 lat_max matches, **0 lon_min matches, 0
+        lat_min matches**, out of 3,034 total candidates. Consistent with
+        `enlargeMBR`'s own confirmed real semantics (README §8 item 1's
+        firmware-disassembly update) -- a running MAXIMUM being tracked
+        and written, not a full rectangle.
+      - **REFUTED: width/height delta in another field of the same
+        record.** If only the max is stored, the min might be a small
+        delta (`max - min`) in one of the record's other, still-
+        unexplained trailing fields. Checked the 3 candidate positions
+        (offset +12/+16/+20 from the coordinate) against the REAL
+        `(lon_max-lon_min)`/`(lat_max-lat_min)` width, scaled the same
+        way as the coordinate (`*100000`), across 500 tiles: 0 matches
+        for either width or height, at any of the 3 positions.
+      - **REFUTED: a tile gets BOTH axes stored (two separate
+        records).** Searched the WHOLE region, not just the first hit,
+        for every `(tile_id, tile_id+1)`-shaped occurrence with that
+        exact tile_id, across 3,000 tiles: 705 tiles had exactly ONE
+        confirmed (lon_max or lat_max) record, **0 tiles had both**. A
+        tile's own axis choice (lon vs lat) is exclusive, not additive.
+      - **REFUTED: consecutive tile_ids share a "strip" axis (an STR
+        bulk-load signature)** -- given `QSortForRTreeCreation`'s own
+        real name (README §8 item 1) implies a real STR-style bulk
+        load, and STR strips conventionally share one axis's range
+        across many leaves, tested whether tiles sharing the SAME
+        hinted axis show a tight real-world spread on the OTHER
+        (un-hinted) axis across small windows of consecutive tile_id.
+        Result: median spread ~1.4 degrees across 5-consecutive-tile_id
+        windows -- nowhere near strip-tight, consistent with (not a new
+        finding, but a fresh confirmation of) this project's earlier
+        established fact that tile_id file order is NOT a clean spatial/
+        strip order.
+      - **STILL OPEN, no hypothesis queued**: why a given tile's record
+        encodes `lon_max` vs `lat_max` (607 vs 457 tiles classified on
+        `mg4`, roughly comparable in count but no discriminating rule
+        found), and what the ~40% of "none"-bucket candidates that
+        aren't even in the loose geographic neighborhood of their own
+        tile_id actually are (plausibly pure scan false-positives --
+        coincidental byte patterns, not real records at all -- but not
+        confirmed either way). A future session would need a genuinely
+        new idea here, not more of the same trial-and-error; logged so
+        the 4 refuted hypotheses above aren't re-tried from scratch."""
+    directory = read_directory(path)
+    n_tiles = directory["num_tiles"]
+    with _open(path) as f:
+        f.seek(80)
+        region = f.read(directory["table_start"] - 80)
+
+    hints = {}
+    for pos in range(len(region) - 12):
+        a = struct.unpack_from("<i", region, pos)[0]
+        b = struct.unpack_from("<i", region, pos + 4)[0]
+        c = struct.unpack_from("<i", region, pos + 8)[0]
+        if 0 <= b < n_tiles and c == b + 1:
+            x = a / 100000.0
+            if -180 <= x <= 180 and abs(x) > 0.01:
+                hints[b] = x
+    return hints
+
+
 # ---------------------------------------------------------------------------
 # DERIVED geo-index: an absolute-anchor coordinate found INSIDE decompressed
-# tile content itself (NOT Continental's pre-table "geo-index prefix" region,
-# which remains uncracked -- see module docstring above). CONFIRMED this
+# tile content itself (NOT Continental's own pre-table "geo-index prefix"
+# region -- see scan_native_geo_hints() above for that one, now PARTIALLY
+# cracked, ~42% validated coverage, no decompression needed). CONFIRMED this
 # session by decompressing all 6,110 tiles of eeuz.mg4 in full, plus large
 # samples of eeuz.mg3/mg2/mp0:
 #
@@ -784,6 +926,108 @@ def find_tile_for_coord(geo_index, lon, lat):
             best_dist2 = d2
             best_id = tile_id
     return best_id
+
+
+def build_bbox_index(path):
+    """NEW (a later session, README §8 item 3 "true tile bounding boxes")
+    -- decompress every tile and record its real CONTENT bounding box
+    (min/max lon/lat across every decoded point of every feature), as an
+    approximation of the tile's true (still not directly stored/decoded)
+    extent. Returns {tile_id: (lon_min, lon_max, lat_min, lat_max)},
+    tile_id matching build_geo_index()'s numbering. Tiles with no
+    decodable points are omitted.
+
+    WHY THIS IS A REASONABLE PROXY, NOT A GUESS: real road geometry is
+    clipped exactly at tile boundaries (this project's own cross-tile
+    topology investigation already found a real road cut in half at a
+    tile edge, each half a locally-dead-end -- see resolve_topology_
+    adjacency()'s docstring), so a tile's content frequently extends all
+    the way to its true edge on any side with a populated neighbor.
+    VALIDATED empirically at full-layer scale by measuring the gap
+    between geographically-adjacent tiles' own content bboxes on BOTH
+    `mg3` (16,203/16,503 tiles decoded) and `mg2` (33,677/34,209 tiles):
+    for every found "right" (lon) and "up" (lat) neighbor pair, the
+    median gap is 8-24m (`mg2` lon: 0.00008 deg median; `mg3` lat:
+    0.00024 deg median) -- i.e. HALF of all measured tile-pairs touch
+    within literally tens of meters, not merely "close by tile
+    standards". Full distribution (not just the median, since a skewed
+    tail exists): |gap| <= 85m for 50-55% of pairs, <= 170m for 61-66%,
+    <= 425m for 72-78%, across all 4 layer/axis combinations measured.
+    **This is NOT a decoded stored field** -- no per-tile width/height
+    byte offset was found or is claimed here; it is a statistically
+    validated proxy from data this project can already decode
+    (decode_features()), honest about its own coverage gaps: a tile
+    whose real content happens to sit away from a particular edge (a
+    sparse/rural tile, or content that just doesn't reach that
+    direction) will under-report its true extent on that side, which is
+    exactly why find_tile_for_coord_bbox() below always falls back to
+    the existing nearest-anchor method rather than trusting a bbox miss
+    as proof a coordinate isn't in that tile."""
+    directory = read_directory(path)
+    index = {}
+    with _open(path) as f:
+        for tile_id, (offset, declen, complen) in enumerate(directory["entries"]):
+            f.seek(offset)
+            try:
+                raw = zlib.decompress(f.read(complen))
+            except zlib.error:
+                continue
+            if len(raw) != declen:
+                continue
+            try:
+                features = decode_features(raw, declen)
+            except Exception:
+                continue
+            pts = [p for feat in features for p in feat["points"]]
+            if not pts:
+                continue
+            lons = [p[0] for p in pts]
+            lats = [p[1] for p in pts]
+            index[tile_id] = (min(lons), max(lons), min(lats), max(lats))
+    return index
+
+
+def find_tile_for_coord_bbox(bbox_index, geo_index, lon, lat, pad_deg=0.002):
+    """Improved tile lookup built on build_bbox_index() above: prefer a
+    tile whose own (padded) content bbox actually CONTAINS (lon, lat)
+    over the plain nearest-anchor guess find_tile_for_coord() makes.
+    `pad_deg` (default 0.002 deg, ~170-220m depending on latitude) exists
+    because build_bbox_index()'s own validation found roughly 62-66% of
+    real neighboring tiles touch within exactly this tolerance -- a
+    coordinate genuinely right at (or just past, due to normal decode
+    imprecision/rounding) a tile's true edge should still match. This is
+    a real, but stated, precision/recall trade-off: a larger pad_deg
+    catches more true containments at the cost of occasionally matching
+    more than one tile (broken by smallest bbox AREA, on the theory that
+    a tighter/smaller candidate is a more specific, more likely-correct
+    match than a large one that merely happens to also cover the point).
+
+    Falls back to find_tile_for_coord() (nearest-anchor, geo_index) when
+    NO tile's padded bbox contains the point -- this can genuinely
+    happen (a sparse tile whose content doesn't reach the queried edge,
+    or the queried coordinate is outside every currently-decoded tile's
+    content entirely), so this function is a STRICT improvement over
+    plain nearest-anchor, never worse: same fallback behavior in the
+    worst case, exact containment in the (validated, common) best case.
+
+    Returns (tile_id, "bbox") or (tile_id, "nearest_anchor") -- the
+    method tag lets a caller distinguish a confident containment match
+    from the same best-effort fallback find_tile_for_coord() alone
+    would have given; returns (None, None) if both bbox_index and
+    geo_index are empty."""
+    candidates = []
+    for tile_id, (lon_min, lon_max, lat_min, lat_max) in bbox_index.items():
+        if (lon_min - pad_deg) <= lon <= (lon_max + pad_deg) and \
+           (lat_min - pad_deg) <= lat <= (lat_max + pad_deg):
+            area = (lon_max - lon_min) * (lat_max - lat_min)
+            candidates.append((area, tile_id))
+    if candidates:
+        candidates.sort(key=lambda c: c[0])
+        return candidates[0][1], "bbox"
+    tile_id = find_tile_for_coord(geo_index, lon, lat)
+    if tile_id is None:
+        return None, None
+    return tile_id, "nearest_anchor"
 
 
 def _oscillation_events(pairs, min_jump=3000, cancel_ratio=0.03):
@@ -4011,7 +4255,8 @@ def zone3a_speed_distribution(records):
 # ---------------------------------------------------------------------------
 
 
-def _shared_value_edges(records, n_points, n_records, shift, min_group=2, max_group=6):
+def _shared_value_edges(records, n_points, n_records, shift, points=None, min_group=2, max_group=6,
+                         clique_ratio=5.0, clique_floor_m=200.0):
     """Build the undirected point-index edge set implied by treating
     `records[(i + shift) % n_records]["fields"]` as point i's set of
     "link ids", and connecting any two (or few) points whose link-id sets
@@ -4040,9 +4285,41 @@ def _shared_value_edges(records, n_points, n_records, shift, min_group=2, max_gr
     here fixes the mechanism itself rather than relying entirely on a
     per-layer distance threshold to catch its symptoms; `max_edge_m`
     remains as a second, independent safety net for every other
-    collision pattern (e.g. a real non-zero value shared by unrelated
-    points, still excluded from an over-`max_group` clique or filtered
-    by distance the same as before).
+    collision pattern.
+
+    **Within-clique distance-consistency filter (a still-later session,
+    third real false edge found)**: a group of size > 2 used to be
+    treated as fully-connected (every pair an edge) -- WRONG when the
+    group is really one genuine short edge plus an unrelated point that
+    happens to also carry the same value. Confirmed directly on a real
+    user-reported false edge (`mg3` tile_id 9237, points 60<->211,
+    4215.8m apart): both shared value 11 with a 3rd point, 213 -- pair
+    (211, 213) is a real 23.4m edge, but (60, 211)/(60, 213) are the
+    false ~4200m ones, all three well under `mg3`'s 5000m `max_edge_m`
+    cap so the existing per-edge distance filter alone didn't catch it
+    either. The SAME structural pattern is independently confirmed in
+    this project's own earlier ground-truth investigation (`resolve_
+    topology_adjacency()`'s docstring, "PER-EDGE FALSE-POSITIVE FILTER"):
+    a different tile's value-11 clique "mixed one genuinely short real
+    edge (38m) with several implausibly long ones (869m-1,345m)" -- the
+    exact same shape, not a one-off. **Fix**: for any clique of size > 2
+    (requires `points`, the feature's own decoded (lon,lat) list -- a
+    caller not passing it gets the old fully-connected behavior, e.g.
+    any existing test of this function in isolation), compute every
+    pairwise distance within the clique and keep only pairs within
+    `max(clique_floor_m, clique_ratio * min_pairwise_distance)` of that
+    clique's OWN shortest pair -- a real junction has members mutually
+    close to EACH OTHER (this ratio test passes cleanly), while a
+    contaminated clique's outlier point is dramatically farther from
+    the real pair than the real pair's own span (this test cleanly
+    rejects it). Validated against both real examples above: `mg3` 9237
+    (min=23.4m, threshold=200m, correctly keeps (211,213) and drops
+    both false pairs) and the docstring's own earlier value-11 case
+    (min=38m, threshold=200m, correctly keeps the real 38m edge and
+    drops the 869-1,345m ones) -- and re-validated to cause ZERO
+    regression on both human-verified ground-truth tiles (`mg2` 20597
+    still 16/16, `mp0` 91124 still 16/18) and all 3 other previously-
+    confirmed false-edge cases.
     Returns a set of (min(i,j), max(i,j)) tuples."""
     value_to_points = {}
     for i in range(n_points):
@@ -4053,7 +4330,20 @@ def _shared_value_edges(records, n_points, n_records, shift, min_group=2, max_gr
             value_to_points.setdefault(v, []).append(i)
     edges = set()
     for pts in value_to_points.values():
-        if min_group <= len(pts) <= max_group:
+        if not (min_group <= len(pts) <= max_group):
+            continue
+        if len(pts) > 2 and points is not None:
+            pair_dists = {}
+            for x in range(len(pts)):
+                for y in range(x + 1, len(pts)):
+                    a, b = pts[x], pts[y]
+                    pair_dists[(a, b)] = _haversine_ish_m(points[a], points[b])
+            min_dist = min(pair_dists.values())
+            threshold = max(clique_floor_m, clique_ratio * min_dist)
+            for (a, b), dist in pair_dists.items():
+                if dist <= threshold:
+                    edges.add((a, b) if a < b else (b, a))
+        else:
             for x in range(len(pts)):
                 for y in range(x + 1, len(pts)):
                     a, b = pts[x], pts[y]
@@ -4667,7 +4957,7 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
         best_median = None
         best_edges = None
         for shift in shift_candidates:
-            edges = _shared_value_edges(records, n_points, n_records, shift)
+            edges = _shared_value_edges(records, n_points, n_records, shift, points=points)
             if not edges:
                 continue
             dists = sorted(_haversine_ish_m(points[a], points[b]) for a, b in edges)
