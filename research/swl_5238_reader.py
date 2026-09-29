@@ -109,6 +109,57 @@ itself confirmation this is a real integrity-checked deployment format,
 not an ad-hoc file dump.
 
 ============================================================================
+`BLSCRIPT.CFG` -- CRACKED (a still-later session, user-asked "what is
+this"): the BOOTLOADER's own config, ONE STAGE EARLIER than
+`DLSCRIPT.TXT` below -- genuinely new, disc-root-level, not per-variant
+============================================================================
+Sits at the disc ROOT (`RNS510_5238_MOD_C3_C4\\BLSCRIPT.CFG`), not inside
+any `APPS/SILVER_1/<variant>/CONFIG/` folder like `DLSCRIPT.TXT` -- there
+is exactly ONE of these per disc, shared across every project variant.
+Its own header comment says exactly what it is and settles its place in
+the boot chain without any guessing needed: "The BlScript will be parsed
+by the bootloader only. This is the file only where the bootloader is
+dependent to. It describes the process how to load the right SWL
+application and what to show during SWL application loading on the
+screen." I.e. this runs BEFORE any `DLSCRIPT.TXT`-driven install step
+below -- the bootloader reads this file directly, off raw hardware
+detection, before the SWL (Software Loading) application itself even
+exists on the unit.
+
+Real, fully self-documented grammar (a `[FORMAT]` section spells out its
+own field meanings): a `[HW_INFO]` block declares 3 named hardware
+registers read via `<AREA ID>.<GIID>` pairs (`HW_MODULE_ID = 01.08`,
+`HW_VERSION = 01.01`, `CUSTOMER_PRODUCT_ID = 01.07`), then a series of
+`[<CUSTOMER_PRODUCT_ID>.<HW_MODULE_ID>.<HW_VERSION BEGIN>.<HW_VERSION
+END>]` section headers (wildcard hex ranges, e.g.
+`[0x000201XX.0x00010002.0x00000000.0xFFFFFFFF]`,
+`[0x0002XXXX.0xXXXXXXXX.0x00000000.0xFFFFFFFF]`,
+`[0x0005XXXX...]`, `[0x0006XXXX...]` -- 4 total on this disc, one per
+matched hardware family) select which section's script body the
+bootloader runs for a given detected unit. Each body is a tiny drawing +
+load script: `BAR`/`TEXT`/`PROGRESS_BAR` directives paint a progress
+screen (the `TEXT` directives pull live version text straight out of
+`VERSION.TXT`'s own `#CD:`/`#DATE:` fields via a
+`<path;"search string">` lookup syntax -- the SAME `VERSION.TXT` this
+module's own "Disc identity" section already parses), then
+`LOAD_FLASH_IMAGE //cddos/SWL/SILVER_1/RNSMIDEC/SWL/SWL.FLI` flashes a
+DIFFERENT image than `FHDD6.FLI` -- `SWL.FLI`, the standalone bootstrap
+"Software Loading" application -- followed by `SET_BOOT_MODE 0x12` (sent
+twice) and `REBOOT`. All 4 hardware-matched sections on this disc run the
+IDENTICAL body; they differ only in which hardware IDs select them, not
+in behavior.
+
+**This completes the full boot-chain picture, now traced end to end**:
+bootloader reads `BLSCRIPT.CFG` (this file) off raw hardware-register
+detection -> flashes and reboots into `SWL.FLI` (small loader app,
+already separately ruled out elsewhere in this module as unrelated
+map/navicore code, just a bootstrap) -> THAT app is what parses
+`DLSCRIPT.TXT` (below) -> which installs `A_HDD.FRG` and finally
+`FHDD6.FLI` itself (the real navigation firmware this whole project
+reverse-engineers). Nothing left uncracked here -- short, fully
+self-documented, plain text.
+
+============================================================================
 `DLSCRIPT.TXT` -- CRACKED: a real, self-documenting flash-programming
 script language (genuinely new; not covered by README S2)
 ============================================================================
@@ -1211,6 +1262,186 @@ region's byte-level format from a completely different angle than
 disassembly -- informed by, but not dependent on, the architectural
 finding above.
 
+**UPDATE, a still-later session: a full "try every remaining firmware
+asset on disk" sweep -- COMPREHENSIVE, and the 9MB+ wall CONFIRMED
+STRUCTURAL, not an artifact of one specific file** (user-asked
+"disassemble the whole firmware, check all files and folders"). Motivated
+by a road-classification investigation (README §2.6's own real-hardware-
+ground-truth-backed thread) that independently hit the exact same wall
+for `db_seg_rank_V004`/`db_seg_speed_V004` etc -- confirmed zero
+resolvable code address, same as `db_vid_get_map_id_V000` earlier.
+Checked every other firmware-adjacent asset actually present on disk:
+  - **2 more real, genuinely different `FHDD6.FLI` builds found and
+    tested** (`RNS510_5274_MOD_C6_C12.iso`, dated Nov 2013;
+    `RNS510_6276_MOD_C14.iso`, dated Mar 2014 -- distinct SHA256 hashes
+    and file sizes from the original `5238` build analyzed everywhere
+    else in this module, confirmed genuinely different compiled
+    outputs, not copies). **The already-recovered `FHDD6_LOAD_BASE`
+    transfers almost perfectly to both**: 26,212/26,215 symbol-table
+    entries resolve (vs. the original's 26,215) -- these builds share
+    the SAME underlying memory layout. `db_seg_rank`/`db_seg_speed`/
+    `db_vid_get_map_id`/`db_get_parcel_dir` are unresolvable in ALL 3
+    builds; `readNodeMP0`/`findNode__14MDCacheTIRTree` land in the
+    unreachable >9MB zone in ALL 3 (shifted by only ~100-150KB build to
+    build -- still deep in unreachable territory every time). A
+    different firmware build is NOT a viable workaround.
+  - **All 13 other embedded-processor firmware files** on all 3 discs
+    (`DAB.FLI`, both `RADIO.FLI` variants, `GATEWAY.FLI`/`GWBOOTL.FLI`/
+    `T5GATEW.FLI` and 4 more 8KB config tables, `MPEGAPPS.FLI`/
+    `MPEGSWL.FLI`, `SWL.FLI`, `SWLBOOT.FLI`) checked for the same
+    `\x00\x10\x05` symbol-table marker and any `db_seg_*`/`MDCacheTIRTree`/
+    `navicore` string presence: NONE found (a handful of unrelated
+    marker-byte coincidences in `DAB.FLI`/`RADIO.FLI`, nothing
+    resembling a real symbol table). Confirmed genuinely separate
+    subsystems (DAB tuner, AM/FM radio, CAN gateway, MPEG decoder) with
+    no map/routing code linked in, exactly as this module's own §2.1
+    architecture summary already stated -- not re-derived from nothing,
+    but now directly, exhaustively confirmed rather than assumed.
+  - **`rns_code_finders/RNS510_code_finder_ver20.exe`/`ver22.exe`**
+    (found alongside the firmware ISOs, plausible-sounding name):
+    confirmed by string extraction to be unrelated .NET/Mono serial-port
+    tools (`serialPort1`, `RNS510_decode`, baud-rate settings) for
+    computing a UNIT'S OWN anti-theft PIN/unlock code over a physical
+    RS232 connection to real hardware -- nothing to do with firmware
+    binary analysis. Ruled out directly, not assumed.
+  - **`maps-tool 2.0.2/maps-tool-2.0.2.exe`** (SD-card deployment tool):
+    16,688 extracted strings, zero matches for any `db_seg_*`/road/
+    `MDCache`/`navicore`/firmware-offset-shaped keyword. Confirmed
+    purely an ISO/file-deployment tool, no firmware-internals content.
+  **Net conclusion**: every firmware-adjacent binary actually present on
+  disk has now been checked, across 3 real firmware builds spanning
+  2012-2014 and every embedded subsystem on each. The wall blocking
+  byte-level road-classification/routing/R-tree/parcel-directory
+  disassembly is consistent everywhere it was tested -- a real,
+  structural property of how this codebase's deeper map/routing/
+  spatial-index logic was linked or stripped, not something a
+  different file, build, or third-party tool on hand can route around.
+  Closing this specific "try more files" avenue as exhausted, not
+  abandoned early.
+
+**UPDATE, a still-later session: 3 MORE native-PowerPC code regions found
+INSIDE the file's own "24-76MB Java classes" territory** (user-asked
+"disassemble the whole firmware... check all files and folders", then
+specifically "lets investigate" a "second/multiple load base" hypothesis
+raised while explaining why the >9MB zone above is unreachable). A full
+`find_prologues()` sweep across the ENTIRE 85.7MB `FHDD6.FLI` (not just
+the known 0-9MB window) found 14,845 total prologue hits and 3 dense
+clusters beyond the known native blob: **~25MB** (374 prologues, file
+offset ~24.5-26.5MB), **~30MB** (362 prologues, ~29.5-31.5MB), and
+**76-82MB** (6,130 prologues -- this one already known to be the VxWorks
+kernel/BSP tail per README S2, not new). Recovering a candidate load base
+per region with the same `lis`/`addi` address-clustering technique used
+for `FHDD6_LOAD_BASE` gave 88.8% (25MB), 88.2% (30MB), and 99.8%
+(76-82MB, strongly confirming that region is real and matches known
+VxWorks/Jeode strings) clustering -- all well above chance.
+
+None of the specific already-known-unreachable target addresses
+(`readNodeMP0`, `findNode__14MDCacheTIRTree`, `db_seg_rank_V004`, etc.)
+resolve into any of these 3 regions under their new candidate bases, and
+none of the 26,215 parsed `\x00\x10\x05` symbol-table entries' own
+addresses land there either -- this new code is a SEPARATE set of
+compilation units from the known native map/navicore blob, not a hidden
+continuation of it. Confirmed by disassembling AT the raw unreachable
+target addresses directly: several decode to literal ASCII mangled-name
+text or non-code pointer data, not instructions -- fresh, independently-
+derived confirmation (not just a repeat) of this module's existing
+"field 4 breaks beyond 9MB" finding.
+
+Whether 25MB/30MB were REAL code (vs. `find_prologues()` false-positives
+inside the Java-class byte territory) was genuinely ambiguous at first:
+plain-string scans of each region found only Java class-path/method-
+signature strings for 25MB and 30MB (DVD/AV-app and ski-resort/weather-
+app content respectively) with zero VxWorks-identifying strings, yet the
+FIRST candidate function tried in the 25MB region reached a clean,
+textbook-perfect `blr` exit (31 straight instructions, epilogue register-
+save offsets exactly matching its own prologue's frame size) -- a result
+that's very hard to get from random misaligned data by chance, but also
+hard to reconcile with an all-Java-strings region. A broader stress test
+(sampling ~40-60 prologues per region, checking what fraction reach a
+clean `blr` within a 4000-byte window) turned out to be UNDISCRIMINATING
+on its own: even the KNOWN-real 0-9MB region only hits a clean exit in
+10.0% of samples in that window, and the confirmed-real 76-82MB VxWorks
+region in 8.3% -- both in the SAME ballpark as the 25MB (1.7%) and 30MB
+(5.0%) candidates (most real functions here are simply bigger than a
+4000-byte window, or `find_prologues()`'s byte-pattern heuristic hits
+plenty of coincidental matches even inside genuinely real code -- this
+metric doesn't separate real from fake here and should not be trusted
+alone for this question in the future).
+
+**The decisive test was mangled C++ symbol-name strings physically
+adjacent to the code**, using the exact same "name string precedes its
+function's prologue by ~100-300 bytes" layout already established for
+the known 0-9MB native blob's own symbol table. Searching each region for
+the project's established cfront-style mangling pattern
+(`Name__NClassArgs`) found 28 unique names in 25MB and **310 unique names
+in 30MB** -- not generic filler, coherent real C++ identifiers. 25MB's
+names are all `Q33vdo3svc*`/`Q33vdo4util*` (a `vdo::svc`/`vdo::util`
+namespace -- Service/Dispatcher/String plumbing), consistent with the
+DVD/AV-app strings found there: a genuinely separate multimedia-subsystem
+module, not misread Java bytecode. **30MB's names are navigation/geometry
+math**: `GEO_PntPnt_UCangle__FPC9geo_coordT0` (angle between two geo-
+coordinates), `GEO_RpntPnt_NCpnt__FPC9geo_coordT0P10cart_coord`
+(geo_coord -> cart_coord conversion), `GON_YXL_Atan__Fll`, plus PTT/
+telephony-looking names (`H_dialed_numbers`, `H_ptt_*`). Nailed down
+exactly: the string `GEO_PntPnt_UCangle__FPC9geo_coordT0` sits at file
+offset 30320528, just 148 bytes before the prologue at file offset
+30320676 -- a 1:1 match on the SAME name-then-prologue convention as the
+known map-native symbol table. **Conclusion: genuinely real, newly-
+identified native code, not a false positive** -- but a FOLLOW-UP pass
+(same session, user-asked "lets dig in") corrected the INITIAL
+characterization of exactly what's here, and that correction is worth
+keeping:
+
+  - Full disassembly of the 30320676 prologue shows a huge register-save
+    frame (r17-r31, 15 registers) and a repeated
+    `lwz r0,OFF(r9); mtlr r0; blrl` idiom several times over (load a
+    vtable slot through an object pointer, call through it) -- the
+    classic C++ virtual-dispatch-through-a-service-object shape, NOT a
+    simple leaf math routine. This is a dispatch/registration routine,
+    not `GEO_PntPnt_UCangle` computing anything itself.
+  - Its `lis`/`addi` address constants were tested against the
+    statistically-recovered candidate base (0xf8ce3df4) and resolve to
+    file offset ~59MB -- outside every known region (25MB, 30MB,
+    76-82MB) and not matching plausible data. That candidate base is
+    NOT reliable for individual address resolution inside this specific
+    function; treat it as a rough regional signal only (it was recovered
+    from aggregate clustering across ~360 prologues' pairs, not
+    validated per-function the way `FHDD6_LOAD_BASE` was).
+  - Searching for `GEO_`/`GON_`/`geo_` mangled names ACROSS THE WHOLE
+    85.7MB FILE (not just this region) found exactly these same 3 hits
+    and no others -- a single isolated cluster, not a spread-out library.
+    Combined with this project's OWN already-documented finding (this
+    module's earlier "a real, large-scale... symbol/EH-descriptor
+    table" section) that the `\x00\x10\x05`-marker tables are
+    exception-handling/RTTI type-descriptor tables, not plain per-
+    function symbol tables, the more accurate read is: these 3 names are
+    TYPE-DESCRIPTOR entries the compiler emitted because something,
+    somewhere in the linked binary, references/catches/registers by
+    these types -- not 3 function bodies sitting at this exact spot.
+  - The immediate neighborhood's OTHER mangled names are from a totally
+    unrelated domain -- `H_dialed_numbers`, `H_ptt_*` (telephony/PTT) --
+    reinforcing that this is a multi-subsystem COMMAND/EVENT DISPATCH
+    REGISTRATION table (binding string command names to native function
+    pointers, the same role as the 25MB region's own
+    `dispatch__Q43vdo3svc10dispatcher10DispatcherlliPCvi`), not a
+    dedicated geo-math library. Geo-coordinate math is real and compiled
+    in (the type names prove it exists), but this specific byte range is
+    where it gets NAMED/REGISTERED for remote/scripted invocation, not
+    necessarily where its own leaf implementation lives.
+
+Practical takeaway for future sessions: don't re-chase "disassemble
+30320676 itself" expecting to find the angle-math implementation there --
+that address is a dispatcher/registration routine. If the actual
+`GEO_PntPnt_UCangle`/`GEO_RpntPnt_NCpnt`/`GON_YXL_Atan` leaf bodies are
+wanted, they're elsewhere and unidentified (their names appear nowhere
+else in the file, so no more string-proximity leads remain for them).
+This was NOT tested against README S2.6's specific open road-
+classification/routing questions; the already-unreachable
+`db_seg_rank`/`readNodeMP0`/R-tree targets specifically do NOT live here
+(confirmed above), so this whole avenue is a real, validated architecture
+finding (a vdo::svc command-dispatcher spanning 25-30MB across multiple
+subsystems) but not a solution to those existing open items.
+
 ============================================================================
 `.FRG`'s own `b"ZZZZ"` container -- CRACKED (a later session): the fixed
 64-byte header, validated exact across 5 independent files spanning 2
@@ -1335,6 +1566,97 @@ error strings follow (`"oversubscribed dynamic bit lengths tree"`,
 etc) -- confirms zlib is linked into the `HOST` image too, consistent
 with this whole project's own already-established zlib-based
 FLAT_COMPRESSED/MAP_COMPRESSED decompression scheme.
+
+============================================================================
+`HOST\SILVER_1\RNSMIDEC\PROG\H_*.FRG` -- DECOMPRESSED (a still-later
+session, user-asked "try decompressing"): the zlib inflate errors above
+were a real clue, not just linked-in dead code -- the `.FRG`'s own bulk
+payload past the tiny embedded script/VxWorks-banner region genuinely IS
+a zlib stream, and it inflates to the real VxWorks BOOTROM/BSP source
+image, `SSW_VW-RNS`
+============================================================================
+A real zlib (RFC 1950, standard `78 xx` header) stream starts at a FIXED
+file offset, **16051**, in every `H_*.FRG` file checked (`H_PQEE.FRG`,
+`H_SB_HDD.FRG`, `H_SE_DAB.FRG`, `H_AK.FRG`) -- `zlib.decompress()` on it
+succeeds immediately, no scanning/guessing needed once the offset is
+known. Consumes exactly 497,964 compressed bytes -> **1,573,904 bytes**
+decompressed, in EVERY file tested (byte-identical: same SHA256 across
+all 4 -- this is ONE shared image, not a per-variant build). The
+decompressed bytes open with `\x94\x21...\x7c\x08\x02\xa6` -- this
+project's own `_PROLOGUE_TAIL` function-prologue signature -- and
+`find_prologues()` finds **3,079 real prologues** in it: genuine,
+substantial, executable PowerPC code, not junk.
+
+**This is the real VxWorks bootrom/BSP (Board Support Package) source
+for the RNS-510 hardware**, self-named directly in its own strings:
+`SSW_VW-RNS` (Siemens-VDO-convention "System SoftWare" + "VW-RNS"
+project code) and `(c) 2005 Siemens VDO Automotive AG` -- this is the
+first DIRECT internal evidence this project has found tracing any of
+this codebase's origin specifically to Siemens VDO Automotive (VW's
+original Tier-1 for this unit, acquired by Continental in 2007 -- this
+project elsewhere only ever says "Continental"). Real, dated internal
+revision-control stamps span 2004-2011 (`$Revision: 1.2/1.4/11313/9902d
+$Date: 2004/04/08 .. 2011-10-05 ...$`), well before this disc's own
+Sep 25 2012 HOST build stamp -- a genuinely long-lived, actively
+maintained codebase, not a one-off.
+
+**Real embedded C source file names** (a live BSP driver/bootstrap file
+list, not guessed): `usrStartup.c`, `usrConfig.c`, `usrCache.c`,
+`usrBreakpoint.c`, `usbPciStub.c`, `sysTffs.c` (True FFS flash
+filesystem), `sysSerial.c`, `sysPciManualConfig.c`, `sysLib.c`,
+`sysGpTimer.c`, `sysGpioDemux.c`, `sysAta.c` (ATA/IDE disk driver --
+almost certainly what the HDD-equipped variants, e.g. `H_SB_HDD.FRG`,
+actually need this for), `ssw_memorymap.c`, `pca9554LedI2CSlave.c` (a
+real I2C LED-driver chip), `nvRamToImageIO.c`, `nvRamToFlash.c`,
+`minicoreStubs.c`, `flashMem.c`, `bootInit.c`, `bootConfig.c`.
+
+**Functionally, this BSP/bootrom owns**: MMU setup and machine-check/
+exception handling (`usrRoot: MMU configuration failed`, real PowerPC
+exception-vector dump strings); a full **PCI bus scanner/enumerator**
+(real Freescale `M5200 PCI Configuration` strings, vendor/device ID and
+BAR-register dumps, `Mediator`/`CoralP` graphics-controller config-space
+access -- CoralP is a real automotive display/graphics controller chip);
+**video-input source switching** (`cpdrVideoInSetSource JN/DVD/TV/RVC`
+-- confirms rear-view-camera, DVD, and TV-tuner video-in muxing lives at
+this layer, driven through real Analog Devices video-decoder chips,
+`ad9883`/`adv7400`, over I2C); **flash/NAND image management with real
+A/B-style versioning** (`BuildFlashTable`, `RF_ProcessImage` --
+"Curently Stored Image Id %d is newer/older than recent one so deleting
+..." -- a real rollback-safe image-update mechanism) against a REAL
+Samsung NAND part number, `K9F12088U0`; and a **detailed physical
+memory map** covering SDRAM/NOR/NAND/PCI0-2/FPGA/PCMCIA regions and
+named image slots (`ImageIO static/dyn`, `InfoLog 1/2` -- this is what
+`INSTALL_ALL_LOG_DB`/`SET_LOG_DB_STATUS` above actually initializes --
+`NAND bad sec. FIB/SWL`, `SplashScr`, `BootLoader 1/2`, `BootStrap 1/2`,
+`Test SW`, `HW Info`, `Bestcomm` [Freescale's real MPC5200 DMA/queue
+engine, confirms the already-known MPC5200B chip ID], `OSNVR`, `ROM FS`,
+`host img`). A live interactive VxWorks debug shell is present too
+(`sp adr,args... Spawn a task`, `version Print VxWorks version info, and
+boot line` -- real WindShell command help text).
+
+**This settles the `HOST` vs `APPS` question directly, not by
+inference**: `HOST` is the base hardware platform layer -- boot,
+low-level drivers, PCI/flash/video-mux/graphics-chip bring-up, the
+persistent fault-log store -- that boots and runs regardless of which
+navigation app variant is installed. It is NOT part of the `navicore`/
+`dbal`/map codebase this project otherwise studies; zero `db_*`/
+`navicore`/`MDCache`-family strings appear anywhere in it. `APPS`
+(`FHDD6.FLI`) is the actual navigation/media application logic layered
+on top.
+
+**Per-variant differences, resolved**: the 3 tested files' outer
+`.FRG` sizes differ (994,140 / 1,286,592 / 1,855,592 bytes) purely
+because of what comes AFTER the shared 497,964-byte compressed BSP
+stream, not because the BSP itself differs. That remainder (772,577 /
+1,341,577 / 480,125 bytes respectively) is a separate, non-zlib,
+tightly-repetitive-pattern binary region containing exactly ONE real
+readable string each -- a genuine VW part number matching this
+project's own already-known `#VwSwPartNumber` format
+(`1T0035680Q`/`3T0035680G`/`7N5035686`) plus the literal product-family
+label `"RNS-MID"` -- consistent with the BSP's own `SplashScr`/`host
+img` named flash regions above: almost certainly a per-variant boot
+splash-screen bitmap + part-number label, not further decoded (its
+exact pixel/palette format wasn't reverse-engineered this session).
 
 ============================================================================
 Other ECU images -- a first pass, real new findings, not deeply pursued
