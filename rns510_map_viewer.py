@@ -1224,10 +1224,12 @@ _NO_ADJACENCY = {
 
 
 class MapData:
-    """GUI-free core: extracts the MAP_COMPRESSED tile layers + eeu.rd/eeu.il
-    (via rns510_core.MapProject) + eeu.cty from the source ISO into local
-    temp files, builds each fast layer's geo-index (README §10) plus
-    in-memory road-name and city caches, and answers "what should be
+    """GUI-free core: resolves the MAP_COMPRESSED tile layers' byte
+    extents directly inside the source ISO (NO extraction -- see load()'s
+    own docstring), extracts eeu.rd/eeu.il (via rns510_core.MapProject) +
+    eeu.cty to local temp files (unchanged, read by other modules), builds
+    each fast layer's geo-index (README §10) plus in-memory road-name and
+    city caches, and answers "what should be
     visible for this viewport" queries -- pooling points from every
     AVAILABLE layer (see available_layers() below) that isn't excluded by
     the caller's `allowed_layers` (the "Show layers" checkboxes, README §10
@@ -1299,7 +1301,7 @@ class MapData:
         os.makedirs(self.workdir, exist_ok=True)
         self.cty_path = os.path.join(self.workdir, "eeu.cty")
 
-        self.layer_paths = {}       # {layer: local extracted eeuz.<layer> path}
+        self.layer_paths = {}       # {layer: rns510_iso.IsoFileRef into the ISO -- no extraction, see load()}
         self.directories = {}       # {layer: mcr.read_directory() result}
         self.geo_indexes = {}       # {layer: {tile_id: (lon, lat, method)}}
         self._geo_arrays = {}       # {layer: (tile_ids_np, lons_np, lats_np)}
@@ -1531,12 +1533,26 @@ class MapData:
         )
 
     def load(self, progress=None):
-        """Extract every FAST_LAYERS tile layer + eeu.cty from the ISO,
-        build each fast layer's geo-index, and load the road-name
-        (eeu.rd/eeu.il, via rns510_core.MapProject) and city (eeu.cty)
-        in-memory caches. Deliberately does NOT touch HEAVY_LAYER ("mp0")
-        -- see load_heavy_layer(), meant to be run afterwards in its own
-        background task so "Open Map ISO" itself stays fast."""
+        """Resolve every FAST_LAYERS tile layer's byte extent directly
+        inside the ISO (NO extraction to a temp file -- see
+        rns510_iso.IsoFileRef/open_file_ref() and map_compressed_reader's
+        `_open()`, README §10/§4 "direct-from-ISO reading"), build each
+        fast layer's geo-index, extract eeu.cty (still a real extraction
+        -- see below), and load the road-name (eeu.rd/eeu.il, via
+        rns510_core.MapProject) and city (eeu.cty) in-memory caches.
+        Deliberately does NOT touch HEAVY_LAYER ("mp0") -- see
+        load_heavy_layer(), meant to be run afterwards in its own
+        background task so "Open Map ISO" itself stays fast.
+
+        Only the MAP_COMPRESSED tile layers (mg1-mg4, mp0) go through
+        IsoFileRef: they're read exclusively via map_compressed_reader.py,
+        whose readers were verified byte-identical whether given a plain
+        path or an IsoFileRef (see the module's own validation). eeu.cty
+        (CtyCache) and eeu.rd/.il/.iof (MapProject/RdCache) are read by
+        OTHER modules that open their own path directly and were not
+        part of this change -- they still get extracted. Only files
+        confirmed to be a SINGLE contiguous extent on this disc can use
+        IsoFileRef at all (see get_file_extent()); every layer here is."""
         if progress:
             progress("Opening ISO...")
         iso = riso.open_tolerant(self.iso_path)
@@ -1544,11 +1560,8 @@ class MapData:
             for layer in FAST_LAYERS:
                 iso_layer_path = LAYER_ISO_PATHS[layer]
                 if progress:
-                    progress("Extracting %s..." % iso_layer_path)
-                path = os.path.join(self.workdir, "eeuz.%s" % layer)
-                with open(path, "wb") as f:
-                    iso.get_file_from_iso_fp(f, iso_path=iso_layer_path)
-                self.layer_paths[layer] = path
+                    progress("Locating %s in the ISO..." % iso_layer_path)
+                self.layer_paths[layer] = riso.open_file_ref(iso, iso_layer_path, self.iso_path)
 
             if progress:
                 progress("Extracting %s..." % CTY_ISO_PATH)
@@ -1586,11 +1599,16 @@ class MapData:
             progress("City cache ready: %d records." % self.cty_cache.record_count)
 
     def load_heavy_layer(self, progress=None):
-        """Extract + geo-index HEAVY_LAYER ("mp0") -- the slow part
-        (README §3.6/§10: build_geo_index() alone measured 34-55s on the
-        reference disc's 2.14GB/194,705-tile mp0). Meant to be run in its
-        OWN BackgroundTask, kicked off right after load() returns (see
-        App.on_open_iso/_start_heavy_layer_load), so it finishes in
+        """Geo-index HEAVY_LAYER ("mp0") -- the slow part (README §3.6/§10:
+        build_geo_index() alone measured 34-55s on the reference disc's
+        2.14GB/194,705-tile mp0). No longer an EXTRACTION step (see
+        load()'s own docstring, "direct-from-ISO reading") -- resolving
+        mp0's byte extent is near-instant regardless of its 2.14GB size,
+        since it's just one pycdlib directory-record lookup, not a copy;
+        `_build_layer_geo_index()`'s own tile-by-tile decompression is
+        genuinely the slow part, unchanged by this. Meant to be run in
+        its OWN BackgroundTask, kicked off right after load() returns
+        (see App.on_open_iso/_start_heavy_layer_load), so it finishes in
         parallel with the user's first search/pan/zoom instead of blocking
         "Open Map ISO". Sets mp0_ready=True on success; until then,
         available_layers() simply omits "mp0" from the pool -- once it
@@ -1603,11 +1621,8 @@ class MapData:
             try:
                 iso_layer_path = LAYER_ISO_PATHS[layer]
                 if progress:
-                    progress("Extracting %s (street-level detail)..." % iso_layer_path)
-                path = os.path.join(self.workdir, "eeuz.%s" % layer)
-                with open(path, "wb") as f:
-                    iso.get_file_from_iso_fp(f, iso_path=iso_layer_path)
-                self.layer_paths[layer] = path
+                    progress("Locating %s (street-level detail) in the ISO..." % iso_layer_path)
+                self.layer_paths[layer] = riso.open_file_ref(iso, iso_layer_path, self.iso_path)
             finally:
                 iso.close()
 
@@ -1823,7 +1838,7 @@ class MapData:
         mode needed it does NOT get adjacency computed here -- see
         `get_tile_adjacency()` for that lazy fallback path."""
         offset, declen, complen = self.directories[layer]["entries"][tile_id]
-        with open(self.layer_paths[layer], "rb") as f:
+        with mcr._open(self.layer_paths[layer]) as f:
             f.seek(offset)
             raw = zlib.decompress(f.read(complen))
         features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
@@ -1913,7 +1928,7 @@ class MapData:
                 raw, declen, features, keep_idx = pre
             else:
                 offset, declen, complen = self.directories[layer]["entries"][tile_id]
-                with open(self.layer_paths[layer], "rb") as f:
+                with mcr._open(self.layer_paths[layer]) as f:
                     f.seek(offset)
                     raw = zlib.decompress(f.read(complen))
                 features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
@@ -1953,7 +1968,7 @@ class MapData:
                 raw, declen, features, keep_idx = pre
             else:
                 offset, declen, complen = self.directories[layer]["entries"][tile_id]
-                with open(self.layer_paths[layer], "rb") as f:
+                with mcr._open(self.layer_paths[layer]) as f:
                     f.seek(offset)
                     raw = zlib.decompress(f.read(complen))
                 features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
@@ -1988,7 +2003,7 @@ class MapData:
                 raw, declen, features, keep_idx = pre
             else:
                 offset, declen, complen = self.directories[layer]["entries"][tile_id]
-                with open(self.layer_paths[layer], "rb") as f:
+                with mcr._open(self.layer_paths[layer]) as f:
                     f.seek(offset)
                     raw = zlib.decompress(f.read(complen))
             result = mcr.extract_district_names(raw)
@@ -2014,7 +2029,7 @@ class MapData:
                 raw, declen, features, keep_idx = pre
             else:
                 offset, declen, complen = self.directories[layer]["entries"][tile_id]
-                with open(self.layer_paths[layer], "rb") as f:
+                with mcr._open(self.layer_paths[layer]) as f:
                     f.seek(offset)
                     raw = zlib.decompress(f.read(complen))
             result = mcr.extract_pronunciations(raw)
@@ -2049,7 +2064,7 @@ class MapData:
                 raw, declen, features, keep_idx = pre
             else:
                 offset, declen, complen = self.directories[layer]["entries"][tile_id]
-                with open(self.layer_paths[layer], "rb") as f:
+                with mcr._open(self.layer_paths[layer]) as f:
                     f.seek(offset)
                     raw = zlib.decompress(f.read(complen))
                 declen = len(raw)
@@ -2092,7 +2107,7 @@ class MapData:
                 raw, declen, features, keep_idx = pre
             else:
                 offset, declen, complen = self.directories[layer]["entries"][tile_id]
-                with open(self.layer_paths[layer], "rb") as f:
+                with mcr._open(self.layer_paths[layer]) as f:
                     f.seek(offset)
                     raw = zlib.decompress(f.read(complen))
                 declen = len(raw)

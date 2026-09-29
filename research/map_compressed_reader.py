@@ -171,8 +171,59 @@ import zlib
 HEADER_MAGIC = b"(*$SIEMENS&^)\x00\x00\x00"
 
 
+def _open(path):
+    """Return a context-manager binary handle for `path`. `path` is
+    normally a plain filesystem path (str/os.PathLike) -- unchanged
+    behavior, opens that file directly. It may ALSO be an
+    `rns510_iso.IsoFileRef` (duck-typed here, no import, to keep this
+    module independent of rns510_iso.py): every reader in this module
+    now opens `path` via this helper instead of calling `open()`
+    directly, so an IsoFileRef transparently
+    presents a windowed view over just its own byte range inside a
+    bigger ISO image -- offset-translated so seek(x)/read(n) behave
+    exactly as if `path` were its own standalone file, letting every
+    caller (find_tiles, decompress_tile, find_first_tile,
+    find_table_start, read_directory, build_geo_index) address a
+    MAP_COMPRESSED layer directly inside the ISO with NO extraction to a
+    temp file first. See rns510_iso.py's IsoFileRef/open_file_ref()."""
+    if hasattr(path, "image_path") and hasattr(path, "offset"):
+        return _iso_ref_handle(path)
+    return open(path, "rb")
+
+
+def _iso_ref_handle(ref):
+    class _Handle:
+        def __enter__(self):
+            self._f = open(ref.image_path, "rb")
+            self._f.seek(ref.offset)
+            self._pos = 0
+            return self
+
+        def __exit__(self, *exc):
+            self._f.close()
+            return False
+
+        def seek(self, pos, whence=0):
+            if whence == 1:
+                pos = self._pos + pos
+            elif whence == 2:
+                pos = ref.length + pos
+            self._pos = pos
+            self._f.seek(ref.offset + pos)
+            return self._pos
+
+        def read(self, size=-1):
+            remaining = max(0, ref.length - self._pos)
+            n = remaining if size is None or size < 0 else min(size, remaining)
+            data = self._f.read(n)
+            self._pos += len(data)
+            return data
+
+    return _Handle()
+
+
 def read_header(path):
-    with open(path, "rb") as f:
+    with _open(path) as f:
         data = f.read(96)
     assert data[:16] == HEADER_MAGIC, f"unexpected magic {data[:16]!r}"
     return {
@@ -193,7 +244,7 @@ def find_tiles(path, max_bytes=30_000_000, min_decompressed=1):
     start of a real, fully-valid zlib stream (checked by actually
     decompressing to EOF). Returns [(offset, decompressed_len), ...] in
     file order. Only reads/holds max_bytes in memory."""
-    with open(path, "rb") as f:
+    with _open(path) as f:
         data = f.read(max_bytes)
 
     candidates = [
@@ -214,7 +265,7 @@ def find_tiles(path, max_bytes=30_000_000, min_decompressed=1):
 
 
 def decompress_tile(path, offset, read_window=2_000_000):
-    with open(path, "rb") as f:
+    with _open(path) as f:
         f.seek(offset)
         chunk = f.read(read_window)
     do = zlib.decompressobj()
@@ -240,7 +291,7 @@ def find_first_tile(path, scan_bytes=16_000_000, start=80, window=300_000):
 
     For eeuz.fea (11.8MB directory) you need scan_bytes >= ~12_000_000; the
     default covers every eeuz.mg1-mg4/mp0 file on the reference disc."""
-    with open(path, "rb") as f:
+    with _open(path) as f:
         f.seek(start)
         data = f.read(scan_bytes)
     for i in range(len(data) - 1):
@@ -266,7 +317,7 @@ def find_table_start(path, first_tile_offset, first_declen, first_complen,
     find_first_tile()) within the region before it. Returns the absolute
     file offset of the table's first record, or None if not found (seen on
     eeuz.fea -- see module docstring; not confirmed to use this format)."""
-    with open(path, "rb") as f:
+    with _open(path) as f:
         f.seek(region_start)
         region = f.read(first_tile_offset - region_start)
     pat = TABLE_ENTRY_STRUCT.pack(first_tile_offset, first_declen, first_complen)
@@ -308,7 +359,7 @@ def read_directory(path):
         )
 
     num_tiles = (first_offset - table_start) // 8
-    with open(path, "rb") as f:
+    with _open(path) as f:
         f.seek(table_start)
         raw = f.read(num_tiles * 8)
 
@@ -693,7 +744,7 @@ def build_geo_index(path):
     since tiles are packed back-to-back with no padding)."""
     directory = read_directory(path)
     index = {}
-    with open(path, "rb") as f:
+    with _open(path) as f:
         for tile_id, (offset, declen, complen) in enumerate(directory["entries"]):
             f.seek(offset)
             try:
@@ -3971,11 +4022,34 @@ def _shared_value_edges(records, n_points, n_records, shift, min_group=2, max_gr
     values shared by MORE than `max_group` points are almost certainly a
     generic/common field value, e.g. a padding 0, not a genuine link id,
     and are dropped so they don't create a clique of bogus edges).
+
+    Literal value 0 is excluded outright, never treated as a link id at
+    all (root-cause fix, a later session -- see resolve_topology_
+    adjacency()'s "PER-EDGE FALSE-POSITIVE FILTER" writeup): it is a
+    padding/unset-field sentinel, confirmed directly on a second real
+    user-reported false edge (`mg3` tile_id 9237, points 61<->227,
+    4555.3m apart, sharing ONLY value 0 in a 4-point clique {39,61,127,
+    227}) that the existing `max_edge_m` distance filter alone did NOT
+    catch, because `mg3`/`mg4` deliberately use a loose 5000m cap (to
+    keep real long highway edges, see the "interleaved parallel chains"
+    update below) -- comfortably above this 4555m false edge. The
+    original 5 user-reported false edges (`mg1`/`mg2`, all sharing value
+    0 or another small collided value, see below) happened to all be
+    caught by that layer's tighter 200m cap, which is why this root
+    cause went unfixed even after being correctly diagnosed. Excluding 0
+    here fixes the mechanism itself rather than relying entirely on a
+    per-layer distance threshold to catch its symptoms; `max_edge_m`
+    remains as a second, independent safety net for every other
+    collision pattern (e.g. a real non-zero value shared by unrelated
+    points, still excluded from an over-`max_group` clique or filtered
+    by distance the same as before).
     Returns a set of (min(i,j), max(i,j)) tuples."""
     value_to_points = {}
     for i in range(n_points):
         idx = (i + shift) % n_records
         for v in records[idx]["fields"]:
+            if v == 0:
+                continue
             value_to_points.setdefault(v, []).append(i)
     edges = set()
     for pts in value_to_points.values():
@@ -4376,6 +4450,43 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     edge observed so far, 1,810m) over a formal derivation -- revisit if
     a real false-positive long edge ever turns up on `mg4`/`mg3`
     specifically.
+
+    ==== UPDATE, a still-later session: the predicted `mg4`/`mg3` false
+    edge above ACTUALLY TURNED UP, and the real root cause was finally
+    fixed (not just masked) ====
+    User-reported, investigated directly: right-clicked a rendered
+    connected-roads edge on `mg3` tile_id 9237 (offset 25,629,760),
+    reported it as wrong -- point 61 (23.35035, 42.68571, "SITNYAKOVO")
+    connected to point 227 (23.38724, 42.65507, unnamed), 4,555.3m apart.
+    Confirmed real and exactly as reported (both points decode exactly to
+    the given coordinates). Root cause: this feature's own winning shift
+    (1, median 53-55m, "confidence": "high") is genuinely correct overall
+    -- but points 61 and 227's records share ONLY the literal value `0`
+    (a 4-point clique: {39, 61, 127, 227}), the exact padding/sentinel
+    pattern this docstring's own "PER-EDGE FALSE-POSITIVE FILTER" section
+    above already named as the root cause of the original 5 false edges.
+    Those 5 were all on `mg1`/`mg2` (200m cap) and happened to all be far
+    enough apart to be caught by `max_edge_m` -- masking the fact that
+    `_shared_value_edges()` was still treating `0` as an ordinary link-id
+    value, not actually excluding it. `mg3`'s deliberately loose 5000m cap
+    (needed for real long highway edges, see above) doesn't catch a
+    4555.3m edge, so this specific false-positive class reached the
+    rendered map. **FIX, this time at the actual source**:
+    `_shared_value_edges()` now excludes literal value `0` outright from
+    ever seeding a shared-value edge (see that function's own updated
+    docstring) instead of relying entirely on `max_edge_m` to catch its
+    symptoms after the fact. Re-validated: both existing ground-truth
+    tiles still resolve every human-verified edge unchanged (`mg2` 20597
+    still 16/16, shift=1, median 49.7m; `mp0` 91124 still 16/18, shift=2,
+    median 40.9m) and all 5 original false-edge cases remain excluded;
+    this `mg3` 9237 (61, 227) edge is now excluded too -- and, unlike the
+    original 5, it's excluded by removing the bogus value from the
+    candidate-edge set entirely (`edges_dropped_implausible` is now 0 for
+    this feature, not >0 -- there is no longer a bad edge for `max_edge_m`
+    to catch after shift selection, because it never gets proposed as a
+    candidate edge at all). `max_edge_m` remains in place as an
+    independent second-line filter for every other collision pattern; it
+    is simply no longer this specific failure mode's only defense.
 
     ==== UPDATE, same later session: tested whether "interleaved parallel
     chains" is a usable, general divided-road DETECTOR -- TESTED AND

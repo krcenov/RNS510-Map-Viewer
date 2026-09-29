@@ -3996,6 +3996,38 @@ copy-protection gate.
 pycdlib gotcha: use `update_file_contents_fp(fp, length, iso_path=...)` (pycdlib 1.20+)
 to replace a file's content with a different size — no need for a remove+re-add dance.
 
+**Direct-from-ISO reading (a later session)** — the map viewer used to *extract* every
+MAP_COMPRESSED tile layer (`eeuz.mg1`-`.mg4`, `.mp0`) to a local temp file before reading
+it (up to ~2.14GB for `mp0` alone). This is no longer necessary: `pycdlib`'s
+`get_file_byte_extents()` exposes a file's absolute `(byte_offset, length)` run(s)
+directly inside the ISO, and every file checked on this disc family — including `mp0`
+(2.14GB) and `eeu.rd` (590MB) — is a **single contiguous extent**, so a tile can be
+decompressed by seeking straight into the 6.48GB `.ISO` file, byte-identical to reading
+from an extracted copy (verified directly: same tile decompressed both ways, identical
+bytes; a full `mg2` directory parse and geo-index build byte/value-identical too).
+Implementation: `rns510_iso.get_file_extent()`/`IsoFileRef`/`open_file_ref()` resolve and
+describe a file's extent; `research/map_compressed_reader.py`'s own `_open()` helper
+duck-types an `IsoFileRef` in place of a plain path string (no import of `rns510_iso`
+needed, keeping that module dependency-free) so every existing reader
+(`decompress_tile`, `read_directory`, `build_geo_index`, etc.) works unchanged whether
+given a real path or an in-ISO reference. `rns510_map_viewer.py`'s `MapData.load()` /
+`load_heavy_layer()` now resolve each tile layer's `IsoFileRef` instead of extracting it
+— confirmed end-to-end against the real disc: identical geo-index tile-resolution counts
+(e.g. `mg4` 6106/6110, `mp0` 194650/194705, unchanged), identical ground-truth topology
+resolution (`mg2` 20597 still `shift=1`/`"high"`), and `load_heavy_layer()`'s ~2.14GB
+`mp0` step no longer performs a multi-GB copy at all — only its (unchanged) geo-index
+build remains. **Deliberately scoped to just the MAP_COMPRESSED tile layers**: `eeu.cty`
+(`CtyCache`) and `eeu.rd`/`.il`/`.iof` (`MapProject`/`RdCache`) are read by other modules
+that open their own path directly and were not touched — they still get extracted, as
+does `POI.DB3` (a real SQLite file, needs its own standalone file handle; `sqlite3`
+can't transparently read a byte-window inside a bigger unrelated file without a custom
+VFS). `rns510_gui.py` (the road *editor*, as opposed to the read-only viewer) is
+unaffected — editing fundamentally needs a real local copy to mutate and eventually
+write back via `Save As`, so its existing extract-then-edit flow is unchanged and
+appropriate. Only a file confirmed to be a single contiguous extent can use this path at
+all — `get_file_extent()` raises rather than silently misreading a hypothetical
+multi-extent file (not observed on this disc family, but ISO9660 permits it above ~4GB).
+
 ---
 
 ## 5. SD card deployment
@@ -4445,6 +4477,35 @@ original exactly.
    the pattern right at its reported location; the other 2 look
    mostly sequential, and the non-divided control isn't clean either.
    Real but inconsistent — not usable, not pursued further.
+
+   **A second, later-session false edge — this time on `mg3`, where the
+   loose 5,000m cap doesn't catch it — root-caused and FIXED for real.**
+   User right-clicked a rendered edge on `mg3` tile_id 9237 (offset
+   25,629,760): point 61 ("SITNYAKOVO", 23.35035,42.68571) reported
+   connected to point 227 (unnamed, 23.38724,42.65507), confirmed
+   4,555.3m apart. Root cause: this feature's own winning shift (1,
+   median 53–55m) is genuinely correct, but points 61 and 227's own
+   records share *only* the literal value `0` — a 4-point clique
+   `{39, 61, 127, 227}`. This is the exact "0 is a padding/sentinel, not
+   a real link id" mechanism §8/`resolve_topology_adjacency()`'s
+   docstring already *named* for the original 5 false edges above, but
+   those 5 (all `mg1`/`mg2`, 200m cap) all happened to be far enough
+   apart to be caught by `max_edge_m` anyway — masking the fact that
+   `_shared_value_edges()` was still treating `0` as an ordinary,
+   edge-forming value. `mg3`'s deliberately loose 5,000m cap doesn't
+   reach a 4,555m false edge, so this class of bug finally surfaced on
+   real hardware-adjacent output. **Fixed at the actual source this
+   time**: `_shared_value_edges()` (`research/map_compressed_reader.py`)
+   now excludes literal value `0` outright, never treating it as a
+   candidate link id, instead of relying entirely on the per-layer
+   distance cap to catch its symptoms after the fact. Re-validated: both
+   human-verified ground-truth tiles unchanged (`mg2` 20597 still 16/16,
+   shift=1, median 49.7m; `mp0` 91124 still 16/18, shift=2, median
+   40.9m), all 5 original false-edge cases still excluded, and this new
+   `mg3` 9237 case is now excluded too — by never being proposed as a
+   candidate edge at all (`edges_dropped_implausible` is correctly 0 for
+   it, not >0). New regression test added in `test_map_viewer.py`
+   (section "8d-bis").
 6. ~~`.rt`/`.rl` semantics~~ **`.rl`/`.prl` SOLVED and validated at scale; `.rt`'s node
    format also now CRACKED and cross-validated, with a few fields/edge cases still
    open** — see §3.7. `.rl` (12-byte records: candidate `.rd` index + validated `.prl`
@@ -7102,6 +7163,57 @@ determinism, not a regression. `test_map_viewer.py` re-run in full
 (twice, since one run hit an unrelated, non-reproducing timing flake in
 the Address Entry panel-visibility check — confirmed NOT caused by
 this change by a clean re-run), all tests pass.
+
+### v28 → v29: a second real false-edge bug found and fixed at the actual root cause — `_shared_value_edges()` was still treating link-id `0` as a real value (this session, user-reported)
+
+User right-clicked a rendered `mg3` connected-roads edge (tile_id 9237,
+offset 25,629,760) and reported it wrong: point 61 ("SITNYAKOVO")
+connected to point 227 (unnamed), confirmed 4,555.3m apart. Root cause:
+this feature's winning shift is genuinely correct (median 53-55m), but
+points 61 and 227's own topology records share *only* the literal value
+`0` — the exact "padding/sentinel, not a real link id" mechanism this
+project's own docstring already named as the root cause of 5 earlier
+false edges (§8 item 5), but those 5 (all `mg1`/`mg2`, 200m cap)
+happened to all be caught by `max_edge_m` anyway, masking that
+`_shared_value_edges()` itself never actually excluded `0` as a value —
+`mg3`'s deliberately loose 5,000m cap (needed for real long highway
+edges, v27→v28 above) doesn't reach a 4,555m false edge, so this class
+of bug finally surfaced. **Fixed at the source**:
+`_shared_value_edges()` (`research/map_compressed_reader.py`) now
+excludes literal value `0` outright, never treating it as a candidate
+link id, instead of relying entirely on the per-layer distance cap to
+catch its symptoms afterward. Re-validated: both human-verified
+ground-truth tiles unchanged (`mg2` 20597 still 16/16 edges, shift=1,
+median 49.7m; `mp0` 91124 still 16/18, shift=2, median 40.9m), all 5
+original false-edge cases still excluded, and this `mg3` 9237 case is
+now excluded too — this time by never being proposed as a candidate
+edge at all (`edges_dropped_implausible` correctly 0, not >0, for this
+feature). New regression test in `test_map_viewer.py` ("8d-bis").
+
+### v29 → v30: the viewer no longer extracts the MAP_COMPRESSED tile layers to disk — reads them directly from the ISO instead (this session, user-asked "can we not extract it?")
+
+See §4 "Direct-from-ISO reading" for the full mechanism and validation.
+Summary: `pycdlib.get_file_byte_extents()` exposes a file's absolute
+byte range(s) inside the ISO, and every file checked on this disc
+family (including `mp0` at 2.14GB) is a single contiguous extent — so a
+tile can be decompressed by seeking straight into the 6.48GB `.ISO`
+file, byte-identical to reading an extracted copy (verified directly,
+both at the raw-reader level and end-to-end through a real
+`MapData.load()`/`load_heavy_layer()` run against `CD_8555.ISO`:
+identical geo-index tile counts for every layer, e.g. `mg4` 6106/6110
+and `mp0` 194650/194705 unchanged, and the `mg2` 20597 ground-truth
+tile still resolves `shift=1`/`"high"`). `MapData.load()` and
+`load_heavy_layer()` now resolve each tile layer's `rns510_iso.
+IsoFileRef` instead of copying it to `self.workdir` — `load_heavy_layer
+()`'s ~2.14GB `mp0` step in particular no longer performs a multi-GB
+copy at all, only its (unchanged) geo-index build remains, which was
+already the dominant cost (34-55s) anyway. Deliberately scoped to just
+the tile layers: `eeu.cty`/`eeu.rd`/`.il`/`.iof`/`POI.DB3` are read by
+other modules and still get extracted (`POI.DB3` in particular is a
+real SQLite file and needs its own standalone file handle). The road
+*editor* (`rns510_gui.py`) is unaffected — editing needs a real local
+copy to mutate and write back, so its extract-then-edit flow is
+unchanged.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 

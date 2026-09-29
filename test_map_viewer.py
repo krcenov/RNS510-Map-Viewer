@@ -915,6 +915,37 @@ def main():
     log("confirmed: mg2 tile 20597's 16/16 human-verified edges are UNCHANGED by the new per-edge filter " \
         "(dropped %d other, implausible edges instead)" % mg2_result_refresh.get("edges_dropped_implausible", 0))
 
+    # --- 8d-bis. A SECOND, later-session false edge -- this one on `mg3`,
+    #         where the loose 5000m max_edge_m cap (needed for real long
+    #         highway edges, see above) does NOT catch it: user right-
+    #         clicked a rendered edge on `mg3` tile_id 9237 (offset
+    #         25,629,760), point 61 ("SITNYAKOVO") <-> point 227 (unnamed),
+    #         reported and confirmed 4,555.3m apart -- sharing ONLY the
+    #         literal sentinel value 0 (a 4-point clique {39,61,127,227}),
+    #         the same root cause already named (but not actually fixed)
+    #         for the 5 cases above. FIXED at the source this time:
+    #         `_shared_value_edges()` now excludes literal value 0 outright
+    #         from ever seeding a shared-value edge, instead of relying on
+    #         `max_edge_m` to catch its symptoms after the fact -- see that
+    #         function's and `resolve_topology_adjacency()`'s own updated
+    #         docstrings. Unlike the 5 cases above, this edge is excluded
+    #         by never being proposed as a candidate at all, so
+    #         `edges_dropped_implausible` is correctly 0 here, not >0.
+    mg3_kept = data.decode_tile("mg3", 9237, want_adjacency=True)
+    mg3_feat = next((f for f in mg3_kept if len(f["points"]) > 227), None)
+    assert mg3_feat is not None, "mg3 tile 9237: expected a feature with at least 228 points"
+    mg3_result = data.topo_caches["mg3"][9237][mg3_feat["feature_index"]]
+    mg3_bad_edge = (61, 227)
+    mg3_present = mg3_bad_edge in set(mg3_result["edges"])
+    log("false-edge check (SITNYAKOVO <-> unnamed, reported ~4555m apart, mg3 zero-sentinel case): " \
+        "mg3 tile 9237 feature %d, edge %s -- confidence=%s, still present=%s (must be False)" % (
+            mg3_feat["feature_index"], mg3_bad_edge, mg3_result["confidence"], mg3_present))
+    assert not mg3_present, \
+        "mg3 tile 9237: the reported false edge %s (shared value 0) must be excluded by the " \
+        "_shared_value_edges() zero-sentinel fix" % (mg3_bad_edge,)
+    log("mg3 tile 9237's user-reported false connected-roads edge confirmed EXCLUDED by the " \
+        "zero-sentinel root-cause fix -- PASSED")
+
     # --- 8e. Performance: real cost of `want_adjacency=True` at tile-decode
     #         time (README §10 "v9 -> v10" -- "measure, don't assume"). Two
     #         FRESH MapData instances, each loaded independently (so

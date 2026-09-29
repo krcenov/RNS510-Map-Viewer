@@ -143,3 +143,62 @@ def strip_udf(iso):
 # Note on paths: this disc's directory records have NO ';1' version suffix
 # (e.g. use '/FILES.CFG' and '/DB/EEU.RD', not '/FILES.CFG;1'). Directory
 # names are upper-cased in the ISO9660 tree (e.g. '/DB', '/CONFIG').
+
+
+def get_file_extent(iso, iso_path):
+    """Resolve `iso_path` (e.g. '/DB/EEUZ.MP0') to its single contiguous
+    (absolute_byte_offset, length) run inside `iso`'s own underlying image
+    file, via pycdlib's get_file_byte_extents(). This is what makes
+    direct, no-extraction reading possible: every file checked on this
+    disc family so far -- including the largest, EEUZ.MP0 (2.14GB, single
+    run) and EEU.RD (590MB, single run) -- is stored as ONE contiguous
+    extent, so a downstream reader can seek(offset) into the raw .ISO
+    file exactly like it would into a standalone extracted copy. Raises
+    ValueError if the file is NOT a single contiguous run (not observed
+    on this disc family, but ISO9660 does allow multi-extent files over
+    ~4GB, and UDF allows multiple allocation descriptors in general) --
+    direct reading isn't safe for those without extra logic this function
+    deliberately does not add, so such a file must be extracted instead.
+    """
+    extents = iso.get_file_byte_extents(iso_path=iso_path)
+    if len(extents) != 1:
+        raise ValueError(
+            "%s is not a single contiguous extent on this disc (%d runs) "
+            "-- direct in-ISO reading isn't supported for it, extract it "
+            "instead" % (iso_path, len(extents)))
+    return extents[0]
+
+
+class IsoFileRef:
+    """A lightweight reference to one file's contiguous byte range inside
+    an ISO image -- a drop-in substitute for a plain path string accepted
+    by every research/map_compressed_reader.py reader function
+    (decompress_tile, read_directory, build_geo_index, etc.) via that
+    module's own `_open()` helper (duck-typed against `.image_path`/
+    `.offset`/`.length` here -- this class is intentionally plain data,
+    with no file-handling logic of its own, so it stays a trivial,
+    dependency-free descriptor; `_open()` in map_compressed_reader.py is
+    what actually turns one into a seek()/read() file-like handle).
+    Lets those functions address a MAP_COMPRESSED layer (or
+    eeu.rd/.il/.iof/.cty/...) directly inside the big ISO -- NO
+    extraction to a temp file first. Construct via open_file_ref() below
+    rather than directly."""
+    __slots__ = ("image_path", "offset", "length")
+
+    def __init__(self, image_path, offset, length):
+        self.image_path = image_path
+        self.offset = offset
+        self.length = length
+
+    def __repr__(self):
+        return "IsoFileRef(%r, offset=%d, length=%d)" % (
+            self.image_path, self.offset, self.length)
+
+
+def open_file_ref(iso, iso_path, image_path):
+    """Convenience: resolve `iso_path`'s extent via get_file_extent() and
+    wrap it as an IsoFileRef against the ISO's own underlying image file
+    (`image_path` -- the same path passed to open_tolerant()) for direct,
+    no-extraction reading via research/map_compressed_reader.py."""
+    offset, length = get_file_extent(iso, iso_path)
+    return IsoFileRef(image_path, offset, length)
