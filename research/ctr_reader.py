@@ -64,6 +64,51 @@ Country field builds a `city_reader.PrefixNameIndex` directly from
 
 import struct
 
+
+def _open(path):
+    """Return a context-manager binary handle for `path` -- a plain
+    filesystem path (str/os.PathLike, opened normally), or an
+    rns510_iso.IsoFileRef (duck-typed here, no import, to keep this
+    module dependency-free -- same pattern as research/
+    map_compressed_reader.py's own `_open()`): presents a windowed view
+    over just its own byte range inside a bigger ISO image, so
+    load_countries() can address eeu.ctr directly inside the ISO with
+    NO extraction to a temp file first (README §4 "direct-from-ISO
+    reading")."""
+    if hasattr(path, "image_path") and hasattr(path, "offset"):
+        ref = path
+
+        class _Handle:
+            def __enter__(self):
+                self._f = open(ref.image_path, "rb")
+                self._f.seek(ref.offset)
+                self._pos = 0
+                return self
+
+            def __exit__(self, *exc):
+                self._f.close()
+                return False
+
+            def seek(self, pos, whence=0):
+                if whence == 1:
+                    pos = self._pos + pos
+                elif whence == 2:
+                    pos = ref.length + pos
+                self._pos = pos
+                self._f.seek(ref.offset + pos)
+                return self._pos
+
+            def read(self, size=-1):
+                remaining = max(0, ref.length - self._pos)
+                n = remaining if size is None or size < 0 else min(size, remaining)
+                data = self._f.read(n)
+                self._pos += len(data)
+                return data
+
+        return _Handle()
+    return open(path, "rb")
+
+
 CTR_HEADER_SIZE = 94
 CTR_RECORD_SIZE = 43
 CTR_NAME_OFFSET = 1
@@ -114,7 +159,7 @@ def iter_ctr_records(body):
 def load_countries(path):
     """Read + decode the whole eeu.ctr file at `path` (the RAW file,
     header included) into a list of CountryRecord, in file order."""
-    with open(path, "rb") as f:
+    with _open(path) as f:
         data = f.read()
     body = data[CTR_HEADER_SIZE:]
     return list(iter_ctr_records(body))

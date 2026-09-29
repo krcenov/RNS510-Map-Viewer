@@ -1299,7 +1299,7 @@ class MapData:
         self._owns_workdir = workdir is None
         self.workdir = workdir or tempfile.mkdtemp(prefix="rns510_viewer_")
         os.makedirs(self.workdir, exist_ok=True)
-        self.cty_path = os.path.join(self.workdir, "eeu.cty")
+        self.cty_path = None         # rns510_iso.IsoFileRef, set by load() -- no extraction (README §4)
 
         self.layer_paths = {}       # {layer: rns510_iso.IsoFileRef into the ISO -- no extraction, see load()}
         self.directories = {}       # {layer: mcr.read_directory() result}
@@ -1312,11 +1312,11 @@ class MapData:
         # Real POI display (README §10 "v19 -> v20") -- loaded lazily in
         # its OWN background task after "Open Map ISO" returns, same
         # deferred-loading pattern as mp0 (load_heavy_layer() above):
-        # extracting POI.DB3 (~1.1GB) and decoding all 4.7M Coordinate
-        # values is real, non-trivial work that shouldn't block opening
-        # the disc. poi_path is set here (not lazily) so it's always a
-        # valid, predictable location even before load_poi_data() runs.
-        self.poi_path = os.path.join(self.workdir, "POI.DB3")
+        # decoding all 4.7M Coordinate values is real, non-trivial work
+        # that shouldn't block opening the disc. poi_path is an
+        # rns510_iso.IsoFileRef, set by load_poi_data() -- no extraction
+        # (README §4), None until that runs.
+        self.poi_path = None
         self.poi_ready = False      # True once poi_cache is fully loaded
         self.poi_building = False   # True while load_poi_data() is running
         self.poi_cache = None       # poi_db_reader.load_poi_cache() result
@@ -1564,9 +1564,8 @@ class MapData:
                 self.layer_paths[layer] = riso.open_file_ref(iso, iso_layer_path, self.iso_path)
 
             if progress:
-                progress("Extracting %s..." % CTY_ISO_PATH)
-            with open(self.cty_path, "wb") as f:
-                iso.get_file_from_iso_fp(f, iso_path=CTY_ISO_PATH)
+                progress("Locating %s in the ISO..." % CTY_ISO_PATH)
+            self.cty_path = riso.open_file_ref(iso, CTY_ISO_PATH, self.iso_path)
         finally:
             iso.close()
 
@@ -1585,7 +1584,7 @@ class MapData:
         if progress:
             progress("Loading road name-search index (eeu.rd / eeu.il)...")
         self.search_project = core.MapProject(
-            self.iso_path, workdir=os.path.join(self.workdir, "search"))
+            self.iso_path, workdir=os.path.join(self.workdir, "search"), read_only=True)
         self.search_project.load(progress=progress)
 
         if progress:
@@ -1643,17 +1642,24 @@ class MapData:
             self.mp0_building = False
 
     def load_poi_data(self, progress=None):
-        """Extract `EDB/POI/POI.DB3` (~1.1GB) and decode all 4,733,183
-        real POIs at once via `poi_db_reader.load_poi_cache()` (README
-        §10 "v19 -> v20") -- the real, cracked `Coordinate` field
-        (research/poi_db_reader.py's Morton/Z-order decode) makes this
-        possible for the first time. Also loads every real category icon
-        (README §10 "v20 -> v21", `poi_db_reader.load_poi_icons()` --
-        real, standard PNG images, `ImageSet_ID=1` = the plain 2D set) --
-        cheap (61 small PNGs) compared to the POI decode itself, so no
-        separate progress step. Meant to run in its OWN BackgroundTask,
-        same deferred pattern as load_heavy_layer() above: kicked off
-        right after `load()` returns so it finishes in parallel with the
+        """Locate `EDB/POI/POI.DB3` (~1.1GB) inside the ISO and decode
+        all 4,733,183 real POIs at once via `poi_db_reader.
+        load_poi_cache()` (README §10 "v19 -> v20") -- the real, cracked
+        `Coordinate` field (research/poi_db_reader.py's Morton/Z-order
+        decode) makes this possible for the first time. Also loads every
+        real category icon (README §10 "v20 -> v21", `poi_db_reader.
+        load_poi_icons()` -- real, standard PNG images, `ImageSet_ID=1` =
+        the plain 2D set) -- cheap (61 small PNGs) compared to the POI
+        decode itself, so no separate progress step. No longer an
+        EXTRACTION step (README §4 "direct-from-ISO reading", a later
+        session): `self.poi_path` is an `IsoFileRef`, and
+        `poi_db_reader._connect()` reads its ~1.1GB byte range directly
+        out of the ISO and loads it via `sqlite3.Connection.
+        deserialize()` (stdlib, no intermediate file) -- see that
+        function's own docstring for the real memory-residency trade-off
+        this involves. Meant to run in its OWN BackgroundTask, same
+        deferred pattern as load_heavy_layer() above: kicked off right
+        after `load()` returns so it finishes in parallel with the
         user's first search/pan/zoom rather than blocking "Open Map
         ISO". Sets `poi_ready=True` on success; until then,
         `pois_for_bbox()` simply returns an empty list."""
@@ -1662,9 +1668,8 @@ class MapData:
             iso = riso.open_tolerant(self.iso_path)
             try:
                 if progress:
-                    progress("Extracting %s (real POI database, ~1.1GB)..." % POI_ISO_PATH)
-                with open(self.poi_path, "wb") as f:
-                    iso.get_file_from_iso_fp(f, iso_path=POI_ISO_PATH)
+                    progress("Locating %s (real POI database, ~1.1GB) in the ISO..." % POI_ISO_PATH)
+                self.poi_path = riso.open_file_ref(iso, POI_ISO_PATH, self.iso_path)
             finally:
                 iso.close()
 
@@ -2228,7 +2233,7 @@ class MapData:
             return None  # defensive -- should not happen for a real anchor
 
         if self._il_data is None:
-            with open(self.search_project.il_path, "rb") as f:
+            with mcr._open(self.search_project.il_path) as f:
                 self._il_data = f.read()
         entries = iofr.nearby_street_entries(self._il_data, offset, count)
         if not entries:
@@ -2508,17 +2513,13 @@ class MapData:
         if self.address_data_ready:
             return
         if progress:
-            progress("Loading country list (eeu.ctr)...")
-        ctr_path = os.path.join(self.workdir, "eeu.ctr")
+            progress("Locating country list (eeu.ctr) in the ISO...")
         iso = riso.open_tolerant(self.iso_path)
         try:
-            with open(ctr_path, "wb") as f:
-                iso.get_file_from_iso_fp(f, iso_path=CTR_ISO_PATH)
+            ctr_path = riso.open_file_ref(iso, CTR_ISO_PATH, self.iso_path)
             if progress:
-                progress("Extracting street name-search tree (eeuz.rt)...")
-            rt_path = os.path.join(self.workdir, "eeuz.rt")
-            with open(rt_path, "wb") as f:
-                iso.get_file_from_iso_fp(f, iso_path=RT_ISO_PATH)
+                progress("Locating street name-search tree (eeuz.rt) in the ISO...")
+            rt_path = riso.open_file_ref(iso, RT_ISO_PATH, self.iso_path)
         finally:
             iso.close()
 

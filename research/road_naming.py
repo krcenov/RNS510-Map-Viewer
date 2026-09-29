@@ -112,6 +112,51 @@ import struct
 
 import numpy as np
 
+
+def _open(path):
+    """Return a context-manager binary handle for `path` -- a plain
+    filesystem path (str/os.PathLike, opened normally), or an
+    rns510_iso.IsoFileRef (duck-typed here, no import, to keep this
+    module dependency-free -- same pattern as research/
+    map_compressed_reader.py's own `_open()`): presents a windowed view
+    over just its own byte range inside a bigger ISO image, so this
+    module can address eeu.rd directly inside the ISO with NO
+    extraction to a temp file first (README §4 "direct-from-ISO
+    reading")."""
+    if hasattr(path, "image_path") and hasattr(path, "offset"):
+        ref = path
+
+        class _Handle:
+            def __enter__(self):
+                self._f = open(ref.image_path, "rb")
+                self._f.seek(ref.offset)
+                self._pos = 0
+                return self
+
+            def __exit__(self, *exc):
+                self._f.close()
+                return False
+
+            def seek(self, pos, whence=0):
+                if whence == 1:
+                    pos = self._pos + pos
+                elif whence == 2:
+                    pos = ref.length + pos
+                self._pos = pos
+                self._f.seek(ref.offset + pos)
+                return self._pos
+
+            def read(self, size=-1):
+                remaining = max(0, ref.length - self._pos)
+                n = remaining if size is None or size < 0 else min(size, remaining)
+                data = self._f.read(n)
+                self._pos += len(data)
+                return data
+
+        return _Handle()
+    return open(path, "rb")
+
+
 RD_HEADER_SIZE = 94
 RD_RECORD_SIZE = 67
 RD_LON_OFFSET = 8
@@ -174,7 +219,7 @@ def build_rd_index(rd_path, lon_min, lon_max, lat_min, lat_max, cell_deg=0.001):
     0.001 deg, ~111m in latitude, ~60-90m in longitude at this dataset's
     latitude range -- see module docstring's tolerance-conversion caveat).
     """
-    with open(rd_path, "rb") as f:
+    with _open(rd_path) as f:
         f.seek(RD_HEADER_SIZE)
         body = f.read()
     n = len(body) // RD_RECORD_SIZE
@@ -248,7 +293,7 @@ class RdCache:
     __slots__ = ("body", "lon_i", "lat_i", "lon", "lat", "record_count")
 
     def __init__(self, rd_path):
-        with open(rd_path, "rb") as f:
+        with _open(rd_path) as f:
             f.seek(RD_HEADER_SIZE)
             self.body = f.read()
         n = len(self.body) // RD_RECORD_SIZE

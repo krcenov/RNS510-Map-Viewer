@@ -35,6 +35,7 @@ pycdlib.PyCdlib().open() (no monkeypatch needed) and has_udf() == False.
 """
 
 import collections
+import os
 import pycdlib
 from pycdlib import pycdlibexception
 from pycdlib import udf as udfmod
@@ -202,3 +203,62 @@ def open_file_ref(iso, iso_path, image_path):
     no-extraction reading via research/map_compressed_reader.py."""
     offset, length = get_file_extent(iso, iso_path)
     return IsoFileRef(image_path, offset, length)
+
+
+class _IsoFileRefHandle:
+    """Binary-file-like view over exactly one IsoFileRef's byte range.
+    Used by open_ref_or_path() below for callers that already depend on
+    this module (rns510_core.py) -- research/*.py readers stay
+    dependency-free and duck-type an equivalent handle locally instead
+    (see e.g. map_compressed_reader.py's own `_open()`)."""
+    __slots__ = ("_ref", "_f", "_pos")
+
+    def __init__(self, ref):
+        self._ref = ref
+        self._f = None
+        self._pos = 0
+
+    def __enter__(self):
+        self._f = open(self._ref.image_path, "rb")
+        self._f.seek(self._ref.offset)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._f.close()
+        return False
+
+    def seek(self, pos, whence=0):
+        if whence == 1:
+            pos = self._pos + pos
+        elif whence == 2:
+            pos = self._ref.length + pos
+        self._pos = pos
+        self._f.seek(self._ref.offset + pos)
+        return self._pos
+
+    def read(self, size=-1):
+        remaining = max(0, self._ref.length - self._pos)
+        n = remaining if size is None or size < 0 else min(size, remaining)
+        data = self._f.read(n)
+        self._pos += len(data)
+        return data
+
+
+def open_ref_or_path(path):
+    """Return a context-manager binary handle for `path` -- a plain
+    filesystem path (str/os.PathLike, opened normally) or an IsoFileRef
+    (opened as a windowed view over its own byte range inside the
+    underlying ISO image, via _IsoFileRefHandle). Lets a caller like
+    rns510_core.MapProject support direct-from-ISO reading (read_only
+    mode) with no change to its own seek()/read() call sites."""
+    if isinstance(path, IsoFileRef):
+        return _IsoFileRefHandle(path)
+    return open(path, "rb")
+
+
+def size_of(path):
+    """Byte length of `path` -- os.path.getsize() for a plain path, or
+    an IsoFileRef's own already-known `.length` (no stat() possible)."""
+    if isinstance(path, IsoFileRef):
+        return path.length
+    return os.path.getsize(path)

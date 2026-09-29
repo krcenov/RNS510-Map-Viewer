@@ -4016,15 +4016,53 @@ given a real path or an in-ISO reference. `rns510_map_viewer.py`'s `MapData.load
 (e.g. `mg4` 6106/6110, `mp0` 194650/194705, unchanged), identical ground-truth topology
 resolution (`mg2` 20597 still `shift=1`/`"high"`), and `load_heavy_layer()`'s ~2.14GB
 `mp0` step no longer performs a multi-GB copy at all — only its (unchanged) geo-index
-build remains. **Deliberately scoped to just the MAP_COMPRESSED tile layers**: `eeu.cty`
-(`CtyCache`) and `eeu.rd`/`.il`/`.iof` (`MapProject`/`RdCache`) are read by other modules
-that open their own path directly and were not touched — they still get extracted, as
-does `POI.DB3` (a real SQLite file, needs its own standalone file handle; `sqlite3`
-can't transparently read a byte-window inside a bigger unrelated file without a custom
-VFS). `rns510_gui.py` (the road *editor*, as opposed to the read-only viewer) is
-unaffected — editing fundamentally needs a real local copy to mutate and eventually
-write back via `Save As`, so its existing extract-then-edit flow is unchanged and
-appropriate. Only a file confirmed to be a single contiguous extent can use this path at
+build remains.
+
+**Extended to every other flat/FLAT_COMPRESSED file the viewer reads, a later session**
+(user-asked: "can we make them not extract also?") — `eeu.cty` (`research/city_reader.py`
+`CtyCache`), `eeu.rd`/`.il`/`.iof` (`rns510_core.MapProject`/`research/road_naming.py`
+`RdCache`/`research/iof_reader.py`), and `eeu.ctr`/`eeuz.rt` (`research/ctr_reader.py`/
+`research/flat_compressed_reader.py`, used lazily for the address-entry panel) now ALL
+support the same duck-typed `IsoFileRef` in place of a plain path — each of these
+dependency-free `research/*.py` readers gained its own tiny local `_open()` (same
+duck-typing pattern as `map_compressed_reader.py`'s, deliberately NOT centralized into a
+shared import, to keep each reader independent). `rns510_core.MapProject` gained a
+`read_only=True` constructor flag (default `False`, completely unchanged behavior) that
+resolves its 3 files as `IsoFileRef`s and refuses every edit/append/save method with a
+clear `MapToolError` instead of extracting — `rns510_map_viewer.py`'s `MapData` now
+constructs its own internal `search_project` with `read_only=True`. Verified end-to-end:
+after a full `MapData.load()` (all `FAST_LAYERS` + `eeu.cty` + `eeu.rd`/`.il`/`.iof`) AND
+`load_address_entry_data()` (`eeu.ctr` + `eeuz.rt`), `workdir` contains **zero files** —
+searching ("SOFIA": 148 matches, unchanged), the `mg2` 20597 ground-truth topology
+resolution, and country-list loading (35 countries) all still work correctly with nothing
+ever extracted. The *default* (`read_only=False`) `MapProject` — what `rns510_gui.py`'s
+editor actually uses — was re-verified completely unaffected: still extracts normally,
+still returns identical records, still round-trips.
+
+**`POI.DB3` too, a still-later session** (user-asked: "can we not extract db3 also?") —
+`sqlite3` genuinely can't seek/read a byte-window inside a bigger unrelated file the way
+this project's other readers do (no custom VFS), but Python 3.11+'s stdlib `sqlite3`
+module exposes `Connection.deserialize()` (wrapping SQLite's own `sqlite3_deserialize`
+C API): read a file's bytes into memory from anywhere, then load them straight into a
+live, fully-functional SQLite connection with **no intermediate file on disk at all**.
+`research/poi_db_reader.py`'s new `_connect(db_path)` does exactly that for an
+`IsoFileRef` (reads POI.DB3's ~1.1GB byte range directly out of the ISO, `sqlite3.
+connect(":memory:")` + `.deserialize(data)`) while staying `sqlite3.connect(db_path)`
+unchanged for a plain path. Verified directly against the real disc: reading the 1.1GB
+range took 5.0s, `deserialize()` itself only 1.65s, and — run through `MapData.
+load_poi_data()` end-to-end — decoded exactly 4,733,183 real POIs (matching this
+project's own previously-documented figure exactly) and 61 icons, with `workdir`
+confirmed to contain **zero files** afterward. **Real trade-off, stated plainly, not
+hidden**: this holds POI.DB3's full ~1.1GB raw bytes resident in process memory for as
+long as the connection stays open — on top of whatever `load_poi_cache()`'s own numpy
+arrays already keep in memory from querying it — instead of living on disk where the OS
+can page it in/out under memory pressure. Accepted deliberately for this project (a
+desktop tool, not a memory-constrained environment) after confirming it with the user
+first. With this, **every file the map viewer reads is now accessed directly inside the
+6.48GB `.ISO`, with zero temp-file extraction of any kind** — only the road *editor*
+(`rns510_gui.py`, which genuinely needs a mutable local copy) still extracts anything.
+
+Only a file confirmed to be a single contiguous extent can use this path at
 all — `get_file_extent()` raises rather than silently misreading a hypothetical
 multi-extent file (not observed on this disc family, but ISO9660 permits it above ~4GB).
 
@@ -7214,6 +7252,48 @@ real SQLite file and needs its own standalone file handle). The road
 *editor* (`rns510_gui.py`) is unaffected — editing needs a real local
 copy to mutate and write back, so its extract-then-edit flow is
 unchanged.
+
+### v30 → v31: extended direct-from-ISO reading to every remaining extracted file except `POI.DB3` (this session, user-asked "can we make them not extract also?")
+
+See §4's updated "direct-from-ISO reading" section. `eeu.cty`, `eeu.rd`/
+`.il`/`.iof`, and `eeu.ctr`/`eeuz.rt` (the address-entry panel's files)
+all now support an `IsoFileRef` in place of a plain path — each reader
+module (`research/city_reader.py`, `research/road_naming.py`,
+`research/iof_reader.py`, `research/ctr_reader.py`, `research/
+flat_compressed_reader.py`) gained its own small, local, dependency-free
+`_open()` (same duck-typing pattern as `map_compressed_reader.py`'s,
+deliberately not centralized, to keep every `research/*.py` reader
+independent). `rns510_core.MapProject` gained a `read_only=True`
+constructor flag (default `False`, byte-for-byte unchanged behavior) that
+resolves its files as `IsoFileRef`s and refuses every edit/append/save
+call with a clear error instead of silently misbehaving; `MapData`'s
+internal `search_project` now uses it. Verified end-to-end: after a full
+`MapData.load()` + `load_address_entry_data()`, `workdir` contains **zero
+files** — search, topology resolution, and country-list loading all still
+work correctly. The editor GUI's own (default, `read_only=False`)
+`MapProject` was re-verified completely unaffected. Only `POI.DB3`
+remains extracted (a real SQLite file, needs its own standalone handle).
+
+### v31 → v32: `POI.DB3` no longer extracted either — the map viewer now reads every file directly from the ISO (this session, user-asked "can we not extract db3 also?")
+
+See §4's updated "direct-from-ISO reading" section for the mechanism.
+`sqlite3` can't seek/read a byte-window inside a bigger file (no custom
+VFS), but Python 3.11+'s stdlib `sqlite3.Connection.deserialize()` loads
+a database straight from an in-memory buffer, no file needed at all.
+`research/poi_db_reader.py`'s new `_connect(db_path)` reads an
+`IsoFileRef`'s ~1.1GB byte range directly out of the ISO and
+`deserialize()`s it into a `:memory:` connection; a plain path still
+goes through unchanged `sqlite3.connect(db_path)`. Verified end-to-end
+via `MapData.load_poi_data()` against the real disc: read took 5.0s,
+`deserialize()` 1.65s, decoded exactly 4,733,183 real POIs (matching
+this project's own previously-documented figure) and 61 icons, `workdir`
+confirmed empty afterward. Real, stated trade-off (confirmed with the
+user before implementing): this keeps POI.DB3's ~1.1GB raw bytes
+resident in memory for as long as the connection is open, instead of on
+disk where the OS could page it — accepted as a reasonable cost for a
+desktop tool. With this, the entire map viewer reads every file directly
+out of the 6.48GB `.ISO`; only the road editor (`rns510_gui.py`, which
+needs a real mutable local copy) still extracts anything.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 

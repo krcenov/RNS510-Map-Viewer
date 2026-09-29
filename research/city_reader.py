@@ -254,6 +254,51 @@ import struct
 
 import numpy as np
 
+
+def _open(path):
+    """Return a context-manager binary handle for `path` -- a plain
+    filesystem path (str/os.PathLike, opened normally), or an
+    rns510_iso.IsoFileRef (duck-typed here, no import, to keep this
+    module dependency-free -- same pattern as research/
+    map_compressed_reader.py's own `_open()`): presents a windowed view
+    over just its own byte range inside a bigger ISO image, so
+    CtyCache can address eeu.cty directly inside the ISO with NO
+    extraction to a temp file first (README §4 "direct-from-ISO
+    reading")."""
+    if hasattr(path, "image_path") and hasattr(path, "offset"):
+        ref = path
+
+        class _Handle:
+            def __enter__(self):
+                self._f = open(ref.image_path, "rb")
+                self._f.seek(ref.offset)
+                self._pos = 0
+                return self
+
+            def __exit__(self, *exc):
+                self._f.close()
+                return False
+
+            def seek(self, pos, whence=0):
+                if whence == 1:
+                    pos = self._pos + pos
+                elif whence == 2:
+                    pos = ref.length + pos
+                self._pos = pos
+                self._f.seek(ref.offset + pos)
+                return self._pos
+
+            def read(self, size=-1):
+                remaining = max(0, ref.length - self._pos)
+                n = remaining if size is None or size < 0 else min(size, remaining)
+                data = self._f.read(n)
+                self._pos += len(data)
+                return data
+
+        return _Handle()
+    return open(path, "rb")
+
+
 CTY_HEADER_SIZE = 94
 CTY_RECORD_SIZE = 79
 CTY_NAME_OFFSET = 22
@@ -396,7 +441,7 @@ class CtyCache:
     )
 
     def __init__(self, cty_path):
-        with open(cty_path, "rb") as f:
+        with _open(cty_path) as f:
             f.seek(CTY_HEADER_SIZE)
             self.body = f.read()
         n = cty_record_count(self.body)

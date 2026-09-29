@@ -274,6 +274,51 @@ import struct
 
 import numpy as np
 
+
+def _open(path):
+    """Return a context-manager binary handle for `path` -- a plain
+    filesystem path (str/os.PathLike, opened normally), or an
+    rns510_iso.IsoFileRef (duck-typed here, no import, to keep this
+    module dependency-free -- same pattern as research/
+    map_compressed_reader.py's own `_open()`): presents a windowed view
+    over just its own byte range inside a bigger ISO image, so this
+    module can address eeu.iof directly inside the ISO with NO
+    extraction to a temp file first (README §4 "direct-from-ISO
+    reading")."""
+    if hasattr(path, "image_path") and hasattr(path, "offset"):
+        ref = path
+
+        class _Handle:
+            def __enter__(self):
+                self._f = open(ref.image_path, "rb")
+                self._f.seek(ref.offset)
+                self._pos = 0
+                return self
+
+            def __exit__(self, *exc):
+                self._f.close()
+                return False
+
+            def seek(self, pos, whence=0):
+                if whence == 1:
+                    pos = self._pos + pos
+                elif whence == 2:
+                    pos = ref.length + pos
+                self._pos = pos
+                self._f.seek(ref.offset + pos)
+                return self._pos
+
+            def read(self, size=-1):
+                remaining = max(0, ref.length - self._pos)
+                n = remaining if size is None or size < 0 else min(size, remaining)
+                data = self._f.read(n)
+                self._pos += len(data)
+                return data
+
+        return _Handle()
+    return open(path, "rb")
+
+
 _ROUTE_LIKE_RE = re.compile(rb"^[A-Za-z]{0,4}-?\d{1,5}[A-Za-z]?$")
 
 
@@ -305,7 +350,7 @@ def read_iof_records(path):
     (zero4, vb, c80) triples, one per record, in file order -- index i here
     corresponds exactly to eeu.rd record i (same count, same order, see
     README S3.3)."""
-    with open(path, "rb") as f:
+    with _open(path) as f:
         data = f.read()
     body = data[IOF_HEADER_SIZE:]
     n, rem = divmod(len(body), IOF_RECORD_SIZE)

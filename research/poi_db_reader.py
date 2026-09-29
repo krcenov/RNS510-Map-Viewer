@@ -241,6 +241,35 @@ import sqlite3
 import numpy as np
 
 
+def _connect(db_path):
+    """Open a sqlite3 connection to `db_path` -- a plain filesystem path
+    (str/os.PathLike, unchanged behavior: `sqlite3.connect(db_path)`), or
+    an rns510_iso.IsoFileRef (duck-typed here, no import, to keep this
+    module dependency-free -- same pattern as research/
+    map_compressed_reader.py's own `_open()`). SQLite can't seek/read a
+    byte-window inside a bigger unrelated file the way the project's
+    other readers do (no custom VFS here), so an IsoFileRef instead reads
+    its whole byte range directly out of the underlying ISO into memory
+    and loads it via `sqlite3.Connection.deserialize()` (stdlib, Python
+    3.11+) -- a real, fully-functional SQLite connection with NO
+    intermediate file on disk at all. Trade-off, stated plainly: this
+    holds POI.DB3's ~1.1GB raw bytes resident in process memory for as
+    long as the connection stays open (on top of whatever load_poi_cache()
+    etc. already keep in memory from querying it), instead of living on
+    disk where the OS can page it in/out under memory pressure -- verified
+    directly against a real extracted copy (identical table list, row
+    counts, and query results either way; see README §4 "direct-from-ISO
+    reading")."""
+    if hasattr(db_path, "image_path") and hasattr(db_path, "offset"):
+        with open(db_path.image_path, "rb") as f:
+            f.seek(db_path.offset)
+            data = f.read(db_path.length)
+        conn = sqlite3.connect(":memory:")
+        conn.deserialize(data)
+        return conn
+    return sqlite3.connect(db_path)
+
+
 def decode_coordinates_np(coords):
     """Vectorized decode_coordinate(): `coords` is any array-like of
     signed 64-bit ints (e.g. a numpy int64 array straight from sqlite3
@@ -276,7 +305,7 @@ def load_poi_partitions(db_path):
     already hinted at (see this module's docstring). Returns
     {partition_id: {"category_name": str or None, "zoom_level_m": int,
     "map_priority": int}}."""
-    conn = sqlite3.connect(db_path)
+    conn = _connect(db_path)
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -314,7 +343,7 @@ def load_poi_cache(db_path):
     "name_upper": list[str or None] (precomputed uppercase, for
     case-insensitive substring search -- see search_pois()), "partitions":
     {..., see load_poi_partitions()}}."""
-    conn = sqlite3.connect(db_path)
+    conn = _connect(db_path)
     try:
         cur = conn.cursor()
         cur.execute("SELECT Poi_ID, Coordinate, PoiPartition_ID, Name FROM Poi_BaseAttributes")
@@ -427,7 +456,7 @@ def load_poi_icons(db_path, image_set_id=1):
     whatever it already uses, e.g. `PIL.Image.open(io.BytesIO(...))`).
     Partitions with no resolvable icon (should not happen on the
     reference disc, but not assumed impossible) are simply omitted."""
-    conn = sqlite3.connect(db_path)
+    conn = _connect(db_path)
     try:
         cur = conn.cursor()
         cur.execute("""

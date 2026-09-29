@@ -127,11 +127,19 @@ class MapProject:
     file, in memory), and offers search/edit/append/save operations.
     """
 
-    def __init__(self, iso_path, workdir=None):
+    def __init__(self, iso_path, workdir=None, read_only=False):
+        """`read_only=True` (used by the map viewer's search-only
+        MapProject, never by the editor GUI) skips extraction entirely --
+        see load()'s own docstring, "direct-from-ISO reading" (README
+        §4) -- and disables every edit/append/save method, since those
+        need a real, mutable local file. Default False preserves the
+        original extract-to-workdir behavior exactly, unchanged, for
+        rns510_gui.py's editing flow."""
         self.iso_path = iso_path
         self._owns_workdir = workdir is None
         self.workdir = workdir or tempfile.mkdtemp(prefix="rns510_")
         os.makedirs(self.workdir, exist_ok=True)
+        self.read_only = read_only
         self.rd_path = os.path.join(self.workdir, "eeu.rd")
         self.il_path = os.path.join(self.workdir, "eeu.il")
         self.iof_path = os.path.join(self.workdir, "eeu.iof")
@@ -140,43 +148,68 @@ class MapProject:
     # ---------------------------------------------------------------- load
 
     def load(self, progress=None):
-        """Extract the three DB files from the source ISO into workdir."""
+        """Load the three DB files. In `read_only` mode, resolves each
+        one's byte extent directly inside the ISO (an `rns510_iso.
+        IsoFileRef`, see README §4 "direct-from-ISO reading") instead of
+        extracting it to workdir -- every read call site below already
+        goes through `riso.open_ref_or_path()`/`riso.size_of()`, which
+        transparently support either a plain path or an IsoFileRef, so
+        this is the only place the two modes actually differ. Default
+        (non-read_only) mode is unchanged: extracts all three to
+        workdir, since editing needs real, mutable local files."""
         if progress:
             progress("Opening ISO...")
         iso = riso.open_tolerant(self.iso_path)
         try:
-            for iso_path, local_path in (
-                (ISO_RD_PATH, self.rd_path),
-                (ISO_IL_PATH, self.il_path),
-                (ISO_IOF_PATH, self.iof_path),
-            ):
-                if progress:
-                    progress("Extracting %s..." % iso_path)
-                with open(local_path, "wb") as f:
-                    iso.get_file_from_iso_fp(f, iso_path=iso_path)
+            if self.read_only:
+                for iso_path, attr in (
+                    (ISO_RD_PATH, "rd_path"),
+                    (ISO_IL_PATH, "il_path"),
+                    (ISO_IOF_PATH, "iof_path"),
+                ):
+                    if progress:
+                        progress("Locating %s in the ISO..." % iso_path)
+                    setattr(self, attr, riso.open_file_ref(iso, iso_path, self.iso_path))
+            else:
+                for iso_path, local_path in (
+                    (ISO_RD_PATH, self.rd_path),
+                    (ISO_IL_PATH, self.il_path),
+                    (ISO_IOF_PATH, self.iof_path),
+                ):
+                    if progress:
+                        progress("Extracting %s..." % iso_path)
+                    with open(local_path, "wb") as f:
+                        iso.get_file_from_iso_fp(f, iso_path=iso_path)
         finally:
             iso.close()
         self._loaded = True
         if progress:
             progress("Loaded %d road records." % self.record_count())
 
+    def _require_writable(self, op):
+        if self.read_only:
+            raise MapToolError(
+                "%s: this MapProject was opened read_only=True (no local mutable "
+                "copy was extracted) -- construct one with read_only=False (the "
+                "default) to edit/append/save" % op)
+
     # ------------------------------------------------------------ queries
 
     def record_count(self):
-        size = os.path.getsize(self.rd_path)
+        size = riso.size_of(self.rd_path)
         if (size - HEADER_SIZE) % RD_RECORD_SIZE != 0:
             raise MapToolError("eeu.rd size %d is not header + N*%d" % (size, RD_RECORD_SIZE))
         return (size - HEADER_SIZE) // RD_RECORD_SIZE
 
     def iof_record_count(self):
-        size = os.path.getsize(self.iof_path)
+        size = riso.size_of(self.iof_path)
         return (size - HEADER_SIZE) // IOF_RECORD_SIZE
 
     def get_record(self, index):
         n = self.record_count()
         if not (0 <= index < n):
             raise MapToolError("record index %d out of range (0..%d)" % (index, n - 1))
-        with open(self.rd_path, "rb") as f:
+        with riso.open_ref_or_path(self.rd_path) as f:
             f.seek(HEADER_SIZE + index * RD_RECORD_SIZE)
             data = f.read(RD_RECORD_SIZE)
         return _decode_rd_record(index, data)
@@ -196,13 +229,13 @@ class MapProject:
 
         results = []
         total = 0
-        with open(self.il_path, "rb") as ilf:
+        with riso.open_ref_or_path(self.il_path) as ilf:
             ilf.seek(HEADER_SIZE)
             body = ilf.read()
 
         pos = 0
         blen = len(body)
-        with open(self.rd_path, "rb") as rdf:
+        with riso.open_ref_or_path(self.rd_path) as rdf:
             while pos < blen:
                 if pos + 11 > blen:
                     break
@@ -237,7 +270,7 @@ class MapProject:
         target = name.lower()
         best_extra = b"\x00" * 7
         best_name = None
-        with open(self.il_path, "rb") as ilf:
+        with riso.open_ref_or_path(self.il_path) as ilf:
             ilf.seek(HEADER_SIZE)
             body = ilf.read()
         pos = 0
@@ -272,6 +305,7 @@ class MapProject:
         eeu.il entries that reference this record index so search stays
         consistent with the new name.
         """
+        self._require_writable("edit_record")
         record = self.get_record(index)
         header = record.raw_header
         old_name = record.name
@@ -357,6 +391,7 @@ class MapProject:
         hardware. Editing an existing record's name/coordinates is far
         more reliable than adding a new one.
         """
+        self._require_writable("append_record")
         new_index = self.record_count()
         header = _set_lon_lat(b"\x00" * RD_HDR_SIZE, lon, lat)
         data = _encode_rd_record(header, name)
@@ -383,6 +418,7 @@ class MapProject:
         db/eeu.il and db/eeu.iof replaced by the working-copy files, and
         everything else byte-for-byte identical to the source disc.
         """
+        self._require_writable("build_output_iso")
         if os.path.abspath(out_iso_path) == os.path.abspath(self.iso_path):
             raise MapToolError("refusing to overwrite the source ISO -- choose a different output path")
 
