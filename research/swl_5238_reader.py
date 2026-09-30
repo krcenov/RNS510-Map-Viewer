@@ -2349,6 +2349,61 @@ different disc (one built with `IBOC=1`) would be needed to actually
 open this file -- not something reachable by checking more of the
 discs already on hand.
 
+============================================================================
+The 2 real North America `FHDD6.FLI` builds -- a 4th independent
+cross-build confirmation the 9MB+ disassembly wall is structural, not
+an artifact of the EU market specifically ("lets continue", same
+session)
+============================================================================
+Each NAR disc's `PROG/` folder is per-project-variant (`APPS/SILVER_1/
+NARBY/PROG/`, `.../NARPQTO/PROG/`), unlike the EU discs' single shared
+location -- but both variants on a given disc are byte-identical
+(same SHA256), so effectively 2 more real, distinct `FHDD6.FLI` builds:
+**`RNS510_4366`, 87,890,828 bytes** (~2.2MB LARGER than the EU disc)
+and **`US_RNS-510_SW1140`, 75,554,712 bytes** (~10MB smaller -- an
+older, 2011 build). Real `"Sirius"`/`"SDARS"`/`"IBOC"` debug strings
+appear in ALL 3 builds checked, including the EU one (329/785/188
+hits) -- this is shared, market-independent APPLICATION code gated at
+runtime by the `SetCoding` byte-7 enum (above), not a separate
+per-market codebase; NAR4366 simply has more (472/2178/237),
+consistent with it being the newer, larger build.
+
+**A promising-looking lead, tested and REFUTED**: `NAR4366`'s own
+`"Sirius"`/`"SDARS"` strings cluster heavily at file offset 10-15MB
+(162/243 hits) -- inside the exact zone (~10-17MB) this project's own
+[Firmware Reversing wiki page](https://github.com/krcenov/RNS510-Map-Viewer/wiki/Firmware-Reversing)
+already confirmed dead for the EU build, raising a real hope that a
+different market's build might have LIVE code there. Checked directly
+with `find_prologues()`: prologue density is **1000+/MB from 2-9MB,
+then ZERO from 10MB on** -- the identical shape already documented for
+EU, not a NAR-specific exception. The 10-15MB strings are Java-class
+content (or similar non-code data), not native code.
+
+**The SAME `FHDD6_LOAD_BASE` (`0xf688dcf4`) resolves a real, sensible
+symbol table on this completely different-sized build** --
+`parse_symbol_table()` finds 26,215 total entries (10,268 under 9MB) on
+`NAR4366` -- real, independent confirmation (a 4th distinct build
+family now, not just 2 EU siblings) that this base is a genuine, stable
+toolchain property, not a coincidence specific to one build. And
+`readNodeMP0`/`findNode__14MDCacheTIRTree` (the project's own
+highest-value unreachable targets) resolve to 10.9MB/16.4MB in THIS
+build too -- squarely inside the confirmed-dead zone, same as every EU
+build already checked. **Net conclusion**: the 9MB+ wall is now
+confirmed across EU and NAR market families both -- not an EU-specific
+stripping choice, genuinely structural to how this codebase is linked
+everywhere it's been checked. Closing "try a different market's
+firmware" as a real, tested avenue for this specific problem, not an
+unexplored one.
+
+**A quick follow-up check, same session**: `WA/CTEST.OUT` is
+byte-IDENTICAL (same SHA256) across all 6 copies now available --
+`5238_MOD_C3_C4`, `5274_MOD_C6_C12`, `6276_MOD_C14`, `RNS510_4366`,
+`US_RNS-510_SW1140`, and `VIM_Berto89` -- including the 2006-dated
+`VIM_Berto89` copy. No diffing opportunity; this tool hasn't changed at
+the byte level across years of firmware releases and both market
+families. The differing filesystem mtimes seen earlier are stale/
+inherited from repackaging, not evidence of real content changes.
+
 ```python
 import zlib, struct
 
