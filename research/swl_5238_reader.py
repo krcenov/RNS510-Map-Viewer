@@ -2739,6 +2739,66 @@ a quick follow-up search. Recorded here as a real, tested wall so a
 future session doesn't re-try the same 2 quick searches expecting a
 different result.
 
+**UPDATE, 4 more real attempts, same session ("continue" x2), all
+NEGATIVE -- 6 total techniques now exhausted, this is a confirmed wall,
+not an unexplored one:**
+
+  1. **A blind full-file linear-sweep disassembly (all 884,736 bytes,
+     ~18s) to grep for every real `CALLI` the disassembler itself
+     decoded, not just raw `0xAB` bytes.** Found a promising-looking
+     dense CLUSTER of ~17 `CALLI` instructions at file offset
+     `0xA8C86`-`0xAAFC2`, each using a different register, evenly
+     spaced -- exactly the shape a real per-job dispatch table would
+     have. **Tested and REFUTED, a genuine methodological catch worth
+     recording**: disassembling backward from this cluster's start
+     shows it sits inside a clean, regular DATA TABLE (16-bit LE
+     values, all in range `0x019D`-`0x01E2`, monotonically stepping
+     down -- plausibly a PWM/backlight calibration curve, matching this
+     file's own `frontIllum_printEepromInformation: ... PWM calib
+     factors` strings), not code. The linear sweep desynced on this
+     data region upstream and coincidentally decoded misaligned bytes
+     into plausible-looking `CALLI` mnemonics -- **the classic linear-
+     sweep-vs-data disassembly trap. A full-file blind sweep is NOT
+     trustworthy here without first knowing real code/data boundaries
+     -- don't repeat this technique expecting reliable results; verify
+     any full-sweep finding by disassembling backward from it first.**
+  2. Disassembled further backward from the handler family (file
+     offset `0xA6200`-`0xA6310`) specifically looking for a `CMP`+
+     `JMPR` compare-and-branch chain (the shape a sparse-case switch
+     compiles to without a jump table) that might reach each handler
+     via a short relative jump (which would explain why no absolute
+     address appears anywhere for techniques 1-3 above -- `JMPR`
+     encodes a signed *relative* displacement, never a literal target
+     address). Found MORE independent, self-contained tiny functions
+     (same "set one constant, optionally call `0x1C:0xE042`" shape),
+     not a dispatcher -- no compare-index chain visible in this window.
+  3. Word-address hypothesis (C166 code is always even-aligned, so
+     some compilers store jump-table entries as `byte_offset/2`) --
+     tested via the same consecutive-pair search as technique 1, using
+     halved handler addresses: 0 hits.
+  4. Low-byte-only table hypothesis (in case a high byte is stored
+     separately/constant) -- 0 hits.
+
+**Honest final assessment for this specific sub-question**: whatever
+calls into this handler family, it is not found anywhere in this file
+as a literal address, in any of the 6 shapes tried. Either (a) it's a
+genuinely runtime-computed indirect call this project's current
+toolset cannot trace (would need real register-dataflow tracking, not
+pattern search), or (b) the real entry point isn't file offset
+`0x6304`/`0x63D0`/`0x64FA` at all -- these could be reached via a
+DIFFERENT starting instruction than the one immediately following the
+preceding `RETS` (an assumption carried over from the PowerPC
+methodology that hasn't been independently re-verified for C166).
+Stopping here on this specific question -- not because it's
+uninteresting, but because 6 real, validated-negative attempts is a
+genuine wall, and a 7th blind guess has a low chance of succeeding
+where the first 6 (covering every literal-reference shape this project
+knows how to search for) did not. A real recursive-descent disassembler
+(follow only confirmed control-flow edges from known-good anchors,
+track register contents symbolically) is the honest next step, not
+another targeted search -- substantial new tooling work, not attempted
+this session.
+
 ```python
 import zlib, struct
 
