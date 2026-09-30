@@ -7806,9 +7806,38 @@ data (the size match and non-random structure are real signals, not
 imagination), but its exact encoding — a non-2-bytes/pixel format, a
 different (possibly proprietary/compressed) scheme entirely, or extra
 per-row metadata this session didn't account for — was not identified.
-Recorded here, with every technique already tried spelled out, so a
-future session starts from "these 3 approaches didn't work" instead of
-repeating them.
+
+**UPDATE, 3 more real attempts, same session (user-asked "continue"),
+now DEFINITIVE, not just inconclusive**: (1) checked the first 64 bytes
+directly for a plausible width/height header field (the same shape
+`.DDB` used) — none found, `800`/`480`/`720`/`768000`/`384000` don't
+appear as either a `LE16` or `LE32` value anywhere in that window,
+consistent with no header at all (pixel data starting at byte 0). (2)
+Tried `RGB565` (a different, very common 16-bit format, distinct from
+the `RGB555` already tried) at 4 candidate widths near the
+autocorrelation cluster (704/720/728/736) — same wavy diagonal banding
+every time, just a different hue; changing the color FORMAT doesn't fix
+banding caused by a wrong STRIDE, so this ruled out "right structure,
+wrong color format" as the explanation. (3) **The decisive test**: swept
+EVERY candidate width from 100 to 1600px (not just a handful near one
+autocorrelation guess) and measured real row-to-row similarity directly
+(mean absolute difference between consecutive rows -- a standard,
+width-agnostic raw-image-forensics technique, more robust than FFT
+autocorrelation alone) -- if 1300+ candidate widths span-tested, a real
+fixed-stride raster image shows one SHARP, unambiguous minimum at its
+true width. **This data shows no such minimum**: the best 20 candidates
+(all in the 684-760px range already suspected) differ by less than 2%
+from each other (19.42 to 19.76) -- a flat plateau, not a real signal.
+**This rules out "raw, fixed-stride, 2-bytes-per-pixel bitmap, at ANY
+width" as a category**, not just the specific widths/formats already
+tried -- a materially stronger, more confident negative result than
+"3 approaches didn't work." Whatever this data actually is, it is NOT a
+simple raw raster image under the standard interleaved-pixel model;
+real next steps would need either a fundamentally different structural
+hypothesis (a genuinely different, non-raster encoding) or independent
+ground truth (a real photo of an actual unit's boot splash screen to
+compare against), not further blind width/format guessing -- recorded
+here so a future session doesn't repeat the same category of search.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
