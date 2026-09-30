@@ -7626,6 +7626,43 @@ excluded, this new case excluded too, and the real 1,518m interleaved-
 parallel-chains edge (`mg4` tile 2385, points 72↔74, gap=2) confirmed to
 survive. New regression tests in `test_map_viewer.py` ("8d-quater").
 
+### v38 → v39: a second, independent POI layer — real Sirius TravelLink data from a completely different disc — with its own toggle, color, and click-to-identify (this session, user-asked "what can we do next to improve the map viewer")
+
+A byproduct of the firmware-side investigation (`research/swl_5238_reader.py`'s
+own `SIRIUS.DB3` section): a real, 158,088-POI Sirius TravelLink database
+from a factory SWL/firmware disc (`RNS510_4366\SIRIUS\SIRIUS.DB3`), sharing
+enough of `POI.DB3`'s own schema that `poi_db_reader.load_poi_cache()`/
+`load_poi_partitions()` work against it completely UNCHANGED — no new
+reader code needed, only new `MapData`/`App` plumbing in this file.
+
+**New**: `File > Load Sirius POIs...` (a plain file picker, not an ISO —
+`SIRIUS.DB3` is a real standalone SQLite file, no extraction/mounting
+involved), a `Show Sirius POIs` checkbox (default on, same as regular
+POIs), and `MapData.load_sirius_data()`/`sirius_pois_for_bbox()` — the
+exact same shape as `load_poi_data()`/`pois_for_bbox()`, run in their own
+`BackgroundTask` the same deferred way. Rendered as a plain colored dot
+(teal, `SIRIUS_POI_DOT_COLOR` — no icon set was cracked for this database
+this session, unlike regular POIs' real PNG icons) with its own declutter
+grid, independent of the regular-POI one so the two layers never suppress
+each other. Sirius POIs are appended into the SAME `rendered_pois` list
+regular POIs use, so click-to-identify (`find_nearest_poi()`) picks them
+up with zero extra code — each dict's own `"source": "sirius"` key is
+there for any future code that wants to tell them apart, not required by
+anything today. Requires a map ISO already open first (there'd be nowhere
+to render the POIs onto otherwise) — a clear message box explains this if
+the user picks the menu item before opening one.
+
+Verified directly: the real Northern-California gas-station POIs
+(`"BLOXHAMS SHELL"`, `"CHEVRON"`, `"UNION 76"`) already validated against
+`decode_coordinate()` this session decode and render correctly; the app
+launches cleanly with the new menu item and both checkboxes present, no
+startup errors. Only `Fuel Station` partitions are actually populated on
+the one Sirius disc examined so far — the schema itself also names
+`Weather Station`/`Movie Theater`/`Ski Resort` partitions (real,
+0-row on this specific disc), so this same code path would show those
+categories too, automatically, if a live/populated Sirius database is
+ever found.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

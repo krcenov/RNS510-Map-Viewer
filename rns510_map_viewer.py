@@ -714,6 +714,13 @@ PICK_MARK_HALO = "#ffffff"       # from every other on-map color (gold roads, na
 POI_DOT_COLOR = "#7b1fa2"
 POI_LABEL_COLOR = "#4a148c"
 
+# Sirius TravelLink POI markers (a separate, optional data source, see
+# MapData.load_sirius_data()) -- Material Design "teal 700", chosen to be
+# visually distinct from the purple regular-POI markers above as well as
+# every other on-map color already in use.
+SIRIUS_POI_DOT_COLOR = "#00796b"
+SIRIUS_POI_LABEL_COLOR = "#004d40"
+
 # --- Hardware bezel / physical-unit chrome (photo #1) ----------------------
 BEZEL_COLOR = "#26282c"          # dark gunmetal/black plastic
 BEZEL_BUTTON_BG = "#3a3d42"
@@ -1333,6 +1340,24 @@ class MapData:
         self.poi_cache = None       # poi_db_reader.load_poi_cache() result
         self.poi_icons = None       # poi_db_reader.load_poi_icons() result (raw PNG bytes per partition_id)
 
+        # Sirius TravelLink POIs (research/swl_5238_reader.py's own "SIRIUS.DB3"
+        # section) -- a completely separate, optional data source from a
+        # different disc (a factory SWL/firmware disc, not the map ISO), loaded
+        # on demand via App.on_load_sirius(), not automatically like poi_path
+        # above. sirius_path is a plain filesystem path (a real standalone
+        # SQLite file already sitting on disk, unlike POI.DB3 which lives
+        # inside the map ISO) -- poi_db_reader._connect()'s existing plain-path
+        # fallback handles it with zero new reader code; load_poi_cache()/
+        # load_poi_partitions() both work UNCHANGED against it (verified
+        # directly: same column names in Poi_BaseAttributes/
+        # PoiPartition_BaseAttributes/Category_BaseAttributes as POI.DB3's own
+        # schema -- 158,088 real POIs decode correctly, real category names
+        # "Fuel Station"/"Weather Station"/"Movie Theater"/"Ski Resort").
+        self.sirius_path = None
+        self.sirius_ready = False
+        self.sirius_building = False
+        self.sirius_cache = None    # poi_db_reader.load_poi_cache() result
+
         self.search_project = None  # core.MapProject, for road name search
         self.rd_cache = None        # road_naming.RdCache
         self.cty_cache = None       # city_reader.CtyCache
@@ -1862,6 +1887,63 @@ class MapData:
                 "name": c["name"][i],
                 "partition_id": pid,
                 "category_name": meta["category_name"] if meta else None,
+            })
+        return out
+
+    def load_sirius_data(self, path, progress=None):
+        """Load a `SIRIUS.DB3` file the user picked directly off disk
+        (`App.on_load_sirius()`) -- a real, standalone SQLite file (a
+        factory SWL/firmware disc's own `SIRIUS/SIRIUS.DB3`, see
+        `research/swl_5238_reader.py`), completely independent of whatever
+        map ISO is or isn't currently open. Reuses `poi_db_reader.
+        load_poi_cache()` UNCHANGED -- no Sirius-specific reader code was
+        needed, its `Poi_BaseAttributes`/`PoiPartition_BaseAttributes`/
+        `Category_BaseAttributes` schema matches POI.DB3's own closely
+        enough that the exact same SQL just works. Meant to run in its own
+        BackgroundTask, same deferred pattern as load_poi_data()."""
+        self.sirius_building = True
+        try:
+            self.sirius_path = path
+            if progress:
+                progress("Decoding Sirius TravelLink POIs...")
+            self.sirius_cache = poidb.load_poi_cache(path)
+            if progress:
+                progress("Sirius POI data ready: %d real points of interest." % len(self.sirius_cache["poi_id"]))
+            self.sirius_ready = True
+            return True
+        finally:
+            self.sirius_building = False
+
+    def sirius_pois_for_bbox(self, lon_min, lon_max, lat_min, lat_max, max_span_m):
+        """Same shape/semantics as `pois_for_bbox()` above, over
+        `sirius_cache` instead of `poi_cache` -- returns [] until
+        `load_sirius_data()` has actually run. Each dict also carries
+        `"source": "sirius"`, purely informational (existing consumers of
+        `pois_for_bbox()`'s own dict shape, e.g. click-to-identify, don't
+        need to change to handle it)."""
+        if not self.sirius_ready or self.sirius_cache is None:
+            return []
+        c = self.sirius_cache
+        mask = (
+            (c["lon"] >= lon_min) & (c["lon"] <= lon_max) &
+            (c["lat"] >= lat_min) & (c["lat"] <= lat_max) &
+            (c["zoom_level_m"] >= max_span_m)
+        )
+        idxs = np.nonzero(mask)[0]
+        partitions = c["partitions"]
+        out = []
+        for i in idxs:
+            i = int(i)
+            pid = int(c["partition_id"][i])
+            meta = partitions.get(pid)
+            out.append({
+                "poi_id": int(c["poi_id"][i]),
+                "lon": float(c["lon"][i]),
+                "lat": float(c["lat"][i]),
+                "name": c["name"][i],
+                "partition_id": pid,
+                "category_name": meta["category_name"] if meta else None,
+                "source": "sirius",
             })
         return out
 
@@ -3182,6 +3264,7 @@ class App:
         menubar = tk.Menu(self.root)
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label="Open Map ISO...", command=self.on_open_iso)
+        filemenu.add_command(label="Load Sirius POIs...", command=self.on_load_sirius)
         filemenu.add_separator()
         filemenu.add_command(label="Exit", command=self.root.quit)
         menubar.add_cascade(label="File", menu=filemenu)
@@ -3395,6 +3478,22 @@ class App:
             font=("Segoe UI", 9), highlightthickness=0)
         self.show_pois_cb.pack(side="left", padx=(10, 0))
 
+        # ---- "Show Sirius POIs" checkbox ----
+        # A separate, optional data source (MapData.load_sirius_data()) --
+        # unchecked until the user actually loads a SIRIUS.DB3 file via
+        # File > Load Sirius POIs..., since (unlike regular POIs) it isn't
+        # bundled with the map ISO and most users won't have one. Same
+        # rendering-time-only toggle as "Show POIs" above.
+        self.show_sirius_var = tk.BooleanVar(value=True)
+        self._status_divider(layers_row)
+        self.show_sirius_cb = tk.Checkbutton(
+            layers_row, text="Show Sirius POIs", variable=self.show_sirius_var,
+            onvalue=True, offvalue=False, command=lambda: self._redraw(),
+            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
+            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
+            font=("Segoe UI", 9), highlightthickness=0)
+        self.show_sirius_cb.pack(side="left", padx=(10, 0))
+
         # ---- hardware bezel + screen (photo #1) ----
         bezel = tk.Frame(self.root, bg=BEZEL_COLOR)
         bezel.pack(fill="both", expand=True)
@@ -3489,6 +3588,12 @@ class App:
         # "v19 -> v20") -- see App._start_poi_load().
         self.poi_status_var = tk.StringVar()
         tk.Label(status_bar, textvariable=self.poi_status_var, bg=STATUS_BAR_BG, fg="#8b93a0",
+                 font=("Segoe UI", 8)).pack(side="left", padx=8)
+        self._status_divider(status_bar)
+
+        # Same pattern, for a user-loaded SIRIUS.DB3 (App.on_load_sirius()).
+        self.sirius_status_var = tk.StringVar()
+        tk.Label(status_bar, textvariable=self.sirius_status_var, bg=STATUS_BAR_BG, fg="#8b93a0",
                  font=("Segoe UI", 8)).pack(side="left", padx=8)
         self._status_divider(status_bar)
 
@@ -3834,6 +3939,43 @@ class App:
             self._redraw()
 
         BackgroundTask(self.root, do_load, lambda msg: self.poi_status_var.set(msg), done).start()
+
+    def on_load_sirius(self):
+        """File > Load Sirius POIs... -- lets the user pick a real
+        `SIRIUS.DB3` file directly off disk (a factory SWL/firmware disc's
+        own file, see MapData.load_sirius_data()'s docstring), unlike
+        `on_open_iso()` this is a plain file, not an ISO to mount. Requires
+        a map ISO already open (self.data must exist -- there'd be nothing
+        to render the POIs onto otherwise); runs the decode in its own
+        BackgroundTask, same deferred pattern as _start_poi_load()."""
+        if self.busy:
+            return
+        if self.data is None:
+            messagebox.showinfo("Load Sirius POIs", "Open a map ISO first (File > Open Map ISO...).")
+            return
+        path = filedialog.askopenfilename(
+            title="Load Sirius POIs",
+            filetypes=[("Sirius database", "*.db3 *.DB3"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        self.sirius_status_var.set("Loading Sirius POI database in the background...")
+
+        def do_load(progress):
+            return self.data.load_sirius_data(path, progress=progress)
+
+        def done(result, error):
+            if error:
+                self.sirius_status_var.set("Sirius POI data unavailable (%s)." % error)
+                messagebox.showerror("Load Sirius POIs failed", str(error))
+                return
+            n = len(self.data.sirius_cache["poi_id"]) if self.data.sirius_cache else 0
+            self.sirius_status_var.set("%d real Sirius POIs ready." % n)
+            self.root.after(4000, lambda: self.sirius_status_var.set(""))
+            self._redraw()
+
+        BackgroundTask(self.root, do_load, lambda msg: self.sirius_status_var.set(msg), done).start()
 
     def _start_bbox_index_load(self):
         """Kick off FAST_LAYERS' bbox-index build (README §8 item 3, "true
@@ -4490,8 +4632,41 @@ class App:
                         draw.ellipse([px - 2.2, py - 2.2, px + 2.2, py + 2.2],
                                      fill=POI_DOT_COLOR, outline=BG_COLOR)
                     if poi["name"]:
-                        poi_label_candidates.append((poi["name"], px, py))
+                        poi_label_candidates.append((poi["name"], px, py, POI_LABEL_COLOR))
                     rendered_pois.append(poi)
+
+        # Sirius TravelLink POIs (MapData.load_sirius_data(), a separate,
+        # optional data source) -- same rasterize-then-declutter shape as
+        # regular POIs above, but a plain colored dot (no icon set was
+        # cracked for this database this session) in SIRIUS_POI_DOT_COLOR,
+        # and its own SEPARATE declutter grid -- a Sirius POI never
+        # suppresses (or gets suppressed by) a regular POI in the same
+        # cell, simplest correct behavior for 2 independently-toggleable
+        # layers. Appended into the SAME rendered_pois list so click-to-
+        # identify (find_nearest_poi()) picks up Sirius markers with no
+        # extra code -- each dict's own "source": "sirius" key
+        # (sirius_pois_for_bbox()) is enough to tell them apart later if
+        # ever needed.
+        if self.show_sirius_var.get() and self.data is not None and self.data.sirius_ready:
+            vb = self._visible_bbox()
+            if vb is not None:
+                lon_min, lon_max, lat_min, lat_max = vb
+                max_span_m = span_m_for_scale(self.scale, w, h)
+                occupied_cells = set()
+                for poi in self.data.sirius_pois_for_bbox(lon_min, lon_max, lat_min, lat_max, max_span_m):
+                    px, py = self._to_canvas(poi["lon"], poi["lat"])
+                    if not (-10 <= px <= w + 10 and -10 <= py <= h + 10):
+                        continue
+                    cell = (int(px // POI_ICON_CELL_PX), int(py // POI_ICON_CELL_PX))
+                    if cell in occupied_cells:
+                        continue
+                    occupied_cells.add(cell)
+                    draw.ellipse([px - 2.6, py - 2.6, px + 2.6, py + 2.6],
+                                 fill=SIRIUS_POI_DOT_COLOR, outline=BG_COLOR)
+                    if poi["name"]:
+                        poi_label_candidates.append((poi["name"], px, py, SIRIUS_POI_LABEL_COLOR))
+                    rendered_pois.append(poi)
+
         self._rendered_pois = rendered_pois
 
         # Hand the finished rasterization off to Tk as ONE canvas item
@@ -4533,10 +4708,10 @@ class App:
         # guard MAX_CITY_LABELS already uses below. Offset -21px to clear a
         # real icon's own top edge (34x39, hotspot at y=19 -- i.e. the icon
         # extends ~19-20px above its own anchor point).
-        for name, px, py in poi_label_candidates[:MAX_POI_LABELS]:
+        for name, px, py, label_color in poi_label_candidates[:MAX_POI_LABELS]:
             if not far_enough(name, px, py):
                 continue
-            self.canvas.create_text(px, py - 21, text=name, fill=POI_LABEL_COLOR,
+            self.canvas.create_text(px, py - 21, text=name, fill=label_color,
                                      font=("Segoe UI", 8), anchor="s")
             placed.append((name, px, py))
 
