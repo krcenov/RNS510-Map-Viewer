@@ -3903,6 +3903,97 @@ not something this project inferred or reconstructed. Recorded exactly
 as found, attributed to nothing beyond what the comment itself states;
 no attempt made to identify register `0x25` or ticket `TlaWtz#42671`
 further.
+
+============================================================================
+A general technique, per the user's direct instruction: corpus-wide
+per-file OUTLIER DETECTION across all 31 firmware builds at once
+(`outlier_sweep.py`, scratchpad), rather than only pairwise diffing --
+finds a correction to the `FIXCOD.WSH` finding above, plus 3 new real
+leads, in a single fast (size-only, no hashing) pass
+============================================================================
+The user directed that this -- systematically checking what's unusual
+in each firmware build, the way the `900/APPS` dig above was done --
+is the right general approach. Rather than repeat that manually per
+build, wrote a corpus-wide scan: for every relative file path that
+recurs across the builds, group by path, and flag any path present in
+most builds at one common size where 1-3 builds disagree -- the exact
+shape of the `FIXCOD.WSH` anomaly, found automatically instead of by
+chance. First pass used file SIZE only (cheap, no hashing); found 133
+near-universal paths with size variance, of which 5 have a small
+(<=3-build), genuine minority-outlier shape:
+
+**Correction to the `FIXCOD.WSH` finding above**: the 7,050-byte
+version isn't unique to build `900` -- it's ALSO present, byte-size-
+identical, in `1020_1022` and `1024`. More importantly, **`1020_1022`
+and `1024` are both dated `#DATE:2007-12-20`, i.e. OLDER than `900`
+(`2008-05-29`)** despite having a numerically larger `VwSwIndex` --
+`VwSwIndex` order is NOT chronological order, a real, concrete
+correction to keep in mind for any future build-history reasoning in
+this file. The real corrected timeline: the large 72-register
+`FIXCOD.WSH` table existed from the EARLIEST disc in this whole
+collection (`1020_1022`/`1024`, Dec 2007) through at least `900` (May
+2008), and was gone by `1100` (Nov 2008) -- a ~11-month window, not
+"immediately after 900" as the section above implies taken alone.
+
+**`RADIO/C6/RNSMIDEC/PROG/RADIO.FLI` zeroed (0 bytes) in `1020_1022`
+and `1024`** -- the same "official disc ships this specific `RADIO.FLI`
+zeroed" shape already seen repeatedly in official-vs-unofficial PAIRS
+this session (`5270`, `5269`, `5274`, `5238`), but here on 2 genuinely
+standalone official builds with no unofficial sibling in this
+collection to pair against -- consistent with, and extending, the
+existing pattern to the very earliest builds in the whole project.
+
+**A 2nd, independent anomaly on `5218`** (already flagged above for
+carrying the testmode-unlock pattern despite an "official" label):
+its `MPEG/1/RNSMIDEC/CONFIG/DLSCRIPT.TXT` is MISSING the
+`RUN_SHELL_SCRIPT .../WA/CYCFLAG1.TXT` / `RUN_SHELL_SCRIPT
+.../WA/CYCFLAG0.TXT` pair that brackets the MPEG flash step in every
+other build checked, including the much older `900`. Read
+`CYCFLAG1.TXT`/`CYCFLAG0.TXT` directly -- real, simple 1-line scripts:
+`dlpSetCyclicFlag 1` (before flashing) / `dlpSetCyclicFlag 0` (after) --
+plausibly a real dirty-flash/power-loss-recovery flag, set before the
+risky flash step and cleared after. `5218` skips setting/clearing it
+entirely for its MPEG step. A 2nd real, independent way in which
+`5218` deviates from the norm, strengthening (not proving) the case
+that this specific "official"-labeled disc is not a stock factory
+image.
+
+**A real, new structural fact about `LOAD_ECU_BLOCK` addressing**:
+`5218`'s (and by extension other builds') MPEG `DLSCRIPT.TXT` uses
+`LOAD_ECU_BLOCK 65707 162352 .../MPEGSWL.FLI` and `LOAD_ECU_BLOCK
+131243 2095056 .../MPEGAPPS.FLI` -- **each address is exactly ONE MORE
+than the gateway's own already-documented addresses** (`65706` for
+`PQTABLE.FLI`, `131242` for `GATEWAY.FLI`, found in the `5274`/`5270`
+sections above). Real, concrete evidence the MPEG and gateway ECUs
+share the same flash-address numbering convention / adjacent address
+space on this platform -- not decoded further (no claim about WHY
+they're adjacent, e.g. shared physical flash chip vs. coincidence).
+
+**`MPEGAPPS.FLI`/`MPEGSWL.FLI` genuinely differ in SIZE** (not just
+content) in the earliest builds -- `900`: `MPEGAPPS.FLI` 2,094,896
+bytes; `1020_1022`/`1024`: 2,093,392 bytes; every build from `1100`
+onward: 2,095,056 bytes (`MPEGSWL.FLI` similarly: 162,048 in
+`1020_1022`/`1024` vs. 162,352 everywhere else). A real size change
+across early builds, i.e. genuine code growth in the MPEG subsystem
+firmware over this period -- not investigated at the byte level this
+session.
+
+**`WA/DEL_FOLD.WSH`** differs only in `900` (200 vs. 214 bytes
+elsewhere) -- checked directly: just a `rmdir "/tffs0/FLASH"` line
+moved to a different position in the script between `900` and `1100`,
+same real effect either way -- low-value, recorded only for
+completeness.
+
+**A real, general technique for future sessions**: this corpus-wide
+size-only sweep took under a minute across all 31 builds and found, in
+one pass, everything the earlier manual `900/APPS` dig found (and
+corrected it) plus 3 new independent leads. A logical next step NOT
+done this session: re-run the same grouping with real SHA256 content
+hashes (not just size) to also catch same-size-different-content
+outliers -- `outlier_sweep.py` (scratchpad) already computes hashes in
+the underlying tree-hash helper used elsewhere in this file; the
+corpus-wide version only used size for speed. Left as a concrete,
+ready-to-run follow-up.
 """
 
 import re
