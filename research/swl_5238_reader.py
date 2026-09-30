@@ -4115,6 +4115,178 @@ fixed-point scale to these particular bytes. The rest of that worked
 example (the real field layout: length-prefixed name/street/city/
 country/postal strings, a 2-byte icon/flag field) remains valid and
 useful; only the coordinate SUB-field is now known to be fake data.
+
+============================================================================
+`BASE/Other/maps-tool 2.0.2/maps-tool-2.0.2.exe` -- decompiled (a real
+self-executing JAR wrapper, Apache-2.0, `com.rns.maps.tool`; real Java
+source recovered with `cfr` after installing a JDK via `winget`, since
+this project had never had a JVM available before) -- finds a real,
+BUNDLED, minimal SWL disc template used for every SD-card map
+installation, and a DIRECT, concrete tie to the SAME `4120` testmode
+build family already fully analyzed above -- proving the testmode/
+speed-lockout unlock isn't confined to enthusiast "unlock discs": a
+mainstream, trusted, widely-distributed community tool runs it as
+standard, unconditional behavior on every SD-card-based map install
+============================================================================
+The `.exe` is a real Launch4j-style native stub (`MZ` header) with a
+genuine ZIP/JAR payload appended (`PK\x03\x04` local file headers
+start at file offset 397,312; the real End-Of-Central-Directory record
+reports 2,088 entries) -- Python's own `zipfile.ZipFile()` opens it
+directly with no extraction trick needed (it seeks from the end of the
+file for the EOCD record, tolerating arbitrary prepended bytes). 1,473
+real `.class` files extracted; the app's own code
+(`com/rns/maps/tool/`) is ProGuard-obfuscated (single-letter class
+names throughout most packages) except a few classes whose real names
+survived (`MapsTool.java`, the main UI entry point, confirming the
+real top-level package). Bundles the real, known open-source
+`com.github.stephenc.javaisotools` library (ISO9660/UDF/RockRidge/
+El Torito) -- confirms this tool builds real, standards-conformant
+ISO9660 images itself, not by shelling out to an external burner tool.
+
+**`CD_8048`/`CD_8049` special-casing, confirmed at the code level**:
+`g.a(String, String)` (the core build-task class) checks
+`this.f.e.equalsIgnoreCase("CD_8048")`/`"CD_8049"` and, ONLY for those
+2 specific map-disc versions, reads and rewrites a bundled
+`CONFIG/CREATE_CD` file via a real string-transform helper
+(`com.rns.maps.tool.a.a.a(InputStream, ...)`) before continuing --
+this is the real, exact mechanism behind the already-known "a few
+hardcoded filename-typo fixes for old disc versions" (this project's
+own `maps-tool` help.html read, earlier this session) -- now
+identified precisely: which 2 versions, and which single file.
+
+**The real region-code gate, confirmed at the code level**: a real
+4-value enum, `com.rns.maps.tool.a.c` = `{EU, EEU, AUNZ, NA}` --
+matches the already-known `EEU`/`EU`/`AUNZ`/`NA` region check exactly
+(`help.html`, documented earlier this session). A real aliasing rule
+exists: under some flag, `EEU` normalizes to `EU` for naming purposes
+(both regions' bundled data is byte-identical anyway, see below).
+
+**The real prize -- a bundled, minimal SWL disc template**:
+`com/rns/maps/tool/sdcard/sd_to_hdd_fw.zip` (a real resource inside
+the JAR, 3,778,690 bytes) is a COMPLETE, real, minimal SWL disc
+(`SD2HDD/BLSCRIPT.CFG`/`DIR.INF`/`ECUORDER.TXT`/`VERSION.TXT`/`SWL/
+.../SWL.FLI`/`WA/CTEST.OUT`+several `.WSH` cleanup scripts/`HDD/
+HDD_20GB/RNSMIDEC/CONFIG/DLSCRIPT.TXT`), PLUS 4 top-level region
+folders (`EU/`, `EEU/`, `AUNZ/`, `NA/`), each holding exactly one file:
+**`VIM.WSH`**.
+
+**`SD2HDD/VERSION.TXT` ties this template DIRECTLY to the exact same
+build already fully analyzed above**: `VwSwIndex:4120`, `#CD:P 0 0 5 .
+5 4 1 . 9 0 1`, `#DATE:2012-03-16`, `#Author: SaRo` -- byte-identical
+metadata to `4120_testmode_tvfree`'s own `VERSION.TXT` (the
+`4120_original` vs. `4120_testmode_tvfree` section, above), except
+`#CommentStart` here reads the innocuous **"Copy map from SD card to
+HDD."** instead of any testmode/unofficial branding -- a 3rd real,
+concrete instance of `#CommentStart` being an unreliable signal (this
+file's own already-established pattern from the `5270`/`6276`/`5218`
+sections), and the most consequential one: this isn't a community
+"unlock disc" someone has to go looking for, it's the innocuous-
+looking template bundled inside the single most mainstream, widely-
+used SD-card map-loading tool for this whole platform.
+
+**The real WA-copy `NameMapper` (`com.rns.maps.tool.d.d`) confirms
+this happens UNCONDITIONALLY, every time, for every user, with no UI
+toggle anywhere in the app** -- it strips a `"<REGION>/"` prefix and
+extracts any matching entry into the built disc's own `WA/` folder;
+returns `null` (skip) for anything else. For the detected map region,
+this copies exactly ONE file: `<REGION>/VIM.WSH` -> `WA/VIM.WSH`.
+
+**`HDD/HDD_20GB/RNSMIDEC/CONFIG/DLSCRIPT.TXT`'s ENTIRE real payload,
+confirming `VIM.WSH` is not incidental but the sole purpose of this
+disc's one executable step**:
+
+```
+BOOTMODE_SWL
+SHOW_SCREEN 1 16 SWL_SCREEN_PROGRESS
+EXPECTED_TIME 200
+RUN_SHELL_SCRIPT 0 845 /cddos/WA/VIM.WSH
+EXPECTED_TIME 1800
+FINISHED_ECU
+```
+
+**The real, bundled `VIM.WSH` content -- byte-for-byte the same
+testmode/speed-lockout pattern already fully reverse-engineered this
+session, this time inseparably fused with the real SD-to-HDD copy
+shell procedure** (identical in `EU`/`EEU`, 845 bytes; `NA` and `AUNZ`
+are real, minor regional variants, same testmode header, see below):
+
+```
+# Load Coding LIB
+ld < /tffs0/lib/diag/CodingTest.out
+
+# Testmode: Active
+SetRegDataHex(0x21,"01",0x0,0x1,0x1)
+
+# Speed limit DVD/TV: 300km/h
+SetRegDataHex(0x0B3A,"012C",0x0,0x2,0x89)
+
+# Copy map from SD to HDD (EUR)
+cd("/hdb2")
+mkdir("dvd")
+cd("/hdb2/dvd")
+mkdir("db")
+mkdir("config")
+mkdir("tpd")
+mkdir("EDB")
+cd("/hdb2/dvd/EDB")
+mkdir("POI")
+cd("/hdb2/dvd")
+mkdir("telemat")
+cd("/hdb2/dvd/telemat")
+mkdir("tmc2")
+cd("/hdb2/dvd/telemat/tmc2")
+mkdir("lan")
+mkdir("loc")
+cd("/hdb2/dvd")
+mkdir("dbal")
+mkdir("speech")
+cd("/hdb2/dvd/speech")
+mkdir("parts")
+cd("/hdb2/dvd")
+sp xcopy("/sda/mapsdvd","/hdb2/dvd")
+copy("/sda/maps/hddfiles.log", "/hdb2/hddfiles.log")
+IL_Flush
+```
+
+**A real, new, previously-undocumented shell mechanism**: `sp
+xcopy("/sda/mapsdvd","/hdb2/dvd")` -- a real VxWorks target-shell
+`xcopy` spawned task, recursively copying from the SD card (**`/sda` --
+a real, new mount point, the SD card's own real device path, not
+previously seen this session**) to the internal HDD (`/hdb2/`,
+already partially known from the `HDD_20GB` `FILE_UPDATE` section
+above, now confirmed as the real root for the whole on-unit map-data
+tree, not just `speech/`). `copy("/sda/maps/hddfiles.log",
+"/hdb2/hddfiles.log")` directly closes the loop with this tool's own
+Java-side `g.a(String, File)` method (real code, also decompiled):
+that method generates `hddfiles.log` as a sorted, newline-joined file
+list on the PC side before building the disc -- this real shell line
+is where that exact file gets consumed on the unit itself.
+
+**Real regional variation, confirmed in the bundled `NA`/`AUNZ`
+copies**: `NA`'s version additionally creates `EDB/SIRIUS` (a direct,
+independent confirmation `EDB/SIRIUS` is a real on-unit directory,
+consistent with this project's own `SIRIUS.DB3` findings above).
+`AUNZ`'s version has the entire `telemat/tmc2/{lan,loc}` block
+commented out (`## mkdir(...)`) -- a real, concrete regional feature
+difference: Australia/New-Zealand map installs don't provision TMC
+traffic-data directories at all.
+
+**Net assessment**: this is a real, significant escalation of the
+testmode/speed-lockout pattern's own scope, found by chance while
+pursuing an unrelated "decompile this other tool" task. Every other
+instance of this pattern found this session required a user to
+deliberately seek out and burn a specific "unlock"/"testmode"/"josi"-
+labeled disc. This one ships inside the single most mainstream,
+trusted, currently-recommended tool for a completely legitimate,
+common task (loading official map updates via SD card) -- with the
+innocuous `VERSION.TXT` comment "Copy map from SD card to HDD.", zero
+mention anywhere in the tool's own UI or `help.html`, and no way for a
+user to opt out short of not using this tool's SD-card feature at all.
+Not established: whether this is a deliberate choice by the tool's
+real author (`christian-jeanin.ro`, already known from `help.html`)
+or an unexamined side effect of reusing an existing `4120`-family disc
+as this template's own starting point -- no claim made about intent,
+only about the real, confirmed, decompiled behavior.
 """
 
 import re
