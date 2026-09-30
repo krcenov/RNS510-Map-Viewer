@@ -3746,6 +3746,44 @@ two here. Reinforces the file's own standing rule: **only real
 byte-level diffing (`CRC16`, full tree hash) is a reliable signal of
 whether a disc has been altered; the `#CommentStart` text is not,
 in either direction.**
+
+============================================================================
+A cheap grep sweep across every remaining un-paired build finds a 2nd,
+independent instance -- `5218`, a build with NO suspicious folder name
+at all -- and directly rules out one tempting explanation
+============================================================================
+Since `#CommentStart` just proved unreliable, ran a single cheap sweep
+(`grep -rl "Testmode: Active"` over every remaining build's `WA/`
+folder, no pairwise diffing needed) across all still-unpaired discs
+(`900`, `1020_1022`, `1024`, `1100`, `1140_US`, `1200`, `1300`, `1500`,
+`2680`, `3890`, `3970`, `3980`, `4366`, `5218`, `5230`,
+`6270_original_update`). Only **`5218`** hits -- 5 real `WA/*.WSH`
+files (`ESKHDDDL`, `ESKHDDL`, `EURPQTO`, `EURPQTOD`, `EURSEDAB`), ALL
+carrying both `Testmode: Active` and the `0x0B3A` speed-lockout
+override -- **despite `5218`'s own `VERSION.TXT` reading "This is a
+SWL CD for VW delivery," and despite the folder having a completely
+plain name (`5218`, no `_MOD_`/`_josi`/`_testmode` hint at all)**. A
+2nd real, independent instance of an "official"-labeled disc actually
+carrying the community-unlock pattern (`#CD:P 0 0 5 . 5 9 6 . 9 0 1`,
+`#DATE:2012-04-25`, 2 years apart from the `6276` instance above --
+not the same batch or a copy-paste artifact).
+
+**Tested and RULED OUT one tempting explanation**: both `5218` and
+`6276_MOD_C14`'s `#Integrationphase` strings end in "-samples"
+(`C12-samples`, `C14-samples` respectively), raising the hypothesis
+that "-samples" builds might legitimately ship with testmode
+pre-enabled for internal/factory testing. Checked directly against 6
+confirmed testmode-INACTIVE discs (`900`, `1300`, `5230`,
+`6270_original_update`, `5238_update_original`, `5269_update`) -- ALL
+of them ALSO carry an `-samples`-suffixed `#Integrationphase` string
+(`C3/C4A/C5C/C6-samples`, `C6-samples`, etc.). **"-samples" is
+universal boilerplate across this whole disc family, uncorrelated with
+testmode status** -- this hypothesis is directly falsified, not just
+unconfirmed. The real explanation for why these 2 specific
+"official"-labeled discs carry the unlock pattern remains genuinely
+open (relabeled community repack vs. a real, rare internal/leaked
+factory build) -- recorded as ruled-out-but-still-unsolved, per this
+project's own standing rule against overclaiming.
 """
 
 import re
