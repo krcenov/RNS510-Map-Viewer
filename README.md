@@ -7685,6 +7685,74 @@ list, same click-to-identify. Verified: `load_sirius_data()` loads both
 `sirius_cache` and `sirius_icons` correctly in isolation, and the app
 still launches cleanly with no startup errors.
 
+### v40 → v41: the on-screen canvas can now match the REAL firmware's own screen shape — read live off a firmware ISO, nothing hardcoded (this session, user-asked "figure out all the menus their looks the resolution and implement all that into the map viewer" / "make the viewer directy read these from the firmware iso, dont hardcode anything")
+
+Investigated what's actually recoverable from `FHDD6.FLI`'s own Java UI
+code: 123 real embedded ZIP/JAR local-file headers exist (real `vdo.*`
+`.class` bytecode packages, e.g. `vdo/rio/impl/fwk/BundleAdmin$2.class`
+— confirmed via a real, parseable Central Directory, 156 entries), and
+3 "PNG"/13 "GIF"-tagged byte regions — but NONE of these panned out as
+directly usable "menu look" assets: the JAR entries are compiled
+bytecode, not images or layout data; the 3 PNG hits are confirmed false
+positives (no valid `IEND` chunk); and while the 13 GIF-tagged regions
+have a genuinely real GIF87a/89a header AND a real 256-color gradient
+palette (11 of them independently agree on `800x480` — a 2nd,
+independent confirmation of the real resolution below), the byte
+immediately after the palette (`0xb6`) is not a valid GIF block
+marker — this is some proprietary format that borrows GIF's header/
+palette convention without the real image-block encoding, and PIL
+correctly refuses to decode it (verified: PIL's own GIF codec works
+fine on a synthetic test file, ruling out an environment issue). Not
+solved this session — real menu button/background graphics remain
+unextracted; recorded here so a future session doesn't re-attempt a
+literal `Image.open()` on this data.
+
+**What WAS solidly recoverable and IS now implemented: the real screen
+resolution, `800x480`**, confirmed 2 independent ways — a real
+`java.awt.Rectangle`-shaped widget-bounds string
+(`vdo.uis.wdg.vw.VWVideoPlayer[GUI_Canvas_Videoplayer_1,0,0,800x480]`)
+and, separately, the 11 real GIF-header dimension fields above, zero
+disagreement between either source.
+
+**New, fully dynamic — reads the firmware ISO live, nothing hardcoded**:
+
+- `rns510_iso.find_file()`: walks a real disc's own directory tree
+  (`iso.walk()`) for a filename pattern (e.g. `"FHDD*.FLI"`) —
+  necessary because this disc family's own folder layout genuinely
+  differs by market (EU discs share one `APPS/SILVER_1/RNSMIDEC/PROG/`;
+  North America discs use a PER-VARIANT folder instead, see
+  `research/swl_5238_reader.py`'s own "2 real North America `FHDD6.FLI`
+  builds" section) — a hardcoded path would silently miss those. Also
+  surfaced and fixed a real, disc-family-dependent quirk while building
+  this: some discs' own ISO9660 records need a `;1` version suffix in
+  lookups (no Rock Ridge extension), others (the map disc) don't —
+  `find_file()` returns exactly what the disc itself provided, never
+  assumes either convention.
+- `research/swl_5238_reader.find_screen_resolution()`: scans raw
+  `FHDD6.FLI` bytes for every real widget-bounds string matching either
+  shape above, and returns the MOST COMMON `(width, height)` pair found
+  (a real `Counter`, not just the first match — correctly ignores a
+  real but non-full-screen 100x50 logo widget found the same way).
+- `File > Open Firmware ISO (real screen shape)...`: a NEW, separate
+  menu action (independent of both "Open Map ISO" and "Load Sirius
+  POIs" — a 3rd, completely different disc family) that runs the above
+  in a background task, then reshapes `self.canvas_frame` to the real
+  discovered aspect ratio via `App._apply_screen_aspect_ratio()`
+  (letterboxed/pillarboxed, centered, re-applied live on every window
+  resize) — falls back to filling the whole screen area, this app's
+  original behavior, whenever no firmware resolution is known yet.
+
+**Tested against all 3 real firmware ISOs on hand**: `5238_MOD_C3_C4`
+and `US_RNS-510_SW1140` both resolve to exactly `(800, 480)` via
+`find_file()` + `find_screen_resolution()`, working end to end
+(including across their genuinely different folder layouts and `;1`
+conventions). `RNS510_4366` (the newest, largest NAR build) returns
+`None` — checked directly, that specific build's own compiled UI code
+simply doesn't contain the resolution-revealing debug-logging string
+in any of the formats tried (not a bug in the detection logic; a real,
+honest per-build limitation) — the app shows a clear message and
+otherwise behaves exactly as before, rather than crashing or guessing.
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

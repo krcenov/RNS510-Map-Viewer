@@ -35,6 +35,7 @@ pycdlib.PyCdlib().open() (no monkeypatch needed) and has_udf() == False.
 """
 
 import collections
+import fnmatch
 import os
 import pycdlib
 from pycdlib import pycdlibexception
@@ -203,6 +204,53 @@ def open_file_ref(iso, iso_path, image_path):
     no-extraction reading via research/map_compressed_reader.py."""
     offset, length = get_file_extent(iso, iso_path)
     return IsoFileRef(image_path, offset, length)
+
+
+def find_file(iso, filename_pattern, start_path="/"):
+    """Walk `iso`'s own real directory tree (pycdlib's `iso.walk()`, real
+    ISO9660 records -- no assumption about which project-variant folder a
+    file lives under) looking for a filename matching `filename_pattern`
+    (`fnmatch`-style, e.g. `"FHDD*.FLI"` -- this disc family's own
+    per-market/per-variant folder layout is NOT uniform: EU discs share
+    one `APPS/SILVER_1/RNSMIDEC/PROG/`, North America discs instead have
+    a PER-VARIANT `APPS/SILVER_1/<NARBY|NARPQTO|...>/PROG/`, see
+    research/swl_5238_reader.py's own "2 real North America `FHDD6.FLI`
+    builds" section -- a hardcoded path would silently miss those).
+    Case-insensitive (this disc family's own filenames are inconsistently
+    upper/lower-cased across builds, e.g. `A_HDD.FRG` vs `A_HDD.frg`,
+    already documented elsewhere in this project).
+
+    Returns the first matching REAL absolute ISO path found (e.g.
+    `/APPS/SILVER_1/NARBY/PROG/FHDD6.FLI`), or None if nothing matches
+    anywhere under `start_path`. Stops at the first match -- multiple
+    real matches can exist (every NAR project-variant folder has its own
+    copy, all byte-identical, see the same section above), and the
+    caller only ever needs one."""
+    pattern = filename_pattern.upper()
+    for dirpath, _dirs, files in iso.walk(iso_path=start_path):
+        for fname in files:
+            # pycdlib's own ISO9660 filenames carry a ';1' version suffix
+            # (e.g. 'FHDD6.FLI;1') -- strip it before matching, same real
+            # convention this module's own "Note on paths" above already
+            # flags for the (suffix-free) Joliet-style paths it otherwise
+            # uses everywhere else.
+            bare = fname.split(";")[0]
+            if fnmatch.fnmatch(bare.upper(), pattern):
+                # Return `fname` AS `iso.walk()` GAVE IT, ';1' and all when
+                # present -- do NOT strip it. This module's own "Note on
+                # paths" above ("this disc's directory records have NO
+                # ';1' version suffix") describes the MAP disc family
+                # (`CD_8555.ISO`) specifically, not every disc: tested
+                # directly against a real SWL/firmware disc
+                # (`RNS510_5238_MOD_C3_C4.iso`, plain ISO9660, no Rock
+                # Ridge/Joliet/UDF at all) and `get_file_byte_extents()`
+                # only succeeds WITH the `;1` there -- confirmed real,
+                # per-disc mastering difference, not a bug in either
+                # convention. `bare` (above) is ONLY for case-insensitive
+                # pattern matching, never for the returned path.
+                sep = "" if dirpath.endswith("/") else "/"
+                return dirpath + sep + fname
+    return None
 
 
 class _IsoFileRefHandle:

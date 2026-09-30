@@ -356,6 +356,7 @@ import ctr_reader as ctrr
 import flat_compressed_reader as fcr
 import iof_reader as iofr
 import poi_db_reader as poidb
+import swl_5238_reader as swlfw
 from rns510_gui import BackgroundTask
 
 APP_TITLE = "RNS510 Map Viewer (read-only)"
@@ -3144,6 +3145,14 @@ class App:
         self.root.geometry("1150x760")
 
         self.data = None          # MapData once an ISO is loaded
+        # Real screen resolution, read directly out of a firmware ISO's own
+        # FHDD6.FLI (App.on_open_firmware_iso() -> research/swl_5238_reader.
+        # find_screen_resolution()) -- (width, height) or None until a
+        # firmware ISO has actually been opened. NOT hardcoded anywhere:
+        # every place this is used reads THIS attribute, never a literal
+        # "800"/"480" constant, so a different firmware build's own real
+        # resolution (if it ever differs) would be picked up automatically.
+        self.firmware_resolution = None
         self.search_results = []  # last search hits: list[SearchHit]
         self.features = []        # currently rendered, NAMED features
         self.center_lon = None
@@ -3271,6 +3280,7 @@ class App:
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label="Open Map ISO...", command=self.on_open_iso)
         filemenu.add_command(label="Load Sirius POIs...", command=self.on_load_sirius)
+        filemenu.add_command(label="Open Firmware ISO (real screen shape)...", command=self.on_open_firmware_iso)
         filemenu.add_separator()
         filemenu.add_command(label="Exit", command=self.root.quit)
         menubar.add_cascade(label="File", menu=filemenu)
@@ -3531,10 +3541,19 @@ class App:
         screen_frame.grid(row=0, column=1, sticky="nsew", pady=(10, 0))
         self.screen_frame = screen_frame
 
+        # canvas_frame is placed (not packed) so it can be LETTERBOXED to
+        # the real firmware screen's own aspect ratio once one is known
+        # (App.on_open_firmware_iso() -> self.firmware_resolution ->
+        # self._apply_screen_aspect_ratio(), bound to screen_frame's own
+        # <Configure> below) -- fills screen_frame completely (the
+        # original, pre-firmware-ISO behavior) whenever no firmware
+        # resolution has been read yet.
         canvas_frame = tk.Frame(screen_frame, bg=SCREEN_BORDER_COLOR)
-        canvas_frame.pack(fill="both", expand=True, padx=4, pady=(4, 0))
+        self.canvas_frame = canvas_frame
         self.canvas = tk.Canvas(canvas_frame, background=BG_COLOR, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
+        screen_frame.bind("<Configure>", lambda e: self._apply_screen_aspect_ratio())
+        self._apply_screen_aspect_ratio()
         self.canvas.bind("<Configure>", lambda e: self._redraw())
         self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
         self.canvas.bind("<B1-Motion>", self._on_drag_move)
@@ -3679,6 +3698,37 @@ class App:
         self._tick_clock()
 
     # -------------------------------------------------------- chrome helpers
+
+    def _apply_screen_aspect_ratio(self):
+        """Re-`place()` `canvas_frame` inside `screen_frame` -- called on
+        every `screen_frame` resize AND right after `self.firmware_resolution`
+        changes (`on_open_firmware_iso()`). With no firmware resolution known
+        yet, fills `screen_frame` completely (a 4px inset on 3 sides, matching
+        this widget's own original `pack(padx=4, pady=(4,0))` look) -- the
+        same behavior this app always had. Once a real resolution IS known,
+        LETTERBOXES/PILLARBOXES canvas_frame to that exact real aspect ratio
+        instead, centered within whatever space is actually available --
+        the real RNS510 unit's own screen shape, read live off a firmware
+        ISO, never a hardcoded number here."""
+        sw = self.screen_frame.winfo_width()
+        sh = self.screen_frame.winfo_height()
+        if sw <= 1 or sh <= 1:
+            return  # not yet laid out
+        avail_w, avail_h = sw - 8, sh - 4  # same 4px inset as the old pack()
+        if self.firmware_resolution is None:
+            w, h = avail_w, avail_h
+        else:
+            fw, fh = self.firmware_resolution
+            ratio = fw / fh
+            if avail_w / avail_h > ratio:
+                h = avail_h
+                w = int(round(h * ratio))
+            else:
+                w = avail_w
+                h = int(round(w / ratio))
+        x = 4 + (avail_w - w) // 2
+        y = 4 + (avail_h - h) // 2
+        self.canvas_frame.place(x=x, y=y, width=max(1, w), height=max(1, h))
 
     def _status_divider(self, parent):
         tk.Frame(parent, bg=STATUS_DIVIDER_COLOR, width=1).pack(side="left", fill="y", pady=6)
@@ -3982,6 +4032,74 @@ class App:
             self._redraw()
 
         BackgroundTask(self.root, do_load, lambda msg: self.sirius_status_var.set(msg), done).start()
+
+    def on_open_firmware_iso(self):
+        """File > Open Firmware ISO (real screen shape)... -- lets the user
+        pick a real factory SWL/firmware disc ISO (a completely separate
+        disc family from the map ISO, see research/swl_5238_reader.py) and
+        reads its own real screen resolution DIRECTLY out of it, live, no
+        hardcoding: `rns510_iso.find_file()` walks the disc's own real
+        directory tree looking for `FHDD*.FLI` (works across this disc
+        family's genuinely different per-market folder layouts -- EU discs
+        share one path, North America discs use a different one per project
+        variant, see find_file()'s own docstring), reads it directly via
+        `open_file_ref()`'s byte-range (no extraction to disk, same
+        direct-from-ISO pattern the map ISO already uses throughout this
+        file), then `swl_5238_reader.find_screen_resolution()` scans those
+        real bytes for the firmware's own actual Java UI widget/Rectangle
+        bounds strings. Once found, `self.firmware_resolution` is set and
+        `_apply_screen_aspect_ratio()` reshapes the on-screen canvas to
+        that EXACT real aspect ratio -- entirely dynamic; a different
+        firmware build with a different real resolution would be picked up
+        automatically, nothing here assumes any particular value."""
+        if self.busy:
+            return
+        path = filedialog.askopenfilename(
+            title="Open Firmware ISO",
+            filetypes=[("ISO images", "*.iso *.ISO"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        self._begin_busy("Reading real screen resolution from firmware ISO...")
+
+        def do_load(progress):
+            iso = riso.open_tolerant(path)
+            try:
+                if progress:
+                    progress("Locating FHDD*.FLI in the firmware ISO's own directory tree...")
+                iso_path = riso.find_file(iso, "FHDD*.FLI")
+                if iso_path is None:
+                    raise ValueError("No FHDD*.FLI found anywhere on this disc -- not a recognized firmware ISO?")
+                ref = riso.open_file_ref(iso, iso_path, path)
+            finally:
+                iso.close()
+            if progress:
+                progress("Scanning %s (%.1f MB) for real screen-resolution strings..." % (iso_path, ref.length / 1e6))
+            with open(ref.image_path, "rb") as f:
+                f.seek(ref.offset)
+                fli_bytes = f.read(ref.length)
+            return swlfw.find_screen_resolution(fli_bytes), iso_path
+
+        def done(result, error):
+            self._end_busy()
+            if error:
+                messagebox.showerror("Open Firmware ISO failed", str(error))
+                self._set_status("Failed to read firmware ISO: %s" % error)
+                return
+            resolution, iso_path = result
+            if resolution is None:
+                messagebox.showinfo(
+                    "Open Firmware ISO",
+                    "Found %s but no real screen-resolution string was found in it." % iso_path)
+                self._set_status("Firmware ISO opened, but no resolution string found.")
+                return
+            self.firmware_resolution = resolution
+            self._apply_screen_aspect_ratio()
+            self._set_status(
+                "Real screen resolution read from firmware (%s): %d x %d." % (iso_path, resolution[0], resolution[1]))
+
+        BackgroundTask(self.root, do_load, self._set_status, done).start()
 
     def _start_bbox_index_load(self):
         """Kick off FAST_LAYERS' bbox-index build (README §8 item 3, "true
