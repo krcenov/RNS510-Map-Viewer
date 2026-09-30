@@ -3784,6 +3784,125 @@ unconfirmed. The real explanation for why these 2 specific
 open (relabeled community repack vs. a real, rare internal/leaked
 factory build) -- recorded as ruled-out-but-still-unsolved, per this
 project's own standing rule against overclaiming.
+
+============================================================================
+`BASE/Firmware/900/APPS` (the OLDEST build in the whole collection,
+`VwSwIndex:0900/0902/0904`, `#DATE:2008-05-29`) -- user-directed dig,
+finds `FHDD.FLI` (the real, confirmed ancestor of `FHDD6.FLI`), a real
+APPS-side flash-command family distinct from the gateway's, and a
+UNIQUE, one-off internal engineering artifact never seen in any other
+build this session touched
+============================================================================
+**`FHDD.FLI` (no "6") is a real, confirmed direct ancestor of
+`FHDD6.FLI`** -- `APPS/SILVER_1/RNSMIDEC/PROG/FHDD.FLI`, 73,877,728
+bytes (smaller than every `FHDD6.FLI` checked, e.g. 76,798,708 bytes in
+build `1100` from just 6 months later -- consistent with growth over
+time). Ran this project's own `find_screen_resolution()` and a direct
+string search against it: **the real 800x480 resolution, `VxWorks`,
+and `tShell` strings are ALL already present in this 2008 build** -- a
+4th independent confirmation of the resolution (now also confirmed to
+predate every other evidence source this session found it through), and
+confirms the VxWorks/tShell architecture goes back to the project's
+earliest known build, not something introduced later. The `FHDD.FLI` ->
+`FHDD6.FLI` rename happened sometime between `900` (2008-05-29) and
+`1100` (2008-11-26) -- not narrowed further. Header bytes differ
+(`FHDD.FLI` starts `AA55 AA55...`; not compared byte-for-byte against
+`FHDD6.FLI`'s own header this session -- a real, cheap follow-up for a
+future session).
+
+**`A_HDD.FRG`** (100,515,164 bytes -- the largest single file this
+project has encountered, header magic `5A5A 5A5A...`) is a real,
+different kind of image from every other `.FRG` seen so far (previous
+ones were ~1.2-2MB gateway/tuner images); paired with `FHDD.FLI` in the
+same install step, plausibly a combined/bulk data-and-code fragment
+for the APPS processor's HDD-based install path (not opened further
+this session).
+
+**A real, distinct, stable APPS-side flash-command family** -- found
+in `APPS/SILVER_1/EURTO/CONFIG/DLSCRIPT.TXT`:
+```
+RUN_SHELL_SCRIPT 0 136 /cddos/WA/DEL_LANG.WSH
+INSTALL_FRAGMENT 160 100515164 /cddos/APPS/SILVER_1/RNSMIDEC/PROG/A_HDD.frg
+LOAD_FIB 20 73877728 /cddos/APPS/SILVER_1/RNSMIDEC/PROG/FHDD.FLI
+UPDATE_SYS_CONFIG
+LOAD_LIBRARY 0 89576 /cddos/WA/CTEST.OUT
+RUN_SHELL_SCRIPT 0 7050 /cddos/WA/FIXCOD.WSH
+COMPARE_REG_ID 0x091C 0x09 <lang> <next-label> de
+INSTALL_FRAGMENT 0 <size> /cddos/SPEECH/FRG/LANG_<LL>.FRG
+GOTO CONTINUE_END_DATA
+```
+**`INSTALL_FRAGMENT`/`LOAD_FIB` are REAL, DISTINCT commands from the
+gateway's `FILE_UPDATE`/`LOAD_ECU_BLOCK`** (found in the `5274` pair
+section above) -- verified NOT a deprecated predecessor by checking
+build `5238_update_original`'s own `APPS/.../DLSCRIPT.TXT`, which still
+uses the exact same `INSTALL_FRAGMENT`/`LOAD_FIB`/`COMPARE_REG_ID`
+commands unchanged 4 years later (2012). These are 2 real, parallel,
+independently-named command families for 2 different real ECU targets
+(APPS/main-processor vs. VUCI/gateway), both still in active use in the
+newest builds checked -- not evolution of one into the other.
+
+**A real, new, previously-undocumented coding register**: `0x091C`,
+compared against a real 2-letter/hyphenated language code (`de`,
+`en-gb`, `es`, `ru`, `ae`(Arabic UI code), etc.) via `COMPARE_REG_ID`
+to select which `SPEECH/FRG/LANG_<LL>.FRG` file to install -- a real,
+directly observable UI-language-selection mechanism, stable and
+unchanged from 2008 to at least 2012. The real language list itself
+GREW over that time (build `900`: ~10 languages, no speech-recognition
+files; build `5238`: ~17 languages, most also installing a companion
+`RECOG_<LL>.FRG` speech-recognition file alongside `LANG_<LL>.FRG` --
+i.e. real per-language voice-recognition support was added to the
+product between 2008 and 2012, not present at launch).
+
+**The headline find: `WA/FIXCOD.WSH` is a REAL, UNIQUE, one-off
+artifact only in build `900`** -- present (same filename) in literally
+every other build checked this whole session (verified by `find` across
+all 31 firmware folders), but **only 7,050 bytes in `900` vs. exactly
+253 bytes in EVERY OTHER BUILD CHECKED, from `1100` (2008-11-26) all
+the way to `6276_original_update` (2014-03-20)** -- i.e. this file was
+permanently frozen down to a tiny stub within 6 months of the earliest
+disc in this collection, and never grew back, across the project's
+entire ~6-year documented history. The 253-byte version every later
+build ships keeps only 2 real cleanup lines:
+```
+sp xdelete, "/tffs0/lib/Arriba/dbal.out"
+sp xdelete, "/tffs0/data/fwdir/bundles/4"
+```
+**`/tffs0/lib/Arriba/dbal.out` is a real, previously-unknown internal
+path/codename** -- "Arriba" ties directly to this project's own
+existing `dbal`/DBAL-version-history research (README-cross-referenced
+elsewhere in this project) with a real concrete file path, not seen
+before this session.
+
+**The REMOVED content, unique to `900`, is a real, large, structured
+72-register table** -- `SetRegDataHex` calls for EVERY register from
+`0x0AC4` through `0x0B0B` inclusive (72 consecutive registers, each a
+30-byte/`0x1E` hex blob), arranged as repeating ~12-register blocks
+whose content is near-identical except a trailing 4-byte field that
+increments once per block (`01,00,00,00` -> `02,00,00,00` -> ...
+-> `0A,00,00,00`) -- consistent with (not confirmed as) an enumerated
+per-item lookup table, plausibly related to the same
+language/UI-asset selection this script runs alongside (per the
+surrounding `DLSCRIPT.TXT` context), but NOT decoded byte-for-byte
+here. **Immediately preceding the table, a real, dated internal
+comment survives verbatim**:
+```
+#PR: 070720: wieder rausgenommen, wegen: TlaWtz#42671 und Mail von Ingo Georg Felzer
+##################SetRegData(0x25,0x4700,0x0,0x2,0x1)
+```
+("PR: 070720" -- a 2007-07-20-dated internal problem-report reference;
+"wieder rausgenommen, wegen: TlaWtz#42671 und Mail von Ingo Georg
+Felzer" is real German for "taken back out again, because of:
+TlaWtz#42671 and an email from Ingo Georg Felzer" -- referencing a real
+internal Continental bug-tracker ticket ID and a real named engineer,
+attached to a `SetRegData(0x25,...)` call that's itself commented out
+in every build including `900`.) **This is the single most direct piece
+of real internal Continental engineering process/personnel evidence
+this project has found in any shipped disc** -- a genuine leaked
+process artifact (an engineer's name and an internal ticket reference),
+not something this project inferred or reconstructed. Recorded exactly
+as found, attributed to nothing beyond what the comment itself states;
+no attempt made to identify register `0x25` or ticket `TlaWtz#42671`
+further.
 """
 
 import re
