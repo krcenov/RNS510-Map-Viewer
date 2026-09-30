@@ -2602,6 +2602,102 @@ known string's file offset -- is real, achievable future work with
 this same `c166-dis.pl` tool, not blocked the way it was before this
 session (no tool at all).
 
+============================================================================
+The string-to-code cross-reference itself -- DONE for the `THP: Diag:
+Override ...` family, a real, direct hit ("continue", same session):
+finds the actual dispatcher code, a genuine retry-limit constant, and
+the real EEPROM signature scheme. Distinguishes a real FACTORY-TEST
+override interface from the (still not located) live end-user PIN-
+check itself -- an honest, important distinction, not the same thing
+============================================================================
+**Method that worked, after 2 that didn't**: a literal-pointer search
+for `"ITD_TheftProtection_Unlock"`'s own file offset (as a raw 16-bit
+value, both byte orders, and opcode-prefixed as a `MOV Rx,#imm16`
+immediate) found NOTHING -- 0 hits for little-endian, 23 hits for
+big-endian but EVERY ONE was confirmed pure text coincidence (byte
+pairs from inside `"SendMessage"`/`"SendMsg"` strings elsewhere in the
+file, 100% printable-ASCII context, not code). The technique that DID
+work: target short, distinctive DEBUG/FORMAT strings instead of a bare
+job NAME (format strings get loaded as a direct immediate right before
+a print call, the same pattern already proven for PowerPC `printf`
+call sites in `CTEST.OUT`) -- searching for `MOV Rx,#imm16` (opcode
+`0xE6`) loading the exact file-offset of 4 different `"THP:"`/
+`"TheftProtection:"` strings found REAL hits, tightly clustered in one
+~3.6KB code region (file offset `0xA6480`-`0xA7100`, i.e. segment
+`0x0A`).
+
+**Disassembling that whole region (validated, coherent C166 code
+throughout, no illegal-opcode breaks) reveals a real diagnostic
+OVERRIDE-command dispatcher**: receives an index/value (from a caller
+this session didn't trace further back), branches through a chain of
+distinct handlers, each of which (1) loads its own name/format string
+via the exact same `MOV R12/R13/R14/R15,#imm16` + `CALLS 0x05,0x8B24`
+pattern already confirmed as this file's shared string-reporting
+helper (above) -- directly matching, by exact file-offset arithmetic,
+the `"CounterPINRetry"`/`"Timer TempUnlock"`/etc. override names found
+by string-scanning earlier -- then (2) applies the override directly to
+internal state, either a single bit (`BMOV Rdst.bit,Rsrc.bit`, e.g.
+`BMOV R12.14,R8.0` / `R12.7,R8.0`) or a full EEPROM-style record write.
+
+**A real retry-limit constant, found and confirmed at the disassembly
+level, not guessed from a string**: at file offset `0xA6508`,
+immediately after loading a counter byte:
+
+```
+MOVB  RL1,[R12]          ; load current counter byte
+CMPB  RL1,#0x0032         ; compare against 50 (0x32) decimal
+JMPR  CC_NC,0x000A65D8    ; if counter >= 50 (unsigned), take the
+                            "limit reached" path
+...
+ADDB  RL1,#1               ; else increment the counter
+MOVB  [R12],RL1            ; and store it back
+```
+
+-- the "limit reached" branch target (`0xA65D8`) leads, a few
+instructions later, into the exact same shared-reporter call loading
+file offset `0x08AC` -- the precise offset of
+`"THP: Cnt=%d, Limit=%d REACHED"` -- confirmed by direct address
+arithmetic, not inference. **50 is a real, disassembly-confirmed retry
+limit for this counter family** (which specific counter -- PIN retry,
+unlock-key, or unlock-diag from the earlier `c_r`/`c_uk`/`c_ud` status-
+dump fields -- was not pinned down individually this session; the
+dispatcher services all of them through the same generic code shape).
+
+**The real EEPROM signature scheme, also found at the disassembly
+level**: immediately after a successful counter increment (and again,
+identically, after every OTHER override write seen in this region),
+the code loads and stores a fixed 4-byte pair:
+
+```
+MOV  R12,#0x5A55
+MOV  R13,#0xA5AA
+MOV  [R0],R12
+MOV  [R0+#0x0002],R13
+```
+
+`0x5A55 XOR 0xA5AA == 0xFFFF` exactly -- a classic magic-value +
+bitwise-inverted-magic-value pair, the real, concrete implementation
+behind this file's own already-known strings
+`"TheftProtection_Eeprom_Init(): Signature invalid."`/`"...cannot be
+verified"` (above). Every state-changing write in this region stages
+this exact same 4-byte signature ahead of a `CALLS 0x1B,0xF2F8`/similar
+call (plausibly the real EEPROM-write primitive; not independently
+confirmed, but consistent across every occurrence seen).
+
+**Honest scope of what this does and does NOT establish**: this is a
+real, disassembly-confirmed FACTORY/DEVELOPMENT diagnostic interface
+for directly overriding TheftProtection's internal counters/timers/
+state (letting engineers force specific values instantly rather than
+waiting through real timers) -- genuinely useful, concrete new
+knowledge about this ECU's real security-adjacent internals, but this
+is NOT the same code path as a real end user's VCDS-style Login/
+SecurityAccess PIN entry and comparison. That live check -- whatever
+compares an entered code against a real stored/computed reference value
+-- was not located this session; the caller that feeds an override
+index into this exact dispatcher was also not traced back further.
+Both remain open, concrete future work, now with a validated tool and
+address-scheme in hand rather than starting from zero.
+
 ```python
 import zlib, struct
 
