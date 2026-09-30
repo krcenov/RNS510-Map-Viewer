@@ -3291,6 +3291,144 @@ this project has had all session that its firmware-internal findings
 externally-documented vehicle features -- not artifacts of
 misinterpreting disassembly. Treated as corroborating evidence, not as
 a primary source to extract new binary facts from.
+
+============================================================================
+`BASE/Other/VIM_Berto89` -- confirms "VIM" = Video In Motion, and closes
+the `5270_VIM_testmode` naming loose end
+============================================================================
+A tiny, complete, standalone real SWL disc (5 files + `WA/CTEST.OUT` +
+one script, NOT bundled with any full firmware) whose entire real
+payload is:
+
+```
+# Testmode: Active
+SetRegDataHex(0x21,"01",0x0,0x1,0x1)
+
+# Speed limit DVD/TV: 300km/h
+SetRegDataHex(0x0B3A,"012C",0x0,0x2,0x89)
+```
+
+-- byte-for-byte the SAME 2-line patch already found in the `4120`
+testmode/tvfree diff above, isolated into its own minimal disc
+(`Version.txt`: `VwSwIndex:1300/1302/1304`, `#Author: RoNe`, "unofficial
+SWL CD by josi", 2010-04-27 -- an EARLIER, separate community release
+predating both the `4120` and `5270` pairs examined above). The file is
+literally named `VIM.WSH`, and the folder is `VIM_Berto89` (a modder's
+name). **This directly confirms "VIM" in this whole family of
+community releases (including `5270_VIM_testmode`, found earlier this
+session) stands for "Video In Motion"** -- the well-known aftermarket-
+mod term for bypassing the "no video while driving" speed lockout --
+not a vehicle-identifier acronym as might otherwise be guessed. Closes
+the naming question left open in the `5270_original` vs.
+`5270_VIM_testmode` section above (that pair's real content difference,
+the `FILE_UPDATE`/`LOAD_ECU_BLOCK` gateway-flash commands, is a SEPARATE
+matter from the VIM patch itself -- both self-consistent, unrelated
+findings about the same disc pair).
+
+============================================================================
+`BASE/Other/rns510-online-dest-master` and `rns510-tv-input-master` --
+REAL, WORKING, reverse-engineered BAP wire-protocol source code (the
+single most concrete protocol-level find this session, from a community
+member's own SocketCAN implementation, not from disassembly)
+============================================================================
+Two small real C projects (Raspberry Pi/SocketCAN targets, with a
+prebuilt ARM ELF binary present in one of them, `bap_send`, confirming
+these are genuinely built/used, not just source drafts) that each
+emulate a MOST-over-CAN "function block" device and talk BAP to a real
+RNS510 over its CAN bus. **This is a working, PC-side BAP client for a
+protocol this project could otherwise only infer from firmware
+disassembly and the SetConfig manual's own "Display protocol: BAP"
+dropdown entry (above)** -- i.e. the first real, low-level, byte-exact
+BAP transport implementation this project has directly examined.
+
+**Real BAP-over-CAN transport framing** (from `bap_stack.c`,
+`bap_send()`/`bap_receive()`, `rns510-online-dest-master`):
+- Long frames (`data_len > 6`, sent as a start frame + N continuation
+  frames, i.e. classic ISO-TP-style segmentation but with BAP's own
+  header baked into the first frame rather than ISO-TP's PCI byte):
+  start-frame byte0 = `0x80 | (data_len >> 8)`, byte1 = `data_len &
+  0xFF`, byte2 = `(opcode << 4) | (lsg_id >> 2)`, byte3 = `(lsg_id <<
+  6) | fct_id`, bytes4-7 = first 4 data bytes; each continuation frame:
+  byte0 = `0xC0 | (seqno & 0x0F)`, followed by up to 7 more data bytes.
+- Short frames (`data_len <= 6`, single CAN frame): byte0 = `(opcode
+  << 4) | (lsg_id >> 2)`, byte1 = `(lsg_id << 6) | fct_id`, remaining
+  bytes = the data directly.
+- `opcode` (3 bits), `lsg_id` ("Logical Service Group" id, 6 bits),
+  `fct_id` ("Function" id, 6 bits) -- a real, 3-level MOST/BAP function-
+  addressing scheme (device group / device / function), confirmed by
+  both C files independently using the identical bit-packing.
+- **Real, distinct CAN ID pairs per emulated virtual MOST device**:
+  the "Online Connectivity Unit" (OCU, online-destination injection,
+  `lsg_id=0x37`) emulator sends on `0x6FD` and listens on `0x6B7`; the
+  separate hybrid-TV-tuner emulator (`tv2.c`) sends on `0x6D3`, listens
+  on (at least) `0x6C7`, and sends its own presence-heartbeat frame on
+  `0x602`. Both also watch `0x575` (ignition status) and `0x661`
+  (radio on/off) as real, shared, already-independently-meaningful CAN
+  IDs on this bus. None of these CAN IDs were previously documented in
+  this file -- concrete, real, ready-to-use IDs for anyone wanting to
+  sniff/replay this bus directly, no firmware disassembly needed.
+
+**Real BAP function-ID catalogs, for 2 different virtual device
+types** -- genuinely new, concrete, named constants:
+- OCU/online-destination (`lsg_id=0x37`): `GET_ALL`=0x01,
+  `MOST_CATALOG_VERSION`=0x02, `FUNCTION_LIST`=0x03,
+  `FBLOCK_AVAILABILITY`=0x04, `FSG_CONTROL`=0x0D, `FSG_SETUP`=0x0E,
+  `FSG_OPERATION_STATE`=0x0F, `DESTINATION_LIST`=0x10,
+  `ASG_CAPACITY`=0x11.
+- Hybrid-TV-tuner (25 real function IDs, `tv2.c`):
+  `MOST_CATALOG_VERSION`=0x01, `FBLOCK_AVAILABILITY`=0x02,
+  `BAP_CONFIG`=0x03, `DEVICE_SERVICE_SUPPORT`=0x04, `FSG_CONTROL`=0x0D,
+  `FSG_SETUP`=0x0E, `FSG_OPERATION_STATE`=0x0F,
+  `TUNED_PROGRAM_HYBRID_TV`=0x10, `TUNE_TO_HYBRID`=0x11, `TUNE_UP`=0x12,
+  `TUNE_DOWN`=0x13, `BROWSER_LIST`=0x14, `SOURCE`=0x15,
+  `SWITCH_SOURCE`=0x16, `TVNORM_AREA`=0x17, `AVNORM`=0x18,
+  `TVNORM_AREA_SUB_LIST`=0x19, `AUDIO_FORMAT_TV`=0x1A,
+  `TVADDIVERSITY`=0x1B, `TVTERMINAL_MODE`=0x1C, `INFO_BAR_CONTROL`=0x1D,
+  `INFO_BAR`=0x1E, `TUNER_STATUS`=0x1F, `EPGCONTROL`=0x20,
+  `TTCONTROL`=0x21, `TTPAGE_TO`=0x22, `TTMODE`=0x23, `COLOR`=0x24,
+  `CONTRAST`=0x25, `BRIGHTNESS`=0x26, `TINT`=0x27,
+  `TVDISPLAY_NOTIFICATION`=0x28. (`FSG_CONTROL`/`FSG_SETUP`/
+  `FSG_OPERATION_STATE` sharing the same 3 IDs across both device types
+  looks like a real, shared MOST/BAP base-class convention, not
+  coincidence.)
+
+**A real, complete, worked `DESTINATION_LIST` payload example** (the
+active, non-commented-out case in `handle_bap_data()`) -- injects a
+named destination "Pacanow" with a street address (`'Czerska'`, house
+number `'33'`, city `'Ulm'`, country `'PL'`, zip `'50320'`) and what is
+almost certainly a little-endian fixed-point lat/lon pair
+(`0x70,0xb8,0x0c,0x03` / `0xac,0x70,0xff,0x00`) plus an icon id byte --
+a real, concrete, byte-exact template for how the RNS510 expects an
+online/CarNet destination to be encoded over BAP. Not independently
+decoded further here (the exact fixed-point scale/origin of the
+lat/lon-shaped bytes was not verified against a known real-world
+Pacanow/Ulm coordinate) -- recorded as a real, ready-made worked
+example for a future session, not as a solved encoding.
+
+`rns510-online-dest-master/README.md` notes this only works for NAR
+(North American Region) because VW CarNet was only available there --
+a real, useful scoping fact, not verified further.
+
+============================================================================
+`BASE/Other/rns510_dtv-master` -- a full third-party Qt/gstreamer DVB-T
+tuner add-on application, integrating via the same MOST/BAP mechanism
+============================================================================
+A large standalone Qt-based Linux application (own icon set, own
+`QTvServiceManager`/`QMostInterface`/`QMenuInfoWindow` UI classes, a
+Polish-language `change_log.txt` spanning real dated entries from
+2014-01-21 onward) that decodes real DVB-T digital terrestrial TV via
+`gstreamer`'s `mpegtsdemux` plugin (the changelog names real functions
+patched there: `gst_mpegts_demux_parse_adaptation_field`,
+`gst_mpegts_demux_parse_transport_packet`) and talks to the RNS510
+through a `QMostInterface` class -- i.e. a full, independent, real-
+world embedded application built on TOP OF the exact same BAP/MOST
+transport documented above (most likely using the TV-tuner function-ID
+catalog from `rns510-tv-input-master`, not independently confirmed
+here). Not read in further detail this session beyond confirming its
+real existence, purpose, and its dependency on the same BAP mechanism
+-- a large, self-contained project, lower priority than the protocol-
+level C sources above for THIS project's own firmware-disassembly
+goals.
 """
 
 import re
