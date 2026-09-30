@@ -7641,9 +7641,10 @@ involved), a `Show Sirius POIs` checkbox (default on, same as regular
 POIs), and `MapData.load_sirius_data()`/`sirius_pois_for_bbox()` — the
 exact same shape as `load_poi_data()`/`pois_for_bbox()`, run in their own
 `BackgroundTask` the same deferred way. Rendered as a plain colored dot
-(teal, `SIRIUS_POI_DOT_COLOR` — no icon set was cracked for this database
-this session, unlike regular POIs' real PNG icons) with its own declutter
-grid, independent of the regular-POI one so the two layers never suppress
+(teal, `SIRIUS_POI_DOT_COLOR`) at first — **superseded by real
+per-category icons, "v39 → v40" immediately below**, landed the same
+session as an immediate follow-up — with its own declutter grid,
+independent of the regular-POI one so the two layers never suppress
 each other. Sirius POIs are appended into the SAME `rendered_pois` list
 regular POIs use, so click-to-identify (`find_nearest_poi()`) picks them
 up with zero extra code — each dict's own `"source": "sirius"` key is
@@ -7662,6 +7663,27 @@ the one Sirius disc examined so far — the schema itself also names
 0-row on this specific disc), so this same code path would show those
 categories too, automatically, if a live/populated Sirius database is
 ever found.
+
+### v39 → v40: Sirius POIs get real per-category icons — `SIRIUS.DB3` shares `POI.DB3`'s own icon chain too (this session, immediate follow-up, user-asked "continue")
+
+Checked whether `poi_db_reader.load_poi_icons()` — already known to work
+UNCHANGED against `SIRIUS.DB3` for the POI data itself (v38 → v39 above)
+— ALSO works unchanged for icons, since the same `Image_BaseAttributes`/
+`ImageBlob_BaseAttributes`/`Image_ImageBlob_Relation`/
+`ImageSet_BaseAttributes` tables exist in its schema too. **It does**:
+real, standard 34×39 PNGs for all 5 Sirius partitions, no new reader
+code. Visually confirmed directly — partition 1 ("Fuel Station")
+decodes to a real, clean gas-pump icon.
+
+New: `MapData.sirius_icons` (loaded alongside `sirius_cache` in
+`load_sirius_data()`), `App._get_sirius_poi_icon()` (identical shape to
+`_get_poi_icon()`, its own decode cache), and the Sirius rendering block
+now pastes the real icon at its own real hotspot (falling back to the
+v38 → v39 plain teal dot only if a partition has no resolvable icon)
+— otherwise unchanged: same declutter grid, same `rendered_pois`
+list, same click-to-identify. Verified: `load_sirius_data()` loads both
+`sirius_cache` and `sirius_icons` correctly in isolation, and the app
+still launches cleanly with no startup errors.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 

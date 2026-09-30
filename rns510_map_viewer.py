@@ -1357,6 +1357,9 @@ class MapData:
         self.sirius_ready = False
         self.sirius_building = False
         self.sirius_cache = None    # poi_db_reader.load_poi_cache() result
+        self.sirius_icons = None    # poi_db_reader.load_poi_icons() result -- also works UNCHANGED
+                                     # against SIRIUS.DB3 (real 34x39 PNGs, same Image_BaseAttributes/
+                                     # ImageBlob_BaseAttributes/Image_ImageBlob_Relation chain as POI.DB3)
 
         self.search_project = None  # core.MapProject, for road name search
         self.rd_cache = None        # road_naming.RdCache
@@ -1907,6 +1910,7 @@ class MapData:
             if progress:
                 progress("Decoding Sirius TravelLink POIs...")
             self.sirius_cache = poidb.load_poi_cache(path)
+            self.sirius_icons = poidb.load_poi_icons(path)
             if progress:
                 progress("Sirius POI data ready: %d real points of interest." % len(self.sirius_cache["poi_id"]))
             self.sirius_ready = True
@@ -3168,6 +3172,8 @@ class App:
         # this costs nothing to keep around, and decoding a PNG once instead
         # of on every redraw matters at real POI counts.
         self._poi_icon_images = {}
+        # Same cache, for MapData.sirius_icons (see App._get_sirius_poi_icon()).
+        self._sirius_poi_icon_images = {}
         # POIs the LAST _redraw() actually drew, after decluttering (README
         # §10 "v21 -> v22") -- what click-to-identify searches, so a click
         # can only ever hit something the user could actually see. Kept
@@ -4311,6 +4317,24 @@ class App:
         self._poi_icon_images[partition_id] = img
         return img
 
+    def _get_sirius_poi_icon(self, partition_id):
+        """Same shape as `_get_poi_icon()` above, over `MapData.
+        sirius_icons` instead of `poi_icons` -- real, cracked PNG icons
+        (same schema/chain as regular POI icons, verified: partition 1
+        "Fuel Station" decodes to a real, clean gas-pump icon) also just
+        work, no new icon-decoding logic needed."""
+        img = self._sirius_poi_icon_images.get(partition_id)
+        if img is not None:
+            return img
+        if self.data is None or not self.data.sirius_icons:
+            return None
+        entry = self.data.sirius_icons.get(partition_id)
+        if entry is None:
+            return None
+        img = Image.open(io.BytesIO(entry["png_bytes"])).convert("RGBA")
+        self._sirius_poi_icon_images[partition_id] = img
+        return img
+
     def _redraw(self):
         """Full redraw of the map view.
 
@@ -4637,16 +4661,22 @@ class App:
 
         # Sirius TravelLink POIs (MapData.load_sirius_data(), a separate,
         # optional data source) -- same rasterize-then-declutter shape as
-        # regular POIs above, but a plain colored dot (no icon set was
-        # cracked for this database this session) in SIRIUS_POI_DOT_COLOR,
-        # and its own SEPARATE declutter grid -- a Sirius POI never
-        # suppresses (or gets suppressed by) a regular POI in the same
-        # cell, simplest correct behavior for 2 independently-toggleable
-        # layers. Appended into the SAME rendered_pois list so click-to-
-        # identify (find_nearest_poi()) picks up Sirius markers with no
-        # extra code -- each dict's own "source": "sirius" key
-        # (sirius_pois_for_bbox()) is enough to tell them apart later if
-        # ever needed.
+        # regular POIs above, INCLUDING real per-category icons (a later
+        # same-session follow-up: SIRIUS.DB3 turns out to share POI.DB3's
+        # own Image_BaseAttributes/ImageBlob_BaseAttributes/
+        # Image_ImageBlob_Relation icon chain too -- poi_db_reader.
+        # load_poi_icons() works UNCHANGED against it, real 34x39 PNGs,
+        # e.g. partition 1 "Fuel Station" decodes to a real gas-pump icon).
+        # Falls back to a plain SIRIUS_POI_DOT_COLOR dot only if no icon
+        # resolves for a partition (e.g. a future, differently-schemed
+        # Sirius disc). Own SEPARATE declutter grid from regular POIs --
+        # a Sirius POI never suppresses (or gets suppressed by) a regular
+        # POI in the same cell, simplest correct behavior for 2
+        # independently-toggleable layers. Appended into the SAME
+        # rendered_pois list so click-to-identify (find_nearest_poi())
+        # picks up Sirius markers with no extra code -- each dict's own
+        # "source": "sirius" key (sirius_pois_for_bbox()) is enough to
+        # tell them apart later if ever needed.
         if self.show_sirius_var.get() and self.data is not None and self.data.sirius_ready:
             vb = self._visible_bbox()
             if vb is not None:
@@ -4661,8 +4691,15 @@ class App:
                     if cell in occupied_cells:
                         continue
                     occupied_cells.add(cell)
-                    draw.ellipse([px - 2.6, py - 2.6, px + 2.6, py + 2.6],
-                                 fill=SIRIUS_POI_DOT_COLOR, outline=BG_COLOR)
+                    icon = self._get_sirius_poi_icon(poi["partition_id"])
+                    if icon is not None:
+                        entry = self.data.sirius_icons.get(poi["partition_id"], {})
+                        hx = entry.get("hotspot_x", icon.width // 2)
+                        hy = entry.get("hotspot_y", icon.height // 2)
+                        img.paste(icon, (int(round(px - hx)), int(round(py - hy))), icon)
+                    else:
+                        draw.ellipse([px - 2.6, py - 2.6, px + 2.6, py + 2.6],
+                                     fill=SIRIUS_POI_DOT_COLOR, outline=BG_COLOR)
                     if poi["name"]:
                         poi_label_candidates.append((poi["name"], px, py, SIRIUS_POI_LABEL_COLOR))
                     rendered_pois.append(poi)
