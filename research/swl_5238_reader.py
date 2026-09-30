@@ -3179,7 +3179,7 @@ for this pair). Consistent with `5270_VIM_testmode` being a real
 community modification DESPITE its own official-sounding `VERSION.TXT`
 comment string -- that string is apparently not a reliable signal of
 whether a disc has been altered, only `CRC16`/byte-level comparison is.
-
+"""
 
 import re
 
