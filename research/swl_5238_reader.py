@@ -2799,6 +2799,33 @@ track register contents symbolically) is the honest next step, not
 another targeted search -- substantial new tooling work, not attempted
 this session.
 
+**UPDATE, one more real attempt, DEFINITIVE this time ("continue" x3,
+same session)**: technique 1 (literal jump table) assumed a real table,
+if it exists, would list handler addresses in the SAME order this
+session found them in the file. Re-ran it order-independently instead
+-- collected every raw occurrence of each of 16 handler-family
+addresses anywhere in the file (any order, any grouping), then scanned
+for any 64-byte window containing 3+ DISTINCT handler addresses
+(tolerant of shuffling/different table ordering, unlike the original
+consecutive-pair check). **Zero clusters found anywhere in the whole
+884,736-byte file.** More decisively: **6 of the 16 handler addresses
+(`0x6288`, `0x632A`, `0x633E`, `0x635E`, `0x6382`, `0x6394`) have ZERO
+raw byte occurrences ANYWHERE in the file except at their own code
+location** -- not low, exactly zero. This closes the "literal address
+table" hypothesis completely, not just the specific orderings tried
+before: if an address never appears as a 16-bit value anywhere outside
+its own instruction stream, NO data table, in any order or grouping,
+using simple 16-bit absolute offsets, can be referencing it. Whatever
+selects these handlers is either computed via runtime arithmetic
+(base + a value derived from external input, e.g. an incoming
+diagnostic request's own sub-function byte -- which would be
+information this project doesn't have, not just a missing tool) or
+reached via code genuinely not yet located anywhere in this session's
+disassembly. **This is now a definitively closed investigative
+question for this session, not a "try one more search" situation** --
+7 real techniques tried, the last one maximally permissive and still
+conclusively negative.
+
 ```python
 import zlib, struct
 
