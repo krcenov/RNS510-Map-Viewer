@@ -3046,7 +3046,140 @@ def decode_ddb(path):
         rgb += bytes([(r5 * 255) // 31, (g5 * 255) // 31, (b5 * 255) // 31])
     return w, h, bytes(rgb), mask_plane   # RGB888 pixels + 8-bit alpha, both row-major
 ```
-"""
+
+============================================================================
+The user reorganized ALL extracted firmware/maps under a new `BASE/`
+folder (`Archives/`, `Firmware/`, `Maps/`, `Other/`) and added a LARGE
+new trove of real firmware builds spanning `VwSwIndex` 900 through 6276
+-- including 2 real "testmode"/"tvfree"-labeled variants with direct
+"_original" counterparts of the SAME build number, finally letting this
+project's own most productive technique (real tree diffing) be applied
+to the actual community-made "unlock" modifications directly, not just
+inferred from WA-script content alone
+============================================================================
+
+## `4120_original` vs `4120_testmode_tvfree` -- a clean, minimal, fully
+understood real modification
+
+Both identify as the exact SAME real build (`VwSwIndex 4120`,
+`#CD:P 0 0 5 . 5 4 1 . 9 0 1`, 2012-03-16, author `SaRo` -- a NEW
+engineer initial, not seen in this project before -- byte-identical
+`VERSION.TXT`, same CRC16). A full recursive tree diff (344 files each
+side) finds EXACTLY 2 differing files, both already-fully-understood
+region-coding scripts: `WA/EURPQTO.WSH` and `WA/ESKHDDL.WSH`, each
++72 bytes in the `tvfree` variant. The real diff, identical in both
+files:
+
+```diff
+- # Testmode: NOT active
+- SetRegDataHex(0x21,"00",0x0,0x1,0x1)
++ # Testmode: Active
++ SetRegDataHex(0x21,"01",0x0,0x1,0x1)
++
++ # Speed limit DVD/TV: 300km/h
++ SetRegDataHex(0x0B3A,"012C",0x0,0x2,0x89)
+```
+
+A clean, minimal, surgical real-world patch using ONLY the exact
+mechanism this project already fully disassembled this session
+(`SetRegDataHex` -> `CTEST.OUT`'s real `pReg` read/write vtable, above)
+-- flips the `0x21` testmode register active, and adds the SAME
+`0x0B3A` DVD/TV speed-lockout override (`0x012C` = 300 decimal) already
+seen in every EU region script's own baseline -- except this build's
+own baseline had it OMITTED for these 2 variants specifically (compare:
+every OTHER region script examined earlier this session already had
+this line even without any "tvfree" branding -- these particular 2
+variants were apparently missing it in the stock build, and the
+"tvfree" repack is exactly restoring/adding it). Directly, concretely
+explains the "tvfree" half of the archive's own name.
+
+## `5270_original` vs `5270_VIM_testmode` -- a much larger, genuinely
+different-build diff; a naming assumption caught and corrected
+
+**Naming caught out this session, corrected before over-interpreting**:
+despite the folder names suggesting "original" = baseline and
+"VIM_testmode" = the modified one, their OWN `VERSION.TXT` says the
+opposite of what the names imply. `5270_original` carries the
+already-known `"This is an unofficial SWL CD by josi"` disclaimer, an
+EARLIER build (`#CD:P 0 0 5 . 7 5 3 . 3 0 1`), and BROADER hardware
+scope (`C3/C4A/C5C/C6/C10/C12`). `5270_VIM_testmode` carries the
+OFFICIAL `"This is a SWL CD for VW delivery."` phrasing, a LATER build
+number (`...351`), and NARROWER scope (`C10/C12` only) -- i.e. the
+folder someone labeled "testmode" self-identifies as the more official-
+looking one, and "original" is the actual josi repack. Recorded so a
+future session doesn't assume folder names encode which side of a diff
+is the "real"/unmodified one -- always check `VERSION.TXT` directly.
+
+**Real content differences, not just relabeling** -- a full recursive
+diff finds 20 files removed and 116 changed (`5270_original` has, and
+`5270_VIM_testmode` lacks): the entire `MPEG` subsystem (`MPEGAPPS.FLI`/
+`MPEGSWL.FLI`, ~2.3MB), Seat-HDD and Touareg project variants
+(`EURSEHDD`, `EURTO`, `TOTABLE.FLI`, `H_SE_HDD.FRG`, `H_TO_HDD.FRG`,
+`WA/EURSEHDD.WSH`) -- consistent with the narrower `C10/C12`-only
+hardware scope above, not evidence of deliberate stripping by itself.
+One real, concrete anomaly: `RADIO/1/RNSMIDEC/PROG/RADIO.FLI` is
+**917,532 bytes in `5270_original`, exactly 0 bytes (empty) in
+`5270_VIM_testmode`** -- a real, structural difference worth flagging,
+not decoded further this session (a genuinely empty flash payload with
+its own `DLSCRIPT.TXT`/`FILE_UPDATE` entry still referencing it would
+be a real, functional gap in the disc's own real world use).
+
+**A genuinely new `DLSCRIPT.TXT` command family, found via this diff,
+not documented anywhere in this project before**: every remaining
+variant's own `VUCI/B101/<variant>/CONFIG/DLSCRIPT.TXT` gains 6 new
+lines in `5270_VIM_testmode`, identical in shape across every variant
+checked (`EURPQEE`, `EURSKEE`, `EURAK`), only the real per-platform
+filenames differing (matching each variant's own already-known gateway
+firmware/table pair -- `GATEWAY.FLI`/`PQTABLE.FLI` for `EURPQEE`,
+`SKTABLE.FLI` for `EURSKEE`, `T5GATEW.FLI`/`T5PQTBL.FLI` for `EURAK`):
+
+```
+FILE_UPDATE /tffs0/FLASH/VUCI/GATEWAY.FLI 884736 /cddos/VUCI/B101/RNSMIDEC/PROG/GATEWAY.FLI
+LOAD_ECU_BLOCK 131242 884736 /tffs0/FLASH/VUCI/GATEWAY.FLI
+EXPECTED_TIME 150
+FILE_UPDATE /tffs0/FLASH/VUCI/PQTABLE.FLI 8192 /cddos/VUCI/B101/RNSMIDEC/PROG/PQTABLE.FLI
+LOAD_ECU_BLOCK 65706 8192 /tffs0/FLASH/VUCI/PQTABLE.FLI
+EXPECTED_TIME 30
+```
+
+`FILE_UPDATE <local flash cache path> <size> <disc source path>` stages
+a file into the unit's own local flash filesystem (the same real
+`/tffs0/` root this project's own `WA/*.WSH` scripts already reference
+throughout -- see the earlier "real VxWorks target-shell scripts"
+section); `LOAD_ECU_BLOCK <address> <size> <local flash path>` then
+flashes it directly to the real ECU (here, the CAN gateway/ST10F276E
+chip this whole project's `GATEWAY.FLI` disassembly work is about) AT A
+REAL, FIXED ADDRESS -- **`131242` for the 884,736-byte gateway firmware
+itself, `65706` for the 8,192-byte routing table, confirmed IDENTICAL
+across every variant checked** (a real, fixed hardware flash-layout
+fact, not something set once). `884736` matches `GATEWAY.FLI`'s own
+already-known real file size exactly, an independent confirmation this
+is the same file this project has already disassembled extensively.
+
+**Deliberately NOT characterized as a "theft-protection reset hack"**
+despite the obvious temptation given this session's own extensive
+`TheftProtection_*` EEPROM-state-machine work on this exact file: the
+evidence doesn't support that framing specifically -- this could
+equally be a real, legitimate difference in how a genuinely later
+official build (`...351`) handles gateway flashing (e.g. always
+re-flashing on install, a real BSP-level change unrelated to any
+deliberate unlock), and no attempt was made this session to verify
+whether re-flashing actually clears the EEPROM signature/counters found
+earlier. Recorded as a real, concrete, newly-documented command family
+and a real flash-address fact -- not as a solved "how to reset theft
+protection" answer, which would need real verification against
+hardware, not just a disc diff.
+
+**The real "tvfree"-shaped change, once found**: `WA/EURPQTO.WSH`
+differs between the two in exactly the same shape as the `4120` pair
+above -- `5270_VIM_testmode` adds the `SetRegDataHex(0x0B3A,"012C",...)`
+DVD/TV speed-lockout override that `5270_original` lacks (both already
+have `Testmode: Active`, so that specific flag isn't the differentiator
+for this pair). Consistent with `5270_VIM_testmode` being a real
+community modification DESPITE its own official-sounding `VERSION.TXT`
+comment string -- that string is apparently not a reliable signal of
+whether a disc has been altered, only `CRC16`/byte-level comparison is.
+
 
 import re
 
