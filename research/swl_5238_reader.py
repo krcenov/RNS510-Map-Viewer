@@ -3124,14 +3124,26 @@ not decoded further this session (a genuinely empty flash payload with
 its own `DLSCRIPT.TXT`/`FILE_UPDATE` entry still referencing it would
 be a real, functional gap in the disc's own real world use).
 
-**A genuinely new `DLSCRIPT.TXT` command family, found via this diff,
-not documented anywhere in this project before**: every remaining
-variant's own `VUCI/B101/<variant>/CONFIG/DLSCRIPT.TXT` gains 6 new
-lines in `5270_VIM_testmode`, identical in shape across every variant
-checked (`EURPQEE`, `EURSKEE`, `EURAK`), only the real per-platform
-filenames differing (matching each variant's own already-known gateway
-firmware/table pair -- `GATEWAY.FLI`/`PQTABLE.FLI` for `EURPQEE`,
-`SKTABLE.FLI` for `EURSKEE`, `T5GATEW.FLI`/`T5PQTBL.FLI` for `EURAK`):
+**Correction on first write, caught during a later consistency pass**:
+this was originally described here as "a genuinely new `DLSCRIPT.TXT`
+command family, not documented anywhere in this project before" --
+WRONG for `FILE_UPDATE` specifically. README.md's own §2.6 already
+documented `FILE_UPDATE` in an earlier session, in a different real
+context (`HDD_20GB/RNSMIDEC/CONFIG/DLSCRIPT.TXT`'s 22 `FILE_UPDATE`
+commands copying `SPEECH/*.ZIP` voice packs onto the unit's own
+`/hdb2/` hard-disk filesystem -- a plain file-copy usage, no ECU flash
+involved). **What's actually new here is `LOAD_ECU_BLOCK` itself, and
+specifically the `FILE_UPDATE`+`LOAD_ECU_BLOCK` PAIRING used to flash a
+staged file straight to a peripheral ECU's own flash at a fixed
+address** -- a 2nd, distinct real use of the already-known
+`FILE_UPDATE` command, not a wholly new command family. Every
+remaining variant's own `VUCI/B101/<variant>/CONFIG/DLSCRIPT.TXT`
+gains 6 new lines in `5270_VIM_testmode`, identical in shape across
+every variant checked (`EURPQEE`, `EURSKEE`, `EURAK`), only the real
+per-platform filenames differing (matching each variant's own
+already-known gateway firmware/table pair -- `GATEWAY.FLI`/
+`PQTABLE.FLI` for `EURPQEE`, `SKTABLE.FLI` for `EURSKEE`,
+`T5GATEW.FLI`/`T5PQTBL.FLI` for `EURAK`):
 
 ```
 FILE_UPDATE /tffs0/FLASH/VUCI/GATEWAY.FLI 884736 /cddos/VUCI/B101/RNSMIDEC/PROG/GATEWAY.FLI
