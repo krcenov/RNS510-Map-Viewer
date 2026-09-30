@@ -2524,13 +2524,83 @@ the `APPS`-side one yet.
 so far for the still-open "where's the real vehicle SecurityAccess/
 Login logic" question -- a complete, real, EEPROM-persisted immobilizer
 state machine with retry/timer/access-layer concepts genuinely exists
-on this chip. NOT fully resolved: the exact PIN validation/comparison
-logic itself (this chip's ST10F276E instruction set has no capstone
-support in this project's toolchain, so this session is string-level
-only, not disassembled), and `DiagS_SVDO_Key`'s precise role. A future
-session wanting to go further would need either an ST10/C166
-disassembler (not currently available here) or a different, more
-direct source of ground truth.
+on this chip. Confirmed the EU/both NAR builds' `GATEWAY.FLI` all
+carry the IDENTICAL set of 37 `THP`/`TheftProtection` strings -- no
+market-specific variation in this particular mechanism.
+
+============================================================================
+A REAL, WORKING ST10/C166 disassembler found and validated (user-asked
+"use some other tool, you can download", same session) -- capstone has
+NO support for this chip's instruction set (checked directly: its
+`CS_ARCH_*` list has PPC/ARM/x86/MIPS/etc but nothing C166/ST10/8051-
+family), and no objdump/binutils target for it exists on this machine
+either -- but a real, open-source, GPLv3 standalone tool does:
+`hn/c166-dis` (Perl, https://github.com/hn/c166-dis, cloned to
+`c166-dis/` -- gitignored, a 3rd-party external tool, not vendored into
+this repo, same treatment as `pip install capstone`)
+============================================================================
+Usage: `perl c166-dis.pl <file> <start_offset_hex> <length_hex>` --
+IP defaults to 0, length defaults to 0x100 (256) bytes if omitted.
+
+**Immediately, directly validated against real, already-known file
+structure**: disassembling from file offset 0 decodes the file's own
+`AA55AA55` magic (the SAME real magic this module already documented
+for `FHDD6.FLI` itself -- confirms `.FLI` is a shared generic
+Continental firmware-image wrapper used across BOTH the PowerPC APPS/
+HOST processors AND this ST10 gateway chip, not PowerPC-specific as
+previously assumed) as non-code (garbage/blank mnemonic, correctly),
+immediately followed by a real, textbook C166 INTERRUPT VECTOR TABLE
+starting at file offset 0x20: a dense run of `JMPS <segment>,<offset>`
+entries, almost all pointing to one shared default handler
+(`0x01,0xC8AA`), with several genuinely distinct real handler targets
+(`0x01,0xA01C`; `0x1B,0xC504`; `0x1B,0xC690`; `0x1B,0xC318`;
+`0x01,0xA92C`; `0x1C,0xB15A`; `0x01,0xA994`/`0xA9FC`/`0xAA64`/`0xAACC`/
+`0xAB34`/`0xAB9C`; `0x02,0xAC02`) -- exactly the shape a real vector
+table should have.
+
+**The address-mapping scheme was tested directly and confirmed SIMPLE
+-- no unknown load-base recovery needed, unlike `FHDD6.FLI`'s own
+PowerPC region**: `file_offset = segment * 0x10000 + offset`, tested by
+disassembling AT that computed file offset for a real vector-table
+target (`0x01,0xC8AA` -> file offset `0x1C8AA` = 117,930) and getting
+back real, coherent, non-garbage C166 code immediately -- confirmed by
+2 independent properties: (1) the decoded instructions are individually
+well-formed (no illegal-opcode breaks across dozens of consecutive
+instructions), and (2) the code's own BEHAVIOR is internally consistent
+and makes real sense -- a clean, repeating bit-extraction loop
+(`MOVB`/`SHR`/`AND` pulling individual bits out of a status byte one at
+a time) feeding SEQUENTIAL constant IDs (`#0x0970`, `#0x0971`,
+`#0x0972`, ...) into one shared reporting function via `CALLS
+0x05,0x8B24` (3 register-loaded context args each time) -- exactly the
+shape of a real "for each status bit, report signal N" diagnostic loop,
+not noise.
+
+**That shared helper (file offset `0x58B24`, `= 5*0x10000+0x8B24`) is
+itself real, substantial, non-trivial code**: disassembles to a long,
+coherent function -- compares an input byte against real constants
+(`0x24`, `0xC0`), does array-style indexed lookups (`[R2+#0x0002]`,
+`ADD`+`EXTP`-based pointer arithmetic -- `EXTP` is C166's real paged-
+memory-extension prefix instruction, confirms this code uses the
+chip's real paged/segmented addressing model directly, consistent with
+the vector table's own segment:offset shape), and branches on multiple
+distinct conditions (`CC_Z`/`CC_NZ`/`CC_SLE`) -- a real, generic
+diagnostic-signal dispatch/validation routine, evidently shared by many
+different callers (consistent with the sequential-ID caller pattern
+above), not something written just for theft-protection specifically.
+
+**Not yet done, a real next step for a future session**: this
+validates the TOOL and the ADDRESSING SCHEME, but does NOT yet locate
+the specific code implementing `ITD_TheftProtection_Unlock`/
+`DiagS_SVDO_Key`/the PIN-retry-counter check itself -- that needs a
+real string-to-code cross-reference (find what code loads/references
+file offset ~812,109, where `"ITD_TheftProtection_Unlock"` itself
+lives, the same way this project's own `parse_symbol_table()`/
+`find_prologues()` work for PowerPC) which does not exist yet for this
+architecture. Building that -- a C166 prologue-signature scanner, and a
+scan for `MOV`/immediate-load instructions whose operand equals a
+known string's file offset -- is real, achievable future work with
+this same `c166-dis.pl` tool, not blocked the way it was before this
+session (no tool at all).
 
 ```python
 import zlib, struct
