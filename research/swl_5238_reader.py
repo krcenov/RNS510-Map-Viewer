@@ -2826,6 +2826,152 @@ question for this session, not a "try one more search" situation** --
 7 real techniques tried, the last one maximally permissive and still
 conclusively negative.
 
+============================================================================
+The real theft-protection PIN verification mechanism -- FOUND, from a
+completely different angle: 5 new community-project folders the user
+added (`rns510-tv-input-master`, `rns510_dtv-master`,
+`rns510-online-dest-master`, `rns510-code-finder-main`,
+`rns510_1020_1022_1024`). `rns510-code-finder-main`'s real Python
+source (github.com/SlashGordon/rns510-code-finder) names the exact
+serial-console command, `TpPvVerifyPin`, which exists verbatim in
+`FHDD6.FLI` itself -- ties the whole `GATEWAY.FLI` theft-protection
+investigation directly to the APPS-side code, and reveals a
+DIFFERENT, more specific real security mechanism than anything found
+so far: the radio is cryptographically PAIRED to the vehicle's
+INSTRUMENT CLUSTER, not just PIN-protected in isolation
+============================================================================
+`rns510-code-finder-main/rns510_code_finder.py` (real, MIT-licensed,
+github.com/SlashGordon/rns510-code-finder) brute-forces a 4-digit PIN
+(`--start 0 --stop 1999`) over a physical SERIAL port (not CAN-bus/UDS
+-- confirms this is a DIFFERENT protocol/channel than the `GATEWAY.FLI`
+diagnostic-override work above, not a duplicate of it), sending the
+literal command `TpPvVerifyPin(<4-digit-pin>)` and checking the
+response for the substring `"Hash valid"`/`"Hash invalid"`.
+
+**`TpPvVerifyPin` exists verbatim in `FHDD6.FLI`** at file offset
+82,555,321 (~82.6MB -- inside the already-known 76-85.6MB VxWorks
+kernel/BSP region, confirming this is a real, linked, callable console/
+shell function on the APPS processor, not Java and not native map
+code). A wide net of strings within +/-15KB of this hit reveals a
+complete, coherent picture -- real function/state names, not isolated
+fragments:
+
+  - **`"gsVuCTheftProtectionState : %02X"`** -- the APPS processor
+    mirrors the SAME `TheftProtection` state this session already
+    reverse-engineered in `GATEWAY.FLI` (`VuC` = the gateway chip).
+    **`"LOCKED STATE FOR THEFT PROTECTION RECEIVED. PIN INPUT IS
+    REQUESTED"`** -- the exact, real trigger: when the gateway reports
+    its theft-protection state as locked, APPS asks the user for a
+    PIN. This directly connects the 2 investigations -- `TpPvVerifyPin`
+    IS the real live PIN-check code path this session was looking for,
+    not a separate mechanism.
+  - **`"comfortCoding : %d  pinVerification : %d Seat target : %d"`**
+    -- one debug line naming BOTH "comfortCoding" (matches
+    `GATEWAY.FLI`'s own `t_cc`/`"ConfortCoding"` timer field, above)
+    AND "pinVerification" together -- independent, strong
+    cross-confirmation these are the same overall subsystem viewed
+    from 2 different processors.
+  - **`"theftProtectionSDC"`** and generic `Shadow`/`FBlock` references
+    nearby -- confirms APPS and the gateway communicate over the SAME
+    real MOST-bus "Shadow"/FBlock service framework already found in
+    `GATEWAY.FLI`'s own `TheftProtection_Shadow_Callback_Button()`/
+    `_Handle_FBlockAvail()` functions -- not 2 unrelated
+    implementations, one real distributed state machine spanning 2
+    chips.
+  - **The real hash-verification mechanism, named directly**:
+    `HWInfoGetPinHash()` (retrieves a REFERENCE hash from "HWInfo"
+    storage) and `NFGetNandFlashId()` (reads the unit's own NAND flash
+    chip ID) are both called and logged around the verify path --
+    `"entered PIN/Hash v[alid]"`/`"...sh inval[id]"` are the real
+    strings the Python tool's README was paraphrasing as "Hash valid"/
+    "Hash invalid" (confirmed: "Hash valid" is a literal substring of
+    the real `"entered PIN/Hash valid"` message).
+  - **`HWInfo` is the SAME NOR-flash-resident structured data area
+    already found decompiling the `HOST` BSP earlier this session**
+    (its "HW Info start" named flash region) -- confirmed independently
+    here via `HWINFO_Init`/`DRV_HWINFO_fibHook`/`HWINFO_SourceItem -
+    set Pointer to NOR flash`/a real `"area ID in HWInfo image wrong"`
+    error naming an `Area`/`Item`/`Type` triple -- a real, structured,
+    indexed data image, not a flat blob.
+  - **A genuinely more specific, real security mechanism than anything
+    found before: CLUSTER-ID PAIRING.** A dense cluster of strings --
+    `cCurrentClusterIdHash=`, `"hash written in NAND"`, `"ClusterID
+    hash writing in NAND failed"`, `CopyClusterIDFromNANDToNOR()`,
+    `"Copying ClusterID from NAND to NOR"`, `"ClusterID copied from
+    NAND to N[OR]"` -- shows the unit stores a HASH of the vehicle's
+    INSTRUMENT CLUSTER's own unique ID, synced between NAND and NOR
+    flash. This is the real, concrete implementation of VW Group's
+    documented "component protection" anti-theft design: the head unit
+    is cryptographically bound to a SPECIFIC vehicle's cluster, not
+    just protected by a standalone PIN -- moving the radio to a
+    different car (different cluster ID) is what triggers the locked
+    state in the first place, independent of whether the PIN itself is
+    ever guessed correctly.
+  - **Real evidence of factory/regional default PINs**:
+    `ENABLE_DEFAULT_PIN_WITH_INITIAL_HASH` (a real compile-time flag
+    name) and `"Initial Hash found, Pin(JapNav) valid"` (paired with
+    `TpPvJapNavPresent() dwCustomerProductId = 0x%.8X` and
+    `TpPvGetUniqueIdentifier()`) -- a real, build-specific default-PIN-
+    with-pre-known-hash mechanism exists for at least the Japan-
+    Navigation variant, not independently decoded further this
+    session.
+
+**Not yet done**: `TpPvVerifyPin`/`HWInfoGetPinHash`/
+`NFGetNandFlashId`'s own disassembly -- file offset 82.6MB falls in the
+76-85.6MB VxWorks/BSP region, a DIFFERENT linking unit from the already
+load-base-recovered 0-9MB native map/navicore code, so the existing
+`FHDD6_LOAD_BASE` does not apply here and a separate base (if one is
+even recoverable for this region) was not attempted this session. The
+exact hash algorithm (what's actually hashed -- the PIN alone, the PIN
++ NAND flash ID, the PIN + ClusterID hash, some combination) remains
+unknown at the byte/instruction level; only the real function/data
+names and their call relationships were established, via strings, not
+disassembly.
+
+**The other 4 new community-project folders, briefly**:
+
+- **`rns510_1020_1022_1024`**: another real, complete SWL disc --
+  genuinely the OLDEST build this project has ever had access to.
+  `VERSION.TXT` reads `(c) Siemens VDO AG Wetzlar` -- NOT `CONTINENTAL
+  Wetzlar` like every other disc examined -- a direct, disc-level
+  confirmation of the Siemens-VDO-to-Continental corporate lineage
+  already inferred from the `HOST` BSP's own embedded copyright string.
+  `#DATE:2007-12-20`, author `AKr` (already known from
+  `CDSTRUCTTMP.CFG`'s changelog), `#Steckbrief: C_EU_5.540_t730
+  C3/C4A`, `#VwSwIndex:1020/1022/1024/1026`, real part numbers
+  including 2 prefixes not seen before (`1Z0035680A`, `5P0035680A`).
+  Not otherwise examined this session.
+- **`rns510-online-dest-master`** (github, real, working -- README
+  links a real demo video): a standalone Linux SocketCAN (`linux/
+  can.h`) C program, `bap_stack.c`, implementing the real **BAP** ("Bus
+  Applikations-Protokoll") wire format this project's own `USER.CFG`/
+  `CDSTRUCTTMP.CFG` already referenced only as a bare `COD_BAP` flag/
+  workaround name -- confirmed real opcodes (`GET_ALL`,
+  `MOST_CATALOG_VERSION`, `FBLOCK_AVAILABILITY`, `FSG_CONTROL`/`_SETUP`/
+  `_OPERATION_STATE`, `DESTINATION_LIST`, `ASG_CAPACITY`) and a real
+  packed struct (`can_id:11, opcode:3, lsg_id:6, fct_id:6,
+  data_len:13`). Sends CAN messages simulating a VW Car-Net telematics
+  unit to inject an "online destination" into the head unit -- README
+  confirms NAR-only (Car-Net's real market restriction).
+- **`rns510-tv-input-master`**: a 2nd, sibling standalone SocketCAN
+  BAP tool (`tv2.c`), same framework, targeting the TV-tuner FBlock
+  instead -- real opcodes for a full hybrid TV tuner (`TUNE_UP`/
+  `_DOWN`, `TVNORM_AREA`/`SUB_LIST`, `AVNORM`, `TVADDIVERSITY` [antenna
+  diversity], `EPGCONTROL`, `TTCONTROL` [teletext], `INFO_BAR`) --
+  confirms the same real MOST-bus BAP application-layer protocol
+  handles multiple, otherwise-unrelated FBlocks (destination-list,
+  TV), not something bespoke per feature.
+- **`rns510_dtv-master`**: a real, complete, standalone Qt/C++ Digital
+  TV player application (Polish-language `change_log.txt`,
+  2014-dated), MOST-bus-aware (`QMostInterface`, a `most_ready_flag`
+  presence-detection guard), GStreamer-based MPEG-TS/DVB-T decoding
+  (`gst_mpegts_demux_parse_adaptation_field`/
+  `parse_transport_packet`), its own channel-list UI
+  (`QTvServiceManager`) and screen-scaling via an "LCDC" (LCD
+  controller) module. A companion/retrofit application meant to run on
+  external hardware talking to the head unit over MOST, not part of
+  the RNS510 firmware itself -- not otherwise examined this session.
+
 ```python
 import zlib, struct
 
