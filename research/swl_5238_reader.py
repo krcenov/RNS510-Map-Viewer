@@ -2404,6 +2404,25 @@ the byte level across years of firmware releases and both market
 families. The differing filesystem mtimes seen earlier are stale/
 inherited from repackaging, not evidence of real content changes.
 
+============================================================================
+`RNS510-5238A-josi-VIM-Testmode` -- CHECKED, a 6th new disc the user
+added: despite its promising name, a byte-for-byte IDENTICAL duplicate
+of the already-exhaustively-studied `5238_MOD_C3_C4` disc, not a real
+testmode-unlocked variant
+============================================================================
+Same exact `VERSION.TXT` identity (`P 0 0 5 . 6 7 0 . 3 0 6`,
+2012-10-19, author `RoNe`, `C_EU_13.236_t3`, the same `"unofficial SWL
+CD by josi"` disclaimer, `VwSwIndex 5238`) as `5238_MOD_C3_C4`. A full
+recursive tree diff (344 files each side, every file hashed) found
+**ZERO differences anywhere** -- same file count, same relative paths,
+same SHA256 per file, no additions/removals/modifications. The
+`"VIM-Testmode"` label is just how this particular copy/download was
+named by whoever distributed it -- plausibly describing what people USE
+this exact disc for (testmode/coding access via the WA scripts already
+documented above), not a distinct, separately-modified repack. Nothing
+further to extract here; recorded so a future session doesn't re-diff
+it expecting to find real changes.
+
 ```python
 import zlib, struct
 
