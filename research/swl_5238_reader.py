@@ -2698,6 +2698,47 @@ index into this exact dispatcher was also not traced back further.
 Both remain open, concrete future work, now with a validated tool and
 address-scheme in hand rather than starting from zero.
 
+**UPDATE, immediately following, same session ("continue"): traced one
+level further back, found a whole FAMILY of per-override handler
+functions and a 2nd, CONDITIONAL retry-limit constant; the caller/
+dispatch mechanism itself remains a real, not-yet-solved wall.**
+Scanning backward from the first handler (real function boundaries
+found via the same `RETS`-then-push-prologue shape already used for
+PowerPC) reveals file offset `0xA63D0`-`0xA64F8` is a SEPARATE, earlier
+handler with an extra wrinkle: it calls a helper (`CALLS 0x1B,0x1978`)
+first, and picks its own comparison limit CONDITIONALLY based on that
+helper's result -- **`0x64` (100 decimal) if the returned flag equals
+1, else `0x32` (50 decimal)**, the same value already found in the
+sibling handler. Two real threshold constants now confirmed at the
+disassembly level for this counter family, not one. Immediately before
+that, `0xA6300`-`0xA63D0` holds a whole run of very small (2-12
+instruction) functions, each setting one distinct internal constant/
+flag (`0x3F92`-`0x3F99`-range memory locations, values like `0x11`/
+`0x17`/`0x19`/`0x20`/`0x21`/`0x30`/`0x33`/`0x64` seen) then either
+falling through or calling 1 of 2 shared apply-helpers
+(`CALLS 0x1C,0xE042` or `CALLS 0x1B,0x3E68`) -- clearly the real
+per-override-command handler family the `"THP: Diag: Override ..."`
+strings describe, one tiny function per command.
+
+**Tried and FAILED to find what calls into this handler family** (2
+real techniques, both clean negatives, not inconclusive noise): (1) a
+literal jump-table search -- checked whether any 2 handler addresses
+appear as consecutive little-endian 16-bit words anywhere in the file
+(the shape a real jump table would have) -- zero hits for every
+adjacent pair; (2) a direct `CALLS 0x0A,<handler>` opcode search (the
+exact byte pattern `DA 0A <offset:LE16>`, matching every other real
+call site already confirmed in this file) against all 11 handler
+addresses -- zero hits, everywhere. **Conclusion: dispatch into this
+handler family is NOT a literal table and NOT a direct call -- almost
+certainly an INDIRECT call through a computed/register-held address**
+(`CALLI` or similar), which this session's simple pattern-matching
+approach cannot trace without building a real indirect-call/register-
+flow tracker for this architecture -- a substantially bigger
+undertaking than anything tried so far, genuinely new tooling work, not
+a quick follow-up search. Recorded here as a real, tested wall so a
+future session doesn't re-try the same 2 quick searches expecting a
+different result.
+
 ```python
 import zlib, struct
 
