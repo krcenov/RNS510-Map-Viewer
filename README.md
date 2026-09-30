@@ -7839,6 +7839,33 @@ ground truth (a real photo of an actual unit's boot splash screen to
 compare against), not further blind width/format guessing -- recorded
 here so a future session doesn't repeat the same category of search.
 
+### v41 → v42: 2 separate search boxes — "Address" and "POI" — instead of 1 unified one (this session, user-requested: "i suggest having 2 search text boxes, 1 for adresses, 1 for pois")
+
+The single search box (road+city+POI all at once, `MapData.
+search_combined()`) is replaced in the UI by 2 separate boxes, each with
+its own Entry + Search button, stacked (`Address:` above `POI:`),
+sharing ONE results list below (whichever box was searched last simply
+replaces its contents — the same "search replaces previous results"
+behavior the single box already had, not a new interaction).
+
+New `MapData` methods, `search_address()` (roads + cities) and
+`search_all_pois()` (regular POIs + Sirius POIs together, so the new
+`POI` box naturally covers both POI data sources at once) — factored
+out of `search_combined()`'s own logic, which is left completely
+UNCHANGED (`test_map_viewer.py`'s existing tests call it directly).
+`SearchHit` gains a 4th real `kind`, `"sirius"` (distinct from `"poi"`,
+so its result-list label reads `[Sirius]` instead of `[POI]` — the only
+other change needed, `label()`'s own category-name suffix logic already
+covered it once the condition included the new kind).
+
+Verified directly against the real map ISO + a real Sirius database:
+`search_address("SOFIA")` returns 20 real road/city hits; `search_all_
+pois("MCDONALD")` returns real POI.DB3 matches; loading a Sirius
+database and searching `"CHEVRON"` returns 5,682 real `[Sirius]`-tagged
+hits with correct category names. App launches cleanly with the new
+2-row layout; a window screenshot confirms it renders as intended
+(`Address:`/`POI:` rows stacked, both above the shared results list).
+
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
 - **`_initial_scale()` outlier sensitivity.** A single decoded feature can

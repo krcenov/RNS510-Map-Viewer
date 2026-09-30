@@ -1112,16 +1112,16 @@ class SearchHit:
     __slots__ = ("kind", "name", "lon", "lat", "extra")
 
     def __init__(self, kind, name, lon, lat, extra=None):
-        self.kind = kind  # "road", "city", or "poi" (README §10 "v22 -> v23")
+        self.kind = kind  # "road", "city", "poi", or "sirius" (README §10 "v22 -> v23"/"v41 -> v42")
         self.name = name
         self.lon = lon
         self.lat = lat
         self.extra = extra  # core.RoadRecord, city_reader.CityRecord, or a poi_db_reader.search_pois() dict
 
     def label(self):
-        tag = {"city": "[City]", "poi": "[POI]"}.get(self.kind, "[Road]")
+        tag = {"city": "[City]", "poi": "[POI]", "sirius": "[Sirius]"}.get(self.kind, "[Road]")
         suffix = ""
-        if self.kind == "poi" and self.extra and self.extra.get("category_name"):
+        if self.kind in ("poi", "sirius") and self.extra and self.extra.get("category_name"):
             suffix = "  (%s)" % self.extra["category_name"]
         return "%s  %s%s  (%.5f, %.5f)" % (tag, self.name, suffix, self.lon, self.lat)
 
@@ -1953,6 +1953,46 @@ class MapData:
         return out
 
     # --------------------------------------------------------------- search
+
+    def search_address(self, query, limit=40):
+        """Road + city search only, no POIs -- backs the "Address" search
+        box (App.on_search_address(), user-requested: 2 separate search
+        boxes instead of 1 unified one). Same underlying road/city search
+        calls as search_combined() below, just without the POI part.
+        Returns (hits: list[SearchHit], road_total: int, city_total: int)."""
+        hits = []
+        road_total = city_total = 0
+        if self.search_project is not None:
+            road_results, road_total = self.search_project.search(query, limit=limit)
+            for r in road_results:
+                hits.append(SearchHit("road", r.name, r.lon, r.lat, r))
+        if self.cty_cache is not None:
+            city_results, city_total = self.cty_cache.search(query, limit=limit)
+            for c in city_results:
+                hits.append(SearchHit("city", c.name, c.repr_point[0], c.repr_point[1], c))
+        return hits, road_total, city_total
+
+    def search_all_pois(self, query, limit=40):
+        """Regular POI + Sirius POI search only, no roads/cities -- backs
+        the "POI" search box (App.on_search_poi()). Sirius hits are
+        tagged `SearchHit("sirius", ...)`, not `"poi"` -- distinct enough
+        for label() to show "[Sirius]" instead of "[POI]", but otherwise
+        handled identically (same category_name suffix, same jump
+        behavior -- SearchHit.jump_span_deg()'s default branch covers
+        both). Returns (hits: list[SearchHit], poi_total: int,
+        sirius_total: int) -- sirius_total is always 0 if no Sirius
+        database has been loaded (MapData.sirius_ready)."""
+        hits = []
+        poi_total = sirius_total = 0
+        if self.poi_ready and self.poi_cache is not None:
+            poi_results, poi_total = poidb.search_pois(self.poi_cache, query, limit=limit)
+            for p in poi_results:
+                hits.append(SearchHit("poi", p["name"], p["lon"], p["lat"], p))
+        if self.sirius_ready and self.sirius_cache is not None:
+            sirius_results, sirius_total = poidb.search_pois(self.sirius_cache, query, limit=limit)
+            for p in sirius_results:
+                hits.append(SearchHit("sirius", p["name"], p["lon"], p["lat"], p))
+        return hits, poi_total, sirius_total
 
     def search_combined(self, query, limit=40):
         """Unified road+city+POI search (README §10 "v22 -> v23" added
@@ -3333,21 +3373,49 @@ class App:
         controls = tk.Frame(search_panel, bg=SEARCH_PANEL_BG)
         controls.pack(fill="x", padx=10, pady=(0, 10))
 
-        # --- unified name search (teal pill button, like photo #2's "Options" row) ---
+        # --- 2 SEPARATE search boxes (user-requested: "i suggest having 2
+        # search text boxes, 1 for addresses, 1 for pois" -- previously one
+        # unified box covered road+city+POI at once via search_combined();
+        # that method is UNCHANGED/kept, since test_map_viewer.py's own
+        # tests call it directly, but the UI no longer uses it -- each box
+        # now calls its own focused MapData method, search_address() (road+
+        # city only) or search_all_pois() (regular POI + Sirius POI), so a
+        # POI-name search can't get buried under unrelated road/city
+        # matches and vice versa) -- both share ONE results list below
+        # (whichever box was searched last simply replaces its contents,
+        # same "search replaces previous results" behavior the single box
+        # already had) rather than doubling the vertical space this
+        # already-compact panel has to work with.
         search_frame = tk.Frame(controls, bg=SEARCH_PANEL_BG)
         search_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
-        search_row = tk.Frame(search_frame, bg=SEARCH_PANEL_BG)
-        search_row.pack(fill="x")
+        addr_row = tk.Frame(search_frame, bg=SEARCH_PANEL_BG)
+        addr_row.pack(fill="x")
+        tk.Label(addr_row, text="Address:", bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG_DIM,
+                 font=("Segoe UI", 8), width=8, anchor="w").pack(side="left")
         self.search_var = tk.StringVar()
-        search_entry = tk.Entry(search_row, textvariable=self.search_var,
+        search_entry = tk.Entry(addr_row, textvariable=self.search_var,
                                  bg="#0f2130", fg=SEARCH_PANEL_FG, insertbackground=SEARCH_PANEL_FG,
                                  relief="flat", highlightthickness=1,
                                  highlightbackground="#3a5a72", highlightcolor=TEAL_ACCENT_ACTIVE)
         search_entry.pack(side="left", fill="x", expand=True, ipady=4)
-        search_entry.bind("<Return>", lambda e: self.on_search())
-        search_btn = self._make_pill_button(search_row, "Search", self.on_search)
+        search_entry.bind("<Return>", lambda e: self.on_search_address())
+        search_btn = self._make_pill_button(addr_row, "Search", self.on_search_address)
         search_btn.pack(side="left", padx=(6, 0))
+
+        poi_row = tk.Frame(search_frame, bg=SEARCH_PANEL_BG)
+        poi_row.pack(fill="x", pady=(4, 0))
+        tk.Label(poi_row, text="POI:", bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG_DIM,
+                 font=("Segoe UI", 8), width=8, anchor="w").pack(side="left")
+        self.poi_search_var = tk.StringVar()
+        poi_search_entry = tk.Entry(poi_row, textvariable=self.poi_search_var,
+                                     bg="#0f2130", fg=SEARCH_PANEL_FG, insertbackground=SEARCH_PANEL_FG,
+                                     relief="flat", highlightthickness=1,
+                                     highlightbackground="#3a5a72", highlightcolor=TEAL_ACCENT_ACTIVE)
+        poi_search_entry.pack(side="left", fill="x", expand=True, ipady=4)
+        poi_search_entry.bind("<Return>", lambda e: self.on_search_poi())
+        poi_search_btn = self._make_pill_button(poi_row, "Search", self.on_search_poi)
+        poi_search_btn.pack(side="left", padx=(6, 0))
 
         self.results_list = tk.Listbox(search_frame, height=6, bg="#132635", fg=SEARCH_PANEL_FG,
                                         selectbackground=TEAL_ACCENT, selectforeground=TEAL_ACCENT_FG,
@@ -3692,7 +3760,8 @@ class App:
         points_scroll.pack(side="left", fill="y")
         self.points_text.insert("end", POINTS_PANEL_HEADER)
 
-        self._controls = [search_entry, search_btn, self.results_list, go_btn, clear_points_btn]
+        self._controls = [search_entry, search_btn, poi_search_entry, poi_search_btn,
+                          self.results_list, go_btn, clear_points_btn]
         self._controls.extend(self._layer_checkbuttons.values())
         self._controls.append(self.connected_roads_cb)
         self._tick_clock()
@@ -4159,34 +4228,68 @@ class App:
 
         BackgroundTask(self.root, do_load, lambda msg: self.mp0_status_var.set(msg), done).start()
 
-    def on_search(self):
+    def on_search_address(self):
+        """"Address" search box -- roads + cities only (MapData.
+        search_address()). Replaces the old unified on_search(); see the
+        "2 SEPARATE search boxes" comment in _build_widgets() for why."""
         if self.busy or self.data is None:
             return
         query = self.search_var.get().strip()
         if not query:
             return
         self._last_query = query
-        self._begin_busy("Searching for %r ..." % query)
+        self._begin_busy("Searching addresses for %r ..." % query)
 
         def do_search(progress):
-            return self.data.search_combined(query, limit=40)
+            return self.data.search_address(query, limit=40)
 
         def done(result, error):
             self._end_busy()
             if error:
                 messagebox.showerror("Search failed", str(error))
                 return
-            hits, road_total, city_total, poi_total = result
+            hits, road_total, city_total = result
             self.search_results = hits
             self.results_list.delete(0, "end")
             for h in hits:
                 self.results_list.insert("end", h.label())
             self._set_status(
-                "Search: %d result(s) shown (%d road match(es) of %d total, %d city match(es) of %d total, "
-                "%d POI match(es) of %d total). Double-click a result to jump there." % (
+                "Address search: %d result(s) shown (%d road match(es) of %d total, "
+                "%d city match(es) of %d total). Double-click a result to jump there." % (
                     len(hits), sum(1 for h in hits if h.kind == "road"), road_total,
-                    sum(1 for h in hits if h.kind == "city"), city_total,
-                    sum(1 for h in hits if h.kind == "poi"), poi_total))
+                    sum(1 for h in hits if h.kind == "city"), city_total))
+
+        BackgroundTask(self.root, do_search, self._set_status, done).start()
+
+    def on_search_poi(self):
+        """"POI" search box -- regular POIs + Sirius POIs only (MapData.
+        search_all_pois())."""
+        if self.busy or self.data is None:
+            return
+        query = self.poi_search_var.get().strip()
+        if not query:
+            return
+        self._last_query = query
+        self._begin_busy("Searching POIs for %r ..." % query)
+
+        def do_search(progress):
+            return self.data.search_all_pois(query, limit=40)
+
+        def done(result, error):
+            self._end_busy()
+            if error:
+                messagebox.showerror("Search failed", str(error))
+                return
+            hits, poi_total, sirius_total = result
+            self.search_results = hits
+            self.results_list.delete(0, "end")
+            for h in hits:
+                self.results_list.insert("end", h.label())
+            self._set_status(
+                "POI search: %d result(s) shown (%d POI match(es) of %d total, "
+                "%d Sirius match(es) of %d total). Double-click a result to jump there." % (
+                    len(hits), sum(1 for h in hits if h.kind == "poi"), poi_total,
+                    sum(1 for h in hits if h.kind == "sirius"), sirius_total))
 
         BackgroundTask(self.root, do_search, self._set_status, done).start()
 
