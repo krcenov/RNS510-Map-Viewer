@@ -3429,6 +3429,114 @@ real existence, purpose, and its dependency on the same BAP mechanism
 -- a large, self-contained project, lower priority than the protocol-
 level C sources above for THIS project's own firmware-disassembly
 goals.
+
+============================================================================
+`BASE/Other/rns_code_finders` -- decompiled (.NET IL -> real C# source, via
+`ilspycmd`) -- proves `TpPvVerifyPin` is a REAL, directly-callable VxWorks
+shell command reachable over a real, documented serial debug port, and
+recovers its exact real search keyspace/protocol
+============================================================================
+Two compiled Windows .NET executables (`RNS510_code_finder_ver20.exe`,
+`RNS510_code_finder_ver22.exe`) with NO source included -- but .NET IL
+decompiles almost losslessly, unlike the PowerPC/C166 work elsewhere in
+this file. Installed `ilspycmd` (`dotnet tool install -g ilspycmd
+--version 9.1.0.7988` -- the plain `dotnet tool install -g ilspycmd`
+latest-version path is currently broken upstream, a bad NuGet package
+metadata issue unrelated to this project) and decompiled both to full,
+real, readable C# source. This is the single most direct confirmation
+this session has had of the `TpPvVerifyPin` mechanism -- not inferred
+from disassembly or from a manual's screenshot, but from a working
+tool's own real source code.
+
+**The real mechanism, straight from `RNS510_decode.cs`**: the tool opens
+a real Windows COM (serial) port at **115200 baud** and, for each
+candidate PIN `i` in a real, configurable range (**default 0-1999,
+i.e. exactly the 2000-value keyspace** already noted elsewhere this
+session from the separate `rns510-code-finder-main` Python tool -- now
+independently confirmed from a second, unrelated real implementation),
+writes the literal ASCII line:
+
+```
+TpPvVerifyPin(<pin>)
+```
+
+directly to the serial port, then watches the incoming serial text for
+the literal real strings **`"Hash valid"`** (success -> stop, beep,
+report the PIN) or **`"Hash invalid"`** (failure -> advance to the next
+PIN), with a 2-second (20 x 100ms poll) timeout per attempt before
+treating it as a comms error and retrying the same PIN. **This proves
+`TpPvVerifyPin` is a real, live, directly-invocable command in a VxWorks
+target shell exposed over this serial port** -- not just a symbol name
+recovered from disassembly.
+
+**Real VxWorks shell identity, also recovered from the source**: a
+separate `"version"` command is sent, and the response is parsed for
+the literal substrings `"Made on "`, `"Kernel:"`, `"VxWorks"`, and
+`"tShell"` -- i.e. the real unit's serial console identifies itself
+with a genuine VxWorks target-shell banner of the shape `...Made on
+<date>...Kernel:<version>...VxWorks<version>...tShell...` (exact full
+banner text not recovered here, only the substrings this tool's own
+parser depends on). `tShell` is VxWorks's real standard interactive
+target shell name -- strong, independent confirmation that the RNS510's
+APPS/native-PowerPC side (the same code region `FHDD6.FLI`'s 76-85.6MB
+VxWorks/BSP region belongs to, per this file's own README-cross-
+referenced section) runs actual VxWorks with its stock shell reachable
+live over a serial line, not just present as static kernel strings in
+a flashed image.
+
+**v22 adds 2 real, concrete operational facts** (diffed against v20 via
+`ilspycmd` + plain `diff`): a startup warning **"Don't use USB TTL
+interface!"** (implies real people had reliability problems using
+cheap USB-to-TTL serial adapters on this port -- a genuine hardware
+caveat, not explained further in the source) and **"Please wait ~1 min
+after boot RNS."** show before the "Read"/`version` step -- i.e. the
+real shell is NOT immediately available at power-on, confirmed real
+boot-timing behavior. v22 also replaces the old single "send `help`+CR"
+button with a full free-form raw serial terminal window (`Debug.cs`,
+`RNS510_temp.Resources` namespace) -- no hardcoded command list was
+found in it (it's a generic terminal, not a command catalog), so this
+does NOT by itself expand the known set of real shell commands beyond
+`TpPvVerifyPin`, `version`, and whatever `"x68"` (sent by v20's old
+"Stop"/button2, purpose not decoded) turns out to be.
+
+**Real hardware wiring, recovered as an embedded image resource** (the
+"How connect RNS510?" button opens a `Schematic` form whose
+`pictureBox1.Image` is a real PNG, extracted here by parsing the
+`.resx`'s base64 `System.Drawing.Bitmap`-serialized blob and locating
+the embedded PNG signature by hand -- `ilspycmd` does not decode this
+image format on its own). Saved to
+`research/images/rns510_serial_debug_connector.png` in this repo. Shows
+a real 26-pin 2x13 connector, **real part number `N91-10930`** (a
+genuine VW/Bosch connector-housing part number, not previously seen
+this session), wired to a standard DB9 RS232 connector:
+- Connector **pin 14 (explicitly labeled in the diagram) = GND**,
+  wired to standard DB9 pin 5 (the maroon/dark-red wire).
+- Two adjacent, UNLABELED pins in the connector's other row, directly
+  above pin 14's column and its immediate left neighbor, carry the
+  serial data pair (yellow and red wires) to standard DB9 pins 2 and 3
+  respectively -- i.e. standard RS232 RXD/TXD, consistent with the
+  115200-baud `SerialPort` config in the decompiled source. The
+  diagram itself never numbers these 2 pins individually (only pins
+  13, 14, and 26 are labeled, apparently only to establish which
+  corner is which on this 2-row connector) -- their exact pin numbers
+  (most likely 1 and 2, if the top row counts 1..13 right-to-left as
+  the 13/14/26 labels imply) are a reasonable inference, not directly
+  read off the image, and should be re-verified against a real unit or
+  a full official pinout before relying on them physically.
+
+**Author/provenance**: `claudiu.clement@gmail.com`, tool labeled
+"RNS510 code finder v:2.0"/v2.2 in its own UI -- recorded for
+attribution, not verified further.
+
+**Practical significance for this project's own open questions**: this
+gives a REAL, concrete, community-verified path to directly querying
+`TpPvVerifyPin` on real hardware (serial console, not CAN/BAP) -- the
+exact kind of "real ground truth (a debugger attached to real hardware,
+JTAG, or a leaked symbol map)" that `parse_symbol_table()`'s own
+docstring said would be needed to push the earlier, explicitly-blocked
+`TpPvVerifyPin` disassembly attempt further. No attempt was made this
+session to actually connect to real hardware -- recorded as a real,
+now fully open, concrete path forward, not as something executed.
 """
 
 import re
