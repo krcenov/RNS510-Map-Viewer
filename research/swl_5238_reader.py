@@ -3179,6 +3179,118 @@ for this pair). Consistent with `5270_VIM_testmode` being a real
 community modification DESPITE its own official-sounding `VERSION.TXT`
 comment string -- that string is apparently not a reliable signal of
 whether a disc has been altered, only `CRC16`/byte-level comparison is.
+
+============================================================================
+`BASE/Other/Setconfig-for-rns510.pdf` -- a REAL commercial factory-level
+coding/diagnostic tool manual, independently corroborating most of this
+project's own reverse-engineering from an outside, non-firmware source
+============================================================================
+"SetConfig for RNS510 -- Comprehensive Management Unit -- Direction
+Manual V1.0", a real 13-page manual (with screenshots) for a real
+commercial third-party tool (Basic/Full tiers, sold with an FTDI cable,
+reseller contact `EncryptUSA@Gmail.Com`) -- NOT firmware, NOT extracted
+from any disc image, but valuable precisely because it independently
+confirms several things this project only ever derived from static
+disassembly, from a completely different angle (a working tool's own UI
+against real hardware). 7 tabs: System, Coding, HDD, Hardware, Display,
+Logo, Firmware, Monitor.
+
+**Coding tab directly validates this session's `TheftProtection_*`/
+`TpPvVerifyPin` work**: shows a real "Current coding" hex readout
+(`0H0004000400008600` in the manual's own screenshot -- likely an OCR
+artifact of the PDF text extraction, plausibly `0x0004000400008600` or
+similar; not independently re-derived here) plus a list of individually
+togglable coding overrides -- **"Theft protection"** and **"PIN
+verification"** are both literally present as named, real, Enabled/
+Disabled toggles. This is the first EXTERNAL (non-firmware-internal)
+confirmation that these two concepts are real, independently-coded
+vehicle options, not just internal EEPROM state this project inferred
+from the `GATEWAY.FLI` disassembly alone. Also present: "Display
+protocol" with **"BAP"** as a real dropdown value (confirms BAP is a
+real, named, user-facing display-protocol choice, not only an internal
+mechanism), plus Multifunction steering wheel, Backup camera low, Voice
+control, CD changer, and 3 separate "speed limit for X" coding toggles
+(destination input, voice destination input, map info).
+
+**Hardware tab (service-mode-only) lists real hardware-identity field
+names** worth searching for directly in the firmware's `HWInfo`/NAND
+region documented earlier in this file: Variant, Product Id, Variant Id,
+HW Vehicle (`C001` in the screenshot -- matches the `HARDWARE_C*`
+numbering scheme found in `INFO/CDSTRUCT.CFG`, see above), HW Radio
+(`0006`), Production date, Initialisation data, Serial number, HW part
+number (`3C0035684C` in the screenshot -- same real VW part-number
+format as this file's own `#VwSwPartNumber` list above), HW version,
+A2C number, Change number, HW version Id, OEM supplier Id, Platform Id,
+HW module Id. **Also a real 4-digit PIN code field with its own "Set"
+button** -- direct external confirmation that a tool exists which can
+both read AND WRITE the theft-protection PIN, tying straight to this
+session's `TpPvVerifyPin`/`HWInfoGetPinHash` investigation and the
+separate `rns510-code-finder` brute-force tool (2000-value keyspace)
+already found this session; no attempt made here to learn HOW SetConfig
+performs the write.
+
+**Logo tab -- 3rd independent confirmation of the real 800x480 screen
+resolution**: custom boot screens must be supplied as an **800x480
+BMP** image, which the tool converts into a real flashable ISO. Already
+confirmed 2 other ways this session (widget-bounds strings in
+`FHDD6.FLI`, `find_screen_resolution()` above) -- this is a 3rd,
+fully independent source (a commercial tool's own stated hardware
+requirement). Does NOT resolve the still-open splash-screen raw-pixel-
+encoding question: checked whether the already-known splash-image
+region (the one whose fixed-stride bitmap decoding was ruled out
+earlier this session) contains a literal `BM` bitmap-file signature --
+it does not (one coincidental `BM` byte-pair match elsewhere in
+`H_PQEE.FRG`, not adjacent to the splash region, not pursued further).
+Recorded as a real, concrete NEW LEAD for a future session (a genuine
+BMP file might be produced/consumed only by SetConfig's own
+"Create .iso" step, i.e. reformatted before being written to the disc
+image actually flashed -- not necessarily what's stored on-device) --
+NOT a solved answer.
+
+**System tab confirms the `0x0B3A` speed-lockout register from an
+external angle**: "Speed limit DVD/TV" and a separate "Speed limit
+HMI" field, each settable to 6/250/300 km/h (6 km/h = real factory
+default, matches the "no video while moving" restriction already
+disassembled via `SetRegDataHex(0x0B3A,...)` in the testmode/tvfree
+diffs above). Also real, previously-undocumented features not chased
+further this session: SW Downgrade (force-downgrade regardless of
+current firmware version), DVD Region override (or region-free),
+Application Menu enable (a hidden service menu, held-button entry),
+Skin (Highline/Premium/Standard), Power mode options (Fast/Normal/
+Service/SWL), SD card enable/disable, startup-logo variant (can rebrand
+VW->Skoda etc.).
+
+**Monitor tab (Full version only) -- a real LIVE debug-log capture from
+an actual running unit**, shown as a screenshot in the manual. Concrete
+real strings visible, valuable as fresh disassembly search targets:
+`GW_print` (a real gateway-side print/log function -- `GATEWAY.FLI`
+territory), `RTDD_PS_VuC_HB` (a real "VuC" heartbeat message --
+independent confirmation of the "VuC" gateway-chip terminology already
+used throughout this session's `TheftProtection_*` work),
+`wrpNewStationStatus`, `Observer_setLCMHeartbeat`, `SDARSTmc_
+receiveTcDataMsg`, `SDARSTmc_decodeTrafficMarketIdentifier` (SDARS =
+Sirius, already established this session via `SIRIUS.DB3`/TravelLink),
+plus real live SiriusXM channel/category data (e.g. "Howard Stern",
+"Outlaw Country") and real UI widget names (`ButtonImage_1`,
+`PopupBackground_1`) -- consistent with the Java widget-bounds strings
+this project already found in `FHDD6.FLI`. None of these strings were
+searched for directly in any firmware image this session; recorded
+purely as concrete, real, newly-sourced search targets for a future
+disassembly pass, not as findings already confirmed present in a binary.
+
+**Firmware tab**: confirms `DLSCRIPT.TXT`-style flash scripts are
+directly user-editable through this tool ("comment out options to save
+20-30 min flash time"), consistent with this project's own read of the
+`DLSCRIPT.TXT`/`FILE_UPDATE`/`LOAD_ECU_BLOCK` command format above.
+
+**Overall assessment**: this document doesn't hand over any new raw
+bytes to disassemble, but it is the single strongest EXTERNAL validation
+this project has had all session that its firmware-internal findings
+(`TheftProtection_*`, `TpPvVerifyPin`, BAP, the `0x0B3A` register, the
+800x480 resolution, `VuC`/gateway terminology) describe REAL,
+externally-documented vehicle features -- not artifacts of
+misinterpreting disassembly. Treated as corroborating evidence, not as
+a primary source to extract new binary facts from.
 """
 
 import re
