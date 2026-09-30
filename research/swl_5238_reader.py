@@ -2972,6 +2972,60 @@ disassembly.
   external hardware talking to the head unit over MOST, not part of
   the RNS510 firmware itself -- not otherwise examined this session.
 
+============================================================================
+A real attempt to disassemble `TpPvVerifyPin`/`HWInfoGetPinHash`/
+`NFGetNandFlashId` itself, immediately following ("continue", same
+session) -- a genuine, informative negative result, not a success
+============================================================================
+Tried the SAME candidate load base already recovered for the 76-82MB
+VxWorks region during the earlier "second load base" investigation
+(99.8%-confidence via `lis`/`addi` statistical clustering,
+`candidate_base ~= 0xfa5a9b27`) directly against this new lead.
+
+**First, mapped where real code actually sits relative to these
+strings**: `find_prologues()` across 70-86MB shows dense real code
+ONLY at 76-81MB (~1,000+/MB) -- **82MB itself, where `TpPvVerifyPin`'s
+string lives (file offset 82,555,321), has ZERO prologues**; 83MB
+picks back up (50). Directly disassembling small windows at several
+offsets +/-20-40KB around the string confirms why: every "instruction"
+decoded is pure garbage -- 4-10 instructions before breaking, and the
+operands are literally ASCII text reinterpreted as immediates (e.g.
+`andis. r9,r3,0x6669` -- `0x6669` is the ASCII bytes for `"fi"`). This
+whole area is a big, code-free STRING/RODATA POOL, confirming the real
+`TpPvVerifyPin` implementation lives elsewhere, referencing these
+strings from a distance -- the same shared-string-section pattern
+already seen elsewhere in this codebase.
+
+**Given that, searched the DENSE 76-82MB code (6,101 real prologues)
+for `lis`/`addi` pairs whose computed absolute address, under the
+existing candidate base, equals any of 4 known string locations
+(`TpPvVerifyPin`, `HWInfoGetPinHash`, `NFGetNandFlashId`,
+`cCurrentClusterIdHash`) -- zero matches.** The existing candidate base
+was only ever a STATISTICAL aggregate over the whole 76-82MB block
+(unlike `FHDD6_LOAD_BASE`, never independently byte-verified) -- likely
+imprecise for this specific sub-area, plausibly because VxWorks/BSP-
+region binaries link multiple separate compilation units that don't
+all share one exact base. **Tried to re-derive a fresh, local candidate
+base from prologues specifically near 83-84MB (closer to the target
+than the 76-81MB block)** -- only 4 real `lis`/`addi` pairs collected
+from 50 prologues, far too few for reliable statistical clustering
+(the original recovery used 34,652 pairs).
+
+**Honest conclusion**: this specific disassembly attempt is blocked,
+not by a missing tool (capstone works fine here, this is still
+PowerPC), but by insufficient local addressing data to pin down a
+reliable load base for this particular sub-region -- a genuinely
+different failure mode from the C166 gateway wall, but a real wall
+regardless. The architecture-level findings (real function/data names,
+`ClusterID`-hash pairing to the instrument cluster, the `HWInfo`/NAND-
+flash-tied reference-hash mechanism, all from the previous section)
+remain solid; only the byte-level "what does the comparison actually
+compute" question stays open. A future session wanting to push further
+would need either a much larger `lis`/`addi` sample specifically from
+whatever compilation unit contains this function (not yet identified),
+or real ground truth (a debugger attached to real hardware, JTAG, or
+a leaked symbol map) rather than more statistical guessing.
+
 ```python
 import zlib, struct
 
