@@ -3635,6 +3635,64 @@ kind of coding-script edit already reverse-engineered from disc diffs
 all session (same `0x21`/`0x0B3A` registers), and additionally tweaks
 a `MULTI_VERIFY_HDD` parameter line (real meaning of the 9 numeric
 fields not decoded here) as part of the same edit.
+
+============================================================================
+2 closing checks -- `5238_MOD_C3_C4` vs `5238_update_original` (the exact
+flagship build this file's own `FHDD6.FLI`/`GATEWAY.FLI` disassembly work
+is about), and `4020F` vs `4020H` (two OFFICIAL revisions, not an
+unofficial pair)
+============================================================================
+**`5238_MOD_C3_C4` vs `5238_update_original`** -- same real `#CD:P`
+build stamp and `#DATE:2012-10-19` as the `5238_ALL` disc this whole
+file's disassembly sections are built on (this IS that same build,
+under the user's new `BASE/` naming). A 7th confirmation of the exact
+same pattern (testmode + `0x0B3A` in the `WA/*.WSH` scripts, official
+narrowed to `C10/C12/C6`, zeroed official `RADIO.FLI`, broader
+`josi`-labeled disc pulling in the same `MPEG/`+`EURTO` extras seen in
+the `5274` pair) -- **but with one useful NEGATIVE result**: `FHDD6.FLI`,
+`GATEWAY.FLI`, `CTEST.OUT`, and every other file this project has
+actually disassembled this session are ABSENT from both the "only in
+A" and "different content" lists -- i.e. **byte-identical between the
+official and unofficial versions of this exact build**. Directly
+confirms, on the specific files this project's own disassembly targets,
+that the community "unlock" pattern found all session is confined
+entirely to `WA/*.WSH` coding scripts and disc-tree/scope metadata --
+it does NOT patch, replace, or otherwise touch any of the actual
+PowerPC/VxWorks or C166/gateway binaries this file disassembles.
+
+**`4020F` vs `4020H`** -- checked because `Version.txt`'s odd raw-byte
+layout made `4020H` misreport as binary via `file`(1) at first glance
+(false alarm -- it's plain ASCII/CRLF text, `file`'s heuristic just
+misfired). Both are real, fully OFFICIAL "VW delivery" discs, same
+`#DATE:2012-03-09` and author (`MaGo`), but different real `#CD:P`
+build stamps and `#Integrationphase` calendar weeks (`cw22/11` vs
+`cw45/11`, i.e. `4020H` is a later respin of the same dated release) --
+NOT an official-vs-unofficial pair, so not expected to show the
+testmode pattern, and it doesn't. The real difference is legitimate
+hardware-scope narrowing between 2 official revisions: `4020H` drops
+an entire set of vehicle/hardware variants present in `4020F`
+(`EURSBHDD`, `EURTN`, `EUT5PQ`, `EUT5TO` -- Seat and Touareg-5-platform
+configs, plus their `H_SB_HDD.FRG`/`H_T5_PQ.FRG`/`H_T5_TO.FRG`/
+`T5GATEW.FLI` images and `T5PQTBL.FLI`/`T5TOTBL.FLI` tables). Recorded
+mainly to confirm `PRJCTMAP.TXT`/`DIR.INF`/`HWIDMAP.TXT`/
+`INFO/CDSTRUCTTMP.CFG` sizes track declared hardware scope directly
+(already assumed, now directly verified on a same-date official pair)
+-- not a new mechanism.
+
+**Session status on the `BASE/Firmware/` trove**: 6 real official-vs-
+unofficial pairs now diffed this session (`4120`, `5270`, `5269`,
+`5274`x2, `5238`, `3810`/`3810a`), all showing the exact same
+testmode/`0x0B3A`/hardware-scope pattern with zero exceptions, plus one
+genuinely new sub-finding (the gateway double-flash difference) and one
+direct `SetConfig`-authorship catch. Remaining un-diffed builds
+(`900`, `1020_1022`, `1024`, `1100`, `1140_US`, `1200`, `1300`, `1500`,
+`2680`, `3890`, `3970`, `3980`, `4366`, `5218`, `5230`,
+`6270_original_update`, `6276_MOD_C14`, `6276_original_update`,
+`5274_MOD_C6_C12`) are either standalone official releases with no
+obvious unofficial counterpart in this collection, or (for
+`5274_MOD_C6_C12`) a 3rd copy of an already-2x-confirmed pair -- lower
+expected value per the pattern's own consistency, not pursued further
+this session without a specific reason to expect something new.
 """
 
 import re
