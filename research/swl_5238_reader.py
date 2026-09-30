@@ -4287,6 +4287,62 @@ real author (`christian-jeanin.ro`, already known from `help.html`)
 or an unexamined side effect of reusing an existing `4120`-family disc
 as this template's own starting point -- no claim made about intent,
 only about the real, confirmed, decompiled behavior.
+
+**The "compress" feature, decompiled (class `com.rns.maps.tool.c.a`,
+extends the same `g` build-task class the SD2HDD builder above does)
+-- independently confirms real map-disc filenames this project already
+knows, and surfaces 2 new ones**: walking the source map ISO's real
+file tree, it unconditionally DELETES any file whose lowercased
+basename is **`POI.DB3`, `POI.DB3N`, or `NA_SIRIUS.DB3`** (all 3
+compared in one check) -- `POI.DB3` and `NA_SIRIUS.DB3` are exactly
+the already-known real filenames (the map disc's own POI database, and
+the Sirius TravelLink database's real on-disc name from `INFO/
+INOUT.TXT`, see the `SIRIUS.DB3`/North-America section above).
+**`POI.DB3N` is new -- not previously seen anywhere in this project**,
+plausibly a real secondary/alternate POI database variant (name
+pattern matches `POI.DB3` plus a single trailing letter; not
+independently confirmed to exist on any disc examined so far, just
+confirmed as a real string this external tool specifically checks
+for). Also deleted: any file named exactly `SPEECHRES.XML`, and any
+file whose name starts with `uvo_` (the already-known real per-
+language `UVO_*.ZIP` voice packs, `INFO/INOUT.TXT`). **Conditionally**
+deleted, gated on a real user preference flag (`c.j`, the "Maximum
+Compression" checkbox from `help.html`'s own Preferences dialog): any
+file whose real disc PATH contains `"TPD"` (case-sensitive-looking
+constant, matched via `com.rns.maps.tool.a.a.a(path, "TPD")`) --
+**plausibly the disc-root `tpd/` folder** (already documented on the
+wiki's "Disc-Root Build Script" page -- the real embedded HTML
+destination-search UI, 1,443 files) rather than
+`eeu.tmc` specifically, given the exact case-insensitive name match
+and that `tpd/` is already a confirmed real top-level folder on this
+disc family -- **not independently verified byte-for-byte** (the
+decompiled code only proves the string `"TPD"` is checked against a
+path, not which real folder that resolves to on an actual disc); this
+would be a real, useful correction to this project's own earlier,
+`help.html`-sourced description of "Maximum Compression" as removing
+"TMC" resources specifically, since the underlying byte-search log
+`README.md` was originally built from never had access to this tool's
+own real source. **A real static resource gets WRITTEN, not just
+files removed**: after deleting every `uvo_*` pack, the tool copies
+its own bundled `com/rns/maps/tool/speech/SPEECHRES.XML` into
+`SPEECH/SPEECHRES.XML` on the compressed output -- i.e. "compress"
+mode doesn't just strip the disc, it substitutes a real, tool-bundled
+placeholder speech-resource manifest in place of the removed voice
+packs (real content of that bundled XML not examined this session).
+
+**A real, concrete ISO9660-conformance difference between this tool's
+2 build paths, found directly in the decompiled `ISO9660Config` calls**:
+the SD2HDD bootstrap-disc builder (above) uses
+`restrictDirDepthTo8(true)`/`setInterchangeLevel(1)` (strict ISO9660
+Level 1 -- short names, shallow directory nesting), while THIS
+compressed-map-ISO builder uses `restrictDirDepthTo8(false)`/
+`setInterchangeLevel(2)` (Level 2 -- longer names, deeper nesting
+allowed). Consistent with the real, already-known structural
+difference between the 2 disc families (a tiny, flat SWL bootstrap
+disc vs. the map disc's own much deeper `db/`/`config/`/`tpd/`/`EDB/`
+tree) -- real, external, independent confirmation that the RNS510's
+own SWL bootloader specifically needs the stricter Level-1 form for
+its own flashable discs, not a limitation of this tool.
 """
 
 import re
