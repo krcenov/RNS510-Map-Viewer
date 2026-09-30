@@ -2423,6 +2423,115 @@ documented above), not a distinct, separately-modified repack. Nothing
 further to extract here; recorded so a future session doesn't re-diff
 it expecting to find real changes.
 
+============================================================================
+`VUCI\B101\RNSMIDEC\PROG\GATEWAY.FLI` (the real ST10F276E MOST-bus/CAN
+gateway firmware, README S2.2's already-identified chip) -- STRING-
+SCANNED (user picked this directly, "what can we do next to crack",
+following up on the still-open "where does the real VCDS-style
+SecurityAccess/Login logic actually live" question): FOUND. A complete,
+real anti-theft/immobilizer state machine, plus a separate real
+coding-synchronization protocol with named coding items -- genuinely
+new territory, not previously examined at all (no capstone/PowerPC
+support for this chip's own instruction set, so this is string-level,
+not disassembled)
+============================================================================
+884,736 bytes, genuinely DIFFERENT compiled content per market/disc
+(same size, different SHA256 across `5238_MOD_C3_C4`/`4366`/
+`US_RNS-510_SW1140` -- real per-vehicle-platform CAN routing tables,
+consistent with `INFO/INOUT.TXT`'s own `PQTABLE.FLI`/`TOTABLE.FLI`/etc.
+per-platform gateway-table naming already documented above).
+
+**`TheftProtection_*` -- a complete, real immobilizer/anti-theft state
+machine**, not just a bare function name:
+`TheftProtection_Startup()` (registers a MOST-bus "Shadow" callback +
+a timer), `TheftProtection_Timer()`, `TheftProtection_Eeprom_Init()`/
+`_Update()` (persists its own state to EEPROM behind a verified
+signature/checksum -- `"Signature cannot be verified"`/`"Signature
+invalid"`/`"Loading defaults"`), `TheftProtection_Shadow_Callback_
+Button()`/`_Handle_FBlockAvail()` (ties into the same MOST-bus
+"FBlock" service framework already seen in this file's `Keyboard
+FBlock` strings), `TheftProtection_PrintStatus`, `setTheftProtection()`,
+and a real, complete one-line status dump giving 8 distinct internal
+fields at once:
+
+```
+THP: St=%d, t_cc=%ds, t_b=%ds, t_tu=%ds, c_r=%2d, c_uk=%2d, c_ud=%2d, last_st=0x%2x
+```
+
+-- `St`=current state, `t_cc`=a "ComfortCoding" timer, `t_b`=a
+blocking timer, `t_tu`=a temp-unlock timer, `c_r`/`c_uk`/`c_ud`=3
+distinct counters (plausibly Retry/UnlockKey/UnlockDiag), `last_st`=
+previous state. A parallel diagnostic OVERRIDE interface exposes every
+one of these as a settable field, confirming the guessed roles are
+real, not speculation from the format string alone: `"THP: Diag:
+Override CounterPINRetry %d"`, `"...Override Timer TempUnlock %d[s]"`,
+`"...Override Timer Blocking %d[s]"`, `"...Override Timer
+ConfortCoding %d[s]"` (sic, real typo preserved in the firmware
+itself), `"...Override Counter UnlockKey: %d"`, `"...Override Counter
+Diag %d"`, `"...Override CurrentState %d"`, `"...Override ps_PIC_THP
+(theft detection) %d"`, `"...Override ps_PIC_SFL (safe line cut) %d"`.
+A real retry-limit message: `"THP: Cnt=%d, Limit=%d REACHED"`. A real
+persistent EEPROM record layout, also dumped as one line: `"THP:
+EEPROM: CS:0x%02x LS:0x%02x BT:%u UT:%u FUL:%2d/%2d PUL:%2d/%2d
+IP:%2d/%2d"` (checksum, last-state, block-time, unlock-time, and 3
+`current/max` counter pairs -- exact field meanings not decoded
+further, but the shape -- a signed, versioned, counter-limited
+persistent security record -- is unambiguous).
+
+**`ITD_TheftProtection_Unlock`** sits inside a much larger real
+`ITD_*` ("Interactive Test/Diagnostic", inferred from context) function
+family -- ~50 real names covering hardware test/calibration
+(`ITD_readADC`/`ITD_SetPWM`/`ITD_readI2C_raw`/`ITD_TouchscreenCalibration`/
+`ITD_StartBLCalibration`) AND coding/security
+(`ITD_setCoding`/`ITD_readCoding`/`ITD_getTPFlags` [TP = Theft
+Protection] /`ITD_TheftProtection_Unlock` itself), gated by a real
+`DiagS_SetAccessLayer` function -- i.e. a real access-LAYER/level
+concept exists at the diagnostic-dispatch level, separate from (and a
+plausible real home for) the vehicle SecurityAccess check this project
+searched for and did NOT find in `FHDD6.FLI` (above). **`DiagS_SVDO_
+Key`** is a real, directly Siemens-VDO-branded diagnostic function name
+sitting in the SAME service-name table as `EELS_ApplDiagReadDataBy
+CommonIdentifier` -- a literal UDS/KWP2000 (`ReadDataByCommonIdentifier`)
+service-name convention, confirming this whole area is a real
+diagnostic-service DISPATCH TABLE, not incidental strings. Its exact
+role (does it validate an entered access code, or something else
+"key"-related) was NOT determined -- no digit-count/PIN-format string
+was found nearby or anywhere else in the file to confirm or refute a
+link to the "5-digit decimal" VCDS-style code the user described from
+real experience with this exact vehicle/tool.
+
+**A SEPARATE, real coding-synchronization protocol**, distinct from
+both `TheftProtection_*` and the already-known `SetCoding`/byte-array
+mechanism (README/`HOST-BSP-and-Vehicle-Coding` wiki page): `CodingShadow_*`
+functions (`CodingShadow_Check_Coding`, `CodingShadow_Received_VZE_VZA`/
+`_SW_ID`/`_MFL_ONOFF_ID`/`_NAV_EXISTS`/`_CAR_TYPE`) driven by a real
+`CONFIG_FKTID_*` function-ID enum (`CONFIG_FKTID_AUTHENTICATE` -- a
+literal "authenticate" function ID -- plus `_REGCHANGE`/`_REGDATA`) and
+named `CODING_*`/`COD_ITEM_*`/`CL_CODING_*` items: `CODING_VZE_VZA_ID`/
+`CL_CODING_VZE_VZA`/`COD_ITEM_VZE_VZA` (a real coding item this session
+could NOT translate confidently -- "VZE"/"VZA" read as German
+abbreviations, plausibly lock-state-related given the security-adjacent
+company it keeps, not confirmed), `CODING_SW_ID` (software ID),
+`CODING_NAV_EXISTS` (does the unit have navigation), `CODING_MFL_
+ONOFF_ID` (plausibly steering-wheel multi-function-button on/off),
+`CODING_CAR_TYPE`. This gives real, named coding-item identifiers
+BEYOND the byte-offset-indexed `SetCoding(0x400, value, offset, width)`
+array already fully disassembled -- a 2nd, parallel, gateway-side
+coding representation this project has not cross-referenced against
+the `APPS`-side one yet.
+
+**Net assessment**: this is the single most promising real lead found
+so far for the still-open "where's the real vehicle SecurityAccess/
+Login logic" question -- a complete, real, EEPROM-persisted immobilizer
+state machine with retry/timer/access-layer concepts genuinely exists
+on this chip. NOT fully resolved: the exact PIN validation/comparison
+logic itself (this chip's ST10F276E instruction set has no capstone
+support in this project's toolchain, so this session is string-level
+only, not disassembled), and `DiagS_SVDO_Key`'s precise role. A future
+session wanting to go further would need either an ST10/C166
+disassembler (not currently available here) or a different, more
+direct source of ground truth.
+
 ```python
 import zlib, struct
 
