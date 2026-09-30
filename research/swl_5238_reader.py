@@ -109,6 +109,133 @@ itself confirmation this is a real integrity-checked deployment format,
 not an ad-hoc file dump.
 
 ============================================================================
+`INFO/` folder, the rest of it -- CRACKED (a still-later session,
+user-asked "check these files what are they? anything interesting
+inside?"): `USER.CFG`, `INOUT.TXT`, `CDSTRUCTTMP.CFG` -- real,
+substantial NEW material, not just `CDSTRUCT.CFG` padding.
+`HISTORY.TXT` -- genuinely empty, 0 bytes, nothing to find
+============================================================================
+`USER.CFG` (184 lines) is the REAL factory build-configuration input for
+THIS SPECIFIC DISC -- not a generic template, an actually-filled-in one
+-- and settles several things this module previously only inferred:
+
+  - **Real named engineers, for the first time**: its own header says
+    "This is the User configuration file which controles the
+    CdStruct.cfg file... If changes are needed please contact
+    **David Yates** or **Torsten Hildebrand**." This disc's own
+    `<AUTHOR>` tag: `RoNe`.
+  - **Real facility**: `<VERSION_FILE_HEAD>` reads "Software Loading CD
+    for CP2 based units / (c) CONTINENTAL Wetzlar" -- Continental's
+    Wetzlar, Germany site (the former Siemens VDO Automotive location --
+    ties directly to the `(c) 2005 Siemens VDO Automotive AG` string
+    already found inside the `HOST` BSP image, above) is now directly
+    confirmed as the real build facility, not inferred.
+  - **`<LOGISTIC_DATA>`**: `#Integrationphase: Delivery cw45/12
+    C10/C12/C6-samples` -- this exact disc was a calendar-week-45-2012
+    delivery of HARDWARE SAMPLE units for the C6/C10/C12 revisions
+    specifically (ties directly to `BLSCRIPT.CFG`'s own 4 hardware-match
+    sections, above -- this is the disc that has C6/C10/C12 = 1 and
+    C3/C4A/C4B/C14 = 0 in the block below).
+  - **A large `<PREDEFINITIONS>` block is the actual filled-in
+    `#ifdef` flag set** driving `CDSTRUCT.CFG`'s own conditional-build
+    logic (already characterized above as a real but unparsed grammar --
+    this is what a REAL instance of those flags looks like). Confirms
+    `EUROPA=1` / `NORTHAMERICA=0` / `JAPAN=0` / `CHINA=0` (this disc is
+    Europe-only) and enumerates a real, complete per-vehicle-platform
+    flag list: `PQ`, `SK` (Skoda), `SE` (Seat), `SB` (Skoda **Superb** --
+    matches `PRJCTMAP.TXT`'s own `SB`=Skoda-Superb inference, now
+    confirmed independently), `PH` (Phaeton), `T5`, `BY`, `BM`, `PHGO`,
+    `AK`, plus NAR-only codes `TH`, `GN`, `CH184` (ties to `H_PQ_184.frg`/
+    `H_TO_184.frg` seen in `INOUT.TXT`, below), and China-only `NMS`
+    (VW's real "New Midsize Sedan"/US-market Passat platform), `ECAR`.
+    Also real, previously-unknown per-feature flags: `HDD` section's
+    `40GB_HDD=1` (this variant's real HDD CAPACITY) and `TRAVELLINK=0`
+    (the real "TravelLink" traffic/content service, present as a build
+    option, disabled on this disc); confirms `IBOC=0` and `MPEG=0` for
+    this specific disc (both exist as build options -- see `INOUT.TXT`
+    below -- just switched off here); a `VUCI` section (`VUCBL`,
+    `VUC_HEAL`) naming a subsystem this project has not examined at all.
+
+`INOUT.TXT` (236 lines) is the build tool's own master file manifest --
+maps every internal build-tree source path to the short on-disc filename
+this whole project already works with elsewhere. Confirms real internal
+platform naming (`BL_VW.FLI` <- `SSW\\SF_INTEGRA\\cp2\\bin\\flash\\ppc\\
+fli\\bootloader.fli` -- `SF_INTEGRA` is the real internal platform
+codename, ties directly to `BLSCRIPT.CFG`/the `SSW_VW-RNS` BSP above) and
+surfaces several genuinely new, never-before-mentioned components:
+
+  - Per-vehicle-platform CAN gateway routing tables (`PQTABLE.FLI`/
+    `TOTABLE.FLI`/`SKTABLE.FLI`/`PHTABLE.FLI`/`T5PQTBL.FLI`/
+    `T5TOTBL.FLI`, each really named `GWTABLE.FLI` in its own
+    platform-specific source folder) -- the gateway routing table
+    differs by VEHICLE PLATFORM, not just hardware revision.
+  - Regional radio tuner firmware: `RADIO.FLI`<-`VWRnsEur.fli`,
+    `NARRADIO.FLI`<-`VWRnsNar.fli`, `JAPRADIO.FLI`<-`VWRnsJap.fli`.
+  - **`IBOC.FLI`** <- `IBOC\\iboc.fli` -- a completely new subsystem:
+    In-Band On-Channel, the North American HD Radio standard. Real
+    build flag (`IBOC=0`/`FORCE_IBOC_UPDATE`) also confirmed in
+    `USER.CFG` above.
+  - **A parallel DVD-based nav-firmware line**: `FDVD.FLI`,
+    `FSE_DVD.FLI` (Seat DVD variant), sitting alongside the
+    already-exhaustively-studied HDD line (`FHDD6.FLI`/`FSE_HDD.FLI`/
+    `FSE_HDD6.FLI`) -- plus an OLDER HDD-firmware generation,
+    `FHDD4.FLI`. This whole project has only ever looked at the `FHDD6`
+    line; `FDVD`/`FHDD4` are unexamined siblings.
+  - **`CCC_NAVP.FRG`/`CCC_NAVP_BY.FRG`** <- `JNAV\\CCC_navp.frg`/
+    `JNAVBY\\CCC_navp.frg` -- a separate Java-navigation-specific
+    fragment (`JNAV`), distinct from `FHDD6.FLI`, not examined.
+  - **`SIRIUS.DB3`** <- `SIRIUS\\NA_SIRIUS.DB3`, plus `MDSIRIUS`/
+    `DELSIR` management scripts (`WA\\MD_SIR.WSH`/`WA\\DEL_SIR.WSH`) --
+    a **SiriusXM satellite radio** database, North-America-specific, a
+    subsystem never mentioned anywhere else in this project.
+  - `RVCLOW.WSH` -- a rear-view-camera-related script; ties directly to
+    the `cpdrVideoInSetSource ... RVC` video-input source found in the
+    `HOST` BSP disassembly, above (independent corroboration from a
+    completely different file).
+  - Real per-script purposes for several already-known `WA/*.WSH` names:
+    `RECOG`/`RECOG_N` <- `RECOG_ON.WSH`/`RECOG_OF.WSH` (toggle speech
+    recognition on/off), `FHDD`/`PARTHDD`/`FORMHDB1` (format/partition
+    the HDD), `DEL_ERRL` (delete the error log -- matches
+    `CDSTRUCTTMP.CFG`'s own `"080204-MaRu: Added DEL_ERRL for
+    Factory-CD"` changelog entry, below), `CTEST` <- `WA\\CTEST.OUT`
+    (confirms the already-fully-disassembled ELF diagnostic object's
+    real internal short-name, tying 2 independently-analyzed files
+    together).
+
+`CDSTRUCTTMP.CFG` (4,853 lines) is an EARLIER DRAFT of the final,
+25,955-line `CDSTRUCT.CFG` already characterized above -- and its
+leading changelog comment block is longer and more detailed than what
+survives in the final file: a real, dated (2006-2008), named-engineer
+engineering log (`AKls`/`m.`/`y.`/`MaRu`/`AKr`) that gives ACTUAL CONTEXT
+for bug IDs this project previously only knew as bare numbers:
+
+  - `TlaWtz#46435` -- `"070705-MaRu: Due to the Showstopper TlaWtz#46435
+    an additional Restart_System is entered in front of RADIO"` -- a
+    real, understood workaround, not just an ID.
+  - `TlaWtz#47169` -- `"070725-MaRu: Take out COD_BAP workaround because
+    of PR TlaWtz#47169"` -- this PR caused a workaround to be REMOVED.
+  - `"080213-MaRu: adapted for EUR SB (Skoda Superb) with GW Tbl from
+    SK and coding of SK"` -- direct, independent confirmation `SB` =
+    Skoda Superb (matches `PRJCTMAP.TXT`'s/`USER.CFG`'s own inference).
+  - `"080708-MaRu: Adaptation for VUC-SEAT_HDD"` and `"...Adaptation for
+    JNAV loading (JNAVMNT.WSH)"` -- ties the `VUCI` and `JNAV`
+    subsystems (both otherwise-unexamined, above) to real, dated
+    feature work.
+  - `"081024-AKr: New type BM"` -- confirms `BM` (a `PREDEFINITIONS`
+    flag in `USER.CFG`, above) is a real, distinct project/vehicle type,
+    introduced at a specific date, not a typo or leftover.
+  - A real `//ECUORDER` parameter comment, self-documented by its own
+    author: `0 1` = user input required (OK/CANCEL), `1 1` = no user
+    input -- a real, load-bearing flashing-flow control parameter,
+    directly explaining behavior already observed in `DLSCRIPT.TXT`/
+    `BLSCRIPT.CFG` above (screens that wait for a button vs. ones that
+    don't).
+
+`HISTORY.TXT`: confirmed genuinely empty, 0 bytes. Nothing to find --
+recorded here only so a future session doesn't re-open it expecting
+content.
+
+============================================================================
 `BLSCRIPT.CFG` -- CRACKED (a still-later session, user-asked "what is
 this"): the BOOTLOADER's own config, ONE STAGE EARLIER than
 `DLSCRIPT.TXT` below -- genuinely new, disc-root-level, not per-variant
@@ -199,8 +326,254 @@ selection register the factory flashing tool reads.
 
 `WA/*.WSH` files (9 total, e.g. `DEL_FOLD.WSH`/`DEL_LANG.WSH`/
 `FIXCOD.WSH`/`EURPQTO.WSH`) are referenced by `RUN_SHELL_SCRIPT` -- real
-shell scripts, not opened this session (out of scope; the `DLSCRIPT.TXT`
-grammar itself was the target).
+shell scripts. NOT opened in THIS pass (out of scope; the `DLSCRIPT.TXT`
+grammar itself was the target) -- see the dedicated section below, a
+LATER session opened and CRACKED every one of them.
+
+============================================================================
+`WA/*.WSH` -- CRACKED (a still-later session, user-asked "check the
+files here"): real VxWorks target-shell scripts, not a custom language --
+reveal the real on-unit `/tffs0/lib/` filesystem tree AND the real
+vehicle-coding bit definitions
+============================================================================
+This disc's `WA/` folder holds only 12 of the ~60+ files the master
+`INFO/INOUT.TXT` manifest (above) lists across all builds: `CTEST.OUT`
+(already fully disassembled, above), `CYCFLAG0.TXT`/`CYCFLAG1.TXT`,
+`DEL_FOLD.WSH`/`DEL_LANG.WSH`/`DEL_OUT.WSH`, `FIXCOD.WSH`, and 5
+REGION-CODING scripts (`EURPQTO.WSH`/`EURPQTOD.WSH`/`EURSEDAB.WSH`/
+`ESKHDDL.WSH`/`ESKHDDDL.WSH`) dated **March 2013** on disk -- 5 months
+AFTER every other file on this disc (Oct 2012) -- a later addition/patch
+to this specific repack, not part of the original Oct-2012 burn.
+
+**`.WSH` is literally VxWorks target-shell (WindShell) input, not a
+custom scripting format**: every cleanup script uses the real WindShell
+`sp xdelete, "<path>"` (spawn a task running `xdelete`) / `rmdir`
+syntax -- `sp` is the exact command this project's own HOST-BSP
+decompilation (above) already found in the shell's own built-in help
+text (`"sp adr,args... Spawn a task"`). `CYCFLAG0.TXT`/`CYCFLAG1.TXT`
+are each one line, `dlpSetCyclicFlag 0`/`dlpSetCyclicFlag 1` -- a real,
+directly-invoked diagnostic-loading-protocol function call.
+
+**`DEL_LANG.WSH`** deletes `/tffs0/data/speech/{uvo,synth,recog}` --
+matches, exactly, `INFO/INOUT.TXT`'s own `UVO_*.ZIP` / `LANG_*.FRG`
+(synth/TTS) / `REC_*.FRG` (recog) naming, above -- direct confirmation
+of the real on-unit path each of those 3 fragment families installs to.
+
+**`DEL_FOLD.WSH`** deletes `/tffs0/FLASH`, with a real German comment,
+`"30.04.2008 MaRu # Flash-Ordner wird gelöscht"` ("flash folder is
+being deleted") -- matches `INFO/CDSTRUCTTMP.CFG`'s own changelog entry
+for this exact file, word for word: `"080430-MaRu: The flash folder is
+deleted in ECU SWL and after every external ECU (Radio;MPEG;GW) (search:
+DEL_FOLD.WSH)"` (above) -- 2 independently-read files agreeing exactly.
+
+**`DEL_OUT.WSH`** (dated `06.07.2010`, author `RoNe` -- the SAME initials
+as this disc's own `USER.CFG` `<AUTHOR>` tag, above -- a real engineer
+active across at least 2010-2012) is the single richest file here: a
+real change-request ID, `"Delete out files acc. to CR 54634"` (a
+DIFFERENT internal tracker numbering style from the `TlaWtz#` bug IDs
+already known -- a 2nd real internal tracking system), followed by ~20
+real compiled-module paths under `/tffs0/lib/`, directly revealing the
+live filesystem layout of the `APPS` processor for the first time (this
+project previously only had file-internal debug strings, never a real
+deployed directory tree):
+
+  - `/tffs0/lib/mm/*.out` (multimedia): `mostgen.out`, `madMM.out`,
+    `WMADEC.out` (WMA decoder), `MpegAtaSwitcher.out` (ties the ATA/IDE
+    HDD driver found in the `HOST` BSP, above, directly to MPEG
+    playback), `mm_drives.out`, `dab.out`, `util.out`,
+    `servicebroker.out` (matches the `vdo::svc::dispatcher::Dispatcher`
+    command/event-dispatch pattern this project's own firmware
+    disassembly already found at the 25MB/30MB regions, above -- same
+    architecture, now named on the real filesystem), `micromedia.out`,
+    `mpeg4_celp_lib.out`/`mpeg4_celp_micromedia.out` (MPEG-4 CELP audio
+    codec), `micromedia_wma.out`, `recorder.out`, `msdcontrol.out`.
+  - `/tffs0/lib/pos/pos.out` -- the real positioning/GPS library.
+  - **`/tffs0/lib/arriba/navcore.out`** -- this is the first DIRECT
+    confirmation this whole project has had that `"Arriba"` (previously
+    only ever a bare string COUNT, 28x, README S2.1) is a real product/
+    codebase name and not just an incidental string -- its actual
+    compiled navigation-core module is `navcore.out`, living in a
+    directory named after it.
+  - `/tffs0/lib/kernel/libDelayImage.out`, `fileMgr.out`; a lone
+    `/tffs0/data/SysCfgConfig` (system config data, not a `.out` module).
+
+**`FIXCOD.WSH`** independently confirms and extends the same picture:
+`sp xdelete, "/tffs0/lib/Arriba/dbal.out"` -- `dbal.out` (this whole
+project's single most-studied subsystem) sits in the SAME `Arriba/`
+directory as `navcore.out` above (capitalization of `arriba` varies
+`DEL_OUT.WSH` vs `FIXCOD.WSH` -- real-world inconsistency, not 2
+different paths) -- direct, concrete proof `dbal` and `navcore` are
+sibling compiled modules of the same product line, not merely
+thematically related. Also references `/tffs0/data/fwdir/bundles/4` (a
+real firmware/data "bundle" directory, workaround for "wrong Bundle
+installations") and calls `IL_Flush` twice -- ties to the `InfoLog 1/2`
+named flash regions already found decompiling the `HOST` BSP, above (an
+"InfoLog Flush" function, real and invoked from userland scripts, not
+just a flash-region label).
+
+**The 5 region-coding scripts are real, human-readable VEHICLE CODING
+DEFINITIONS** -- each calls `SetCoding(0x400, <value>, <bit>, 1)`, a
+bit-indexed vehicle-options register at address `0x400`, with its own
+plain-English comment per call. Comparing all 5 files resolves the real
+bit map directly, no guessing:
+
+    manufacturer field   0x02 = VW            0x05 = Skoda
+    bit 2                HDD active           (0/1)
+    bit 5                Tuner "RUDI" active   (a real internal tuner
+                                                 codename, not previously
+                                                 seen anywhere else)
+    bit 6                DAB active            0 in EURPQTO/EURPQTOD,
+                                                1 in EURSEDAB/ESKHDDL/
+                                                ESKHDDDL
+    bit 7                SDARS active          0 for EUR everywhere --
+                                                SDARS is Sirius XM's own
+                                                formal name, ties
+                                                directly to `SIRIUS.DB3`
+                                                (`INOUT.TXT`, above,
+                                                NAR-market-only)
+    bit 8                MPEG active           (0/1)
+    bits 9-15             unused on this build (all 0 across every file)
+
+Plus real register-level commands, identical across all 5 files:
+`SetRegData(0xa91,0,0,2,0x8a)` ("Delete Presets"), `SetRegDataHex(0x21,
+"01",0x0,0x1,0x1)` ("Testmode: Active" -- register 0x21 is a real
+factory-testmode toggle), `SetRegDataHex(0x0B3A,"012C",0x0,0x2,0x89)`
+("Speed limit DVD/TV: 300km/h" -- `0x012C` = 300 decimal -- a real,
+concrete confirmation of the well-known automotive "no video while
+driving" lockout feature, configured here to a factory/test threshold
+rather than a normal low roadworthy one). `ESKHDDDL.WSH` (Skoda) adds
+one more, not present in the VW-branded scripts: `SetRegDataHex(0x0a0a,
+"01",0x0,0x1,0x1)`, commented `"Big VW Splashscreen in NAND: Not
+Active"` -- register `0x0a0a` is a real per-brand splash-screen
+selector, ties directly to the `SplashScr` named flash region already
+found in the `HOST` BSP disassembly, above.
+
+============================================================================
+`WA/CTEST.OUT` -- the real vehicle-coding/register-data functions the
+`.WSH` scripts above call, DISASSEMBLED end to end (a still-later
+session, user-asked to chase this specific lead, then "what can we
+tackle next" -> finish the remaining functions) -- a complete,
+validated picture of 2 distinct real UDS-style diagnostic write paths
+============================================================================
+`CTEST.OUT`'s own symbol table (already known to this module -- see the
+dedicated section below for its container/ELF details) names the exact
+functions `SetCoding`/`SetRegData`/`SetRegDataHex`/`SetRegDataStr`/
+`ReadRegData`/`DeleteRegData`/`SaveRegData` with real `.text` offsets.
+All 7 disassembled with capstone, relocations resolved via `.rela.text`
+(`R_PPC_ADDR16_HI`/`_LO` pairs target the instruction's own 2-byte
+IMMEDIATE FIELD, i.e. `r_offset & ~3` gives the owning instruction --
+easy to get wrong; a first attempt keyed lookups on the raw `r_offset`
+and silently found nothing).
+
+**`SetCoding(reg, value, offset, width)` -- real UDS-style "long
+coding" (Kodierung) byte-array read/patch/write**, fully traced
+instruction by instruction:
+
+1. The logical register id (`0x400` in every `.WSH` call seen) is
+   transformed into the real ECU diagnostic identifier by adding
+   `0x3000` -- `clrlwi r9,r0,0x10; addi r0,r9,0x3000` -- giving
+   `0x400 -> 0x3400`. Only taken when a flag bit in the input register
+   id itself (PPC-bit 15) is clear, the normal case for every real call
+   site found.
+2. `ReadEcuData(status_byte, 1, 0x3400, &local_buffer, 0xff, 0)` reads
+   the current coding byte array (a real external call, resolved via
+   relocation, not guessed).
+3. `width` computes a byte-shift amount (`(4-width)*8`) and `value` is
+   shifted into the correct byte position of a 4-byte word, then
+   `memcpy(&buffer[offset], &shifted_value, width)` patches EXACTLY
+   `width` bytes at byte-offset `offset` -- confirming the `.WSH`
+   scripts' 3rd/4th arguments are a byte OFFSET and BYTE WIDTH into a
+   coding array, not a bit index (an earlier, less precise
+   characterization from reading the `.WSH` comments alone).
+4. `WriteEcuData(status_byte, 1, 0x3400, &buffer, length, 0)` writes
+   the patched array back, using the length `ReadEcuData` itself
+   returned.
+
+**`SetRegData`/`SetRegDataHex`/`SetRegDataStr` -- a separate,
+security-gated register channel via a real 4-slot function-pointer
+table, `pReg`**: a global object (`pReg`), lazily registered once via
+`svcb_addServiceListener(sServiceReg)` on first use. Requires a cached
+2-byte global, `accKey` (see the dedicated correction below), fetched
+once through `pReg[0x10]` before any write. `pReg` itself turns out to
+be a real service vtable, mapped exactly by tracing all 6 RegData
+functions against each other:
+
+| `pReg` offset | Role | Confirmed by |
+|---|---|---|
+| `0x00` | read | `ReadRegData`, `SetRegData`, `SetRegDataHex`, `SetRegDataStr` (all read-modify-write) |
+| `0x04` | write | `SetRegData`, `SetRegDataHex`, `SetRegDataStr` |
+| `0x14` | delete | `DeleteRegData` |
+| `0x1c` | save | `SaveRegData` |
+
+`SetRegData`/`SetRegDataHex` share `SetCoding`'s exact read -> shift-
+value-into-byte-position -> `memcpy` -> write-back shape, just through
+`pReg[0x00]`/`pReg[0x04]` instead of `ReadEcuData`/`WriteEcuData`
+directly, and return a real status byte. `SetRegDataHex` is the
+identical routine, just parsing the value from a hex string (`"01"`)
+first instead of taking a raw int -- confirmed structurally identical
+to `SetRegData` past that point, matching its real call sites
+(`SetRegDataHex(0x21,"01",...)` etc., above).
+
+**`SetRegDataStr(reg, str_ptr, ?, width)` -- a 2nd, distinct write
+style, genuinely new**: instead of a fixed-width integer shifted into a
+byte position, this calls `strlen(str_ptr)`, bounds-checks the result
+against `0xfe`, then `memcpy`s the STRING content directly into the
+read buffer at the right offset -- a variable-length string write, not
+`SetCoding`'s single/multi-byte integer write. Same
+read-via-`pReg[0x00]` / write-via-`pReg[0x04]` outer shape otherwise.
+
+**`ReadRegData(reg, ?)`**: the pure read half -- same `pReg`/`accKey`
+boilerplate, calls `pReg[0x00]` with `(reg, &buffer, 0xff, accKey,
+param2)`, returns the byte count `pReg[0x00]` itself reports, no patch/
+write-back. Confirms field `0x00` = read independently of the
+`SetRegData` family.
+
+**`DeleteRegData(reg, ?)` and `SaveRegData(a, b)` -- a real access-
+control ASYMMETRY, confirmed structurally**: unlike `Read`/`Set*`
+(which silently call `pReg[0x10]` to acquire `accKey` on first use if
+it's still 0), `DeleteRegData` and `SaveRegData` do NOT auto-acquire
+it -- if `accKey` is still 0 when either is called, they immediately
+`printf` an error string and return early, requiring the caller to have
+already authenticated via a prior `Read`/`Set*` call. `DeleteRegData`
+calls `pReg[0x14](reg, param2, accKey)` -> a status byte.
+`SaveRegData` calls `pReg[0x1c]` with a real 9-argument signature
+(`param1, 2, 0, 0, 0, 0, 0, accKey, param2` -- the literal `2` as arg2
+is plausibly a "record type"/"save mode" constant; `param2` is spilled
+to the caller's own stack frame, beyond the 8 GPR argument registers)
+-- a genuinely more complex call than any other function in this
+family, and one no `.WSH` script on this disc actually invokes.
+
+**A real correction, made directly to the user rather than left
+standing**: `accKey`'s NAME suggested "UDS SecurityAccess key" (service
+`0x27`), and that label was used when first describing this to the
+user -- WRONG, caught by 2 pieces of direct evidence. First, `accKey`
+is a plain 2-byte `.data` global (`size=2` in `CTEST.OUT`'s own symbol
+table) -- too small for a real crypto seed-key, and unable to hold
+every possible 5-digit decimal VCDS-style code the user described from
+real experience with this exact vehicle/tool (values 65536-99999
+wouldn't fit in a `uint16`). Second, and decisively, `FHDD6.FLI`
+itself contains 2 real debug format strings using the exact same name
+in a completely unrelated, non-automotive context: `"registry srv %s
+avail., accessKey: 0x%x"` and `"SVDOID %x sizeof(sint32_t) %x result %x
+suppData.accesskey %x MASK_EVT %x"` -- both about a SERVICE REGISTERING
+ITSELF with this codebase's own internal message-broker/service-
+registry framework (the same `Cfc*`/`svcb_*` framework
+[Firmware Reversing](Firmware-Reversing) already names), printed as a
+raw hex HANDLE, not a diagnostic PIN. A 2nd candidate string,
+`checkSecurityAccess`, was ALSO checked directly against its surrounding
+bytes and is unrelated: it sits inside `java/util/Vector`'s own
+standard method list (`insertElementAt`/`removeElement`/
+`ensureCapacityHelper`/`VectorEnumerator`) -- Java's own standard
+`SecurityManager.checkSecurityAccess()` platform API, nothing
+automotive about it, a coincidental name match only. **Net conclusion**:
+the real VCDS-style vehicle security-access/Login PIN validation logic
+was NOT found anywhere in `FHDD6.FLI` -- searched directly and came up
+empty on both plausible leads -- and is not believed to live there; it
+more plausibly lives lower in the diagnostic stack (a native PowerPC
+region not reachable with current tooling, or even the CAN gateway
+chip) or is delegated to an external tester entirely. `accKey` is
+CTEST.OUT's own internal service-registry handle, unrelated to the
+vehicle's actual SecurityAccess code.
 
 ============================================================================
 `FHDD6.FLI` -- the disc's own copy of README S2's already-examined
