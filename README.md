@@ -7689,17 +7689,36 @@ still launches cleanly with no startup errors.
 
 Investigated what's actually recoverable from `FHDD6.FLI`'s own Java UI
 code: 123 real embedded ZIP/JAR local-file headers exist (real `vdo.*`
-`.class` bytecode packages, e.g. `vdo/rio/impl/fwk/BundleAdmin$2.class`
-— confirmed via a real, parseable Central Directory, 156 entries), and
-3 "PNG"/13 "GIF"-tagged byte regions — but NONE of these panned out as
-directly usable "menu look" assets: the JAR entries are compiled
-bytecode, not images or layout data; the 3 PNG hits are confirmed false
-positives (no valid `IEND` chunk); and while the 13 GIF-tagged regions
-have a genuinely real GIF87a/89a header AND a real 256-color gradient
-palette (11 of them independently agree on `800x480` — a 2nd,
-independent confirmation of the real resolution below), the byte
-immediately after the palette (`0xb6`) is not a valid GIF block
-marker — this is some proprietary format that borrows GIF's header/
+`.class` bytecode packages, e.g. `vdo/rio/impl/fwk/BundleAdmin$2.class`),
+and 3 "PNG"/13 "GIF"-tagged byte regions — but NONE of these panned out
+as directly usable "menu look" assets.
+
+**A real overclaim caught and corrected, user-pushed ("why not")**: this
+entry originally said the JAR's own End-Of-Central-Directory record
+gave "156 entries, confirmed via a real, parseable Central Directory" —
+WRONG, trusted too quickly. Re-walking the actual central directory
+records sequentially (not just the EOCD's own summary fields) found
+only 1 entry is genuinely self-consistent (its declared filename length
+lands exactly on the NEXT real `PK\x01\x02` marker); every other
+"entry" decoded to nonsense field values. Cross-checked with a stricter
+test — every real `PK\x01\x02` marker actually present in a 30,000-byte
+window around the EOCD (only 4 total, nowhere near 156) — confirming
+this archive is fragmentary/corrupted, not a real, complete, extractable
+JAR. The lesson: an EOCD record's own summary fields aren't proof by
+themselves; only a byte-exact sequential walk (or Python's own
+`zipfile`, which also correctly refuses this data) is real evidence.
+Regardless, even a fully intact JAR here would only yield MORE compiled
+bytecode (confirmed: real entries found are all `.class` files) — Java
+bytecode doesn't contain image/layout data by itself, so this path was
+never going to reach real visual assets even if perfectly reassembled.
+
+The 3 PNG hits are confirmed false positives (no valid `IEND` chunk);
+and while the 13 GIF-tagged regions have a genuinely real GIF87a/89a
+header AND a real 256-color gradient palette (11 of them independently
+agree on `800x480` — a 2nd, independent confirmation of the real
+resolution below), the byte immediately after the palette (`0xb6`) is
+not a valid GIF block marker — this is some proprietary format that
+borrows GIF's header/
 palette convention without the real image-block encoding, and PIL
 correctly refuses to decode it (verified: PIL's own GIF codec works
 fine on a synthetic test file, ruling out an environment issue). Not
@@ -7752,6 +7771,44 @@ simply doesn't contain the resolution-revealing debug-logging string
 in any of the formats tried (not a bug in the detection logic; a real,
 honest per-build limitation) — the app shows a clear message and
 otherwise behaves exactly as before, rather than crashing or guessing.
+
+**A real, still-unresolved lead followed further, same "why not" pushback**:
+this project's own `HOST` BSP work (a prior session, see "the real
+theft-protection PIN verification mechanism" section above and the
+BSP's own real "SplashScr" NOR flash region name) already found each
+`H_*.FRG`'s per-variant "remainder" region (everything after the shared
+497,964-byte BSP stream) but never decoded it — just noted it "likely" a
+splash-screen bitmap. Revisited directly: `H_PQEE.FRG`'s remainder is
+772,577 bytes, and `800×480×2` bytes (RGB555, this session's own newly-
+confirmed real resolution) = 768,000 — an exact-enough match to the
+leftover 4,577 bytes (matching the real VW part number/`"RNS-MID"`/
+`"5238"` text already found at the very end) to be a genuinely promising
+lead, not a coincidence chased blindly.
+
+**Tried directly, real technique, inconclusive result — NOT a clean
+decode, documented honestly rather than forced**: rendered the first
+768,000 bytes as raw 800×480 BGR555 (the same convention already
+validated for `SIRIUS.DB3`'s own `.DDB` channel-art images) — a clean,
+regularly-repeating textured/banded image, NOT random noise, but not a
+recognizable picture either. Used FFT autocorrelation to find the
+data's own real periodicity rather than guess widths blindly: a genuine
+cluster of peaks at 698-742 bytes/2 (~700-742px), centered near
+718-720px (720 being a real, standard video width — plausible given
+this platform's own DVD/TV-tuner code, already documented elsewhere in
+this project) — but the peak is a BROAD plateau, not one sharp dominant
+value the way a true raw bitmap's row width would show. Re-rendered at
+the detected width (720px): still banded/textured, not clean. Checked
+for zlib compression directly (the same technique that cracked the
+BSP's own zlib stream in this exact file family) — zero real zlib
+headers found anywhere in the remainder, ruling that out too.
+**Honest conclusion**: this is very likely still real image/graphics
+data (the size match and non-random structure are real signals, not
+imagination), but its exact encoding — a non-2-bytes/pixel format, a
+different (possibly proprietary/compressed) scheme entirely, or extra
+per-row metadata this session didn't account for — was not identified.
+Recorded here, with every technique already tried spelled out, so a
+future session starts from "these 3 approaches didn't work" instead of
+repeating them.
 
 ### Two more real bugs found while building/testing v2 (beyond the v1 bugs below)
 
