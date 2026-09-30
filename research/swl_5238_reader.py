@@ -4012,6 +4012,97 @@ significantly revised at some point between build `2680` (2009-11-03)
 and `3810` (2010-11-26) -- not decoded at the field level (no attempt
 made to determine what specifically changed within the table, e.g.
 new routing entries vs. corrected ones).
+
+============================================================================
+2 SOLVED items, in direct response to "can we solve any uncracked
+thing?" -- (1) `PQTABLE.FLI`/`SKTABLE.FLI`'s real header IS fully
+decoded: real vendor identified (`K2L GmbH`), real version field found
+and its exact encoding cracked, refining the finding above into a
+precise 3-stage version history. (2) The `DESTINATION_LIST` BAP
+lat/lon bytes are PROVEN un-decodable from this source -- a genuine
+negative result, not a decode, correcting an earlier note that left
+this open as if it might still be solvable.
+============================================================================
+**(1) SOLVED: `PQTABLE.FLI`/`SKTABLE.FLI`'s header format.** A plain
+hex dump of `SKTABLE.FLI`'s first 128 bytes (any build) shows real,
+readable embedded text starting around offset 0x22: **`K2L GmbHVer.
+1.43<hex>.<hex>.<hex>.<hex>       01.43...`** -- `K2L GmbH` is a real,
+identifiable third-party company (a real automotive CAN/LIN/MOST bus
+tooling vendor) that evidently produced the real tool used to generate
+these gateway routing tables. Confirmed this is NOT a coincidental
+string match by checking it's present, in the same shape, in every
+build's `SKTABLE.FLI` and in `PQTABLE.FLI` too (the main/EU routing
+table -- same file family, same `AA55 AA55` magic already seen in
+`FHDD.FLI`'s own header above, now confirmed as a real, shared
+container-format signature used across at least 3 different real file
+types on this platform).
+
+**The version field's exact encoding is now fully cracked**: the
+4 hex-pair groups printed in that embedded string (e.g. `A5.2A.04.00`)
+are literally the raw bytes at header offset **`0x18-0x1B`**, formatted
+as dotted hex -- verified directly: `SKTABLE.FLI` header bytes
+`a5 2a 04 00` at `0x18` <-> embedded string `"A5.2A.04.00"`, byte for
+byte, across every build checked. This is a real, simple, now fully
+understood versioning convention: a 4-byte binary version tucked in
+the file header, ALSO rendered as human-readable dotted-hex text a few
+bytes later in the same header, apparently for humans reading a raw
+disc/flash dump without tooling.
+
+**Using this decode, refines the `SKTABLE.FLI` "changed sometime
+between `2680` and `3810`" finding above into an exact 3-stage real
+version history** (checked `900`, `1300`, `2680`, `3810`, `5230`,
+`6276_original_update`):
+```
+SKTABLE.FLI:  v A5.2A.02.00 (900, 2008-05-29)
+           -> v A5.2A.03.00 (1300 2010-07-02 AND 2680 2009-11-03 -- both
+                              same version despite 2680 predating 1300
+                              chronologically; VwSwIndex order isn't
+                              chronological, as already established
+                              elsewhere in this file)
+           -> v A5.2A.04.00 (3810 2010-11-26 onward, STABLE through
+                              6276_original_update, 2014-03-20 -- no
+                              further real content change in the last
+                              ~3.5 years of this collection)
+```
+**`PQTABLE.FLI` carries the SAME header format but its own, INDEPENDENT
+version history** (first byte `44` vs. `SKTABLE.FLI`'s `A5` --
+plausibly a real per-table-type identifier byte, not decoded further):
+```
+PQTABLE.FLI:  v 44.2A.03.00 (900, 2008-05-29)
+           -> v 44.2A.05.00 (1300, 2010-07-02)
+           -> v 44.2A.09.00 (3810 onward, STABLE through
+                              6276_original_update)
+```
+**PQTABLE.FLI revised MORE times than SKTABLE.FLI over the same
+period** (03->05->09, i.e. at least 2 intermediate revisions not
+represented in this specific sample of builds, vs. SKTABLE's clean
+02->03->04) -- consistent with PQTABLE (presumably the main/most-used
+EU routing table) receiving more frequent real updates than the
+Skoda-specific variant. Neither table's real per-entry ROUTING content
+is decoded at the field level here -- this closes the "is this table's
+header/versioning understood" question, not "what does every byte of
+routing data mean."
+
+**(2) SOLVED (as a negative result): the `DESTINATION_LIST` lat/lon
+bytes from the `rns510-online-dest-master` section above CANNOT be
+decoded to real coordinates from that source.** Re-examined
+`bap_stack.c` directly: the ACTIVE "Pacanow" example (a real town in
+Poland) and the COMMENTED-OUT "Miekinia" example (a real, different,
+geographically distant Polish town -- these are genuinely different
+places, not near each other) use **byte-for-byte IDENTICAL coordinate
+fields** (`70 b8 0c 03 ac 70 ff 00`), verified directly in Python.
+Two different real places cannot share one real coordinate pair --
+this proves the bytes are placeholder/test data the tool's author
+reused across fake examples, not real geocoded values for either
+town. **Corrects the earlier note** ("not independently decoded
+further here... recorded as a real, ready-made worked example for a
+future session") which left this looking like an open decoding
+opportunity -- it is not; this specific source cannot answer that
+question, and a future session should not spend time trying to fit a
+fixed-point scale to these particular bytes. The rest of that worked
+example (the real field layout: length-prefixed name/street/city/
+country/postal strings, a 2-byte icon/flag field) remains valid and
+useful; only the coordinate SUB-field is now known to be fake data.
 """
 
 import re
