@@ -3994,6 +3994,24 @@ outliers -- `outlier_sweep.py` (scratchpad) already computes hashes in
 the underlying tree-hash helper used elsewhere in this file; the
 corpus-wide version only used size for speed. Left as a concrete,
 ready-to-run follow-up.
+
+**The hash-based follow-up WAS run** (`outlier_sweep_hash.py`,
+scratchpad -- content-hashes every file <=20,000 bytes across all
+builds, same minority-outlier grouping). Confirms every size-based
+finding above and adds exactly 1 new one: **`VUCI/B101/RNSMIDEC/PROG/
+SKTABLE.FLI`** (the Skoda gateway routing table -- same real file
+family as `PQTABLE.FLI`, both 8,192 bytes, both flashed via
+`LOAD_ECU_BLOCK` per the `5274` section above) is SAME SIZE but
+DIFFERENT CONTENT in `900`/`1020_1022`/`1024`/`1300`/`1500`/`2680`
+vs. every build from `3810` onward. Direct byte diff (`900` vs.
+`3810`): **2,764 of 8,192 bytes differ (33.7%)** -- a genuinely
+substantial content change, not a trivial stamp/CRC tweak like the
+19-byte `6276` `.FRG` case found earlier in this file. Real, concrete
+evidence the gateway's Skoda routing-table DATA itself was
+significantly revised at some point between build `2680` (2009-11-03)
+and `3810` (2010-11-26) -- not decoded at the field level (no attempt
+made to determine what specifically changed within the table, e.g.
+new routing entries vs. corrected ones).
 """
 
 import re
