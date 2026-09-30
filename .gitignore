@@ -1,15 +1,5 @@
-CD_8555
-CD_8555.ISO
-CD_8555.MDS
-RNS510_5238_MOD_C3_C4.iso
-RNS510_5238_MOD_C3_C4/
-RNS510_5274_MOD_C6_C12.iso
-RNS510_5274_MOD_C6_C12/
-RNS510_6276_MOD_C14.iso
-RNS510_6276_MOD_C14/
+BASE/
 5238_ALL
-maps-tool 2.0.2/
-rns_code_finders/
 readme.txt
 version.txt
 __pycache__/

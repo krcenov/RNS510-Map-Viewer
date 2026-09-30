@@ -2141,6 +2141,234 @@ container-format notes) followed by a standard 40-byte
 `Elf32_Shdr`/16-byte `Elf32_Sym` walk -- both straightforward since,
 unlike `dbal/*.OUT`, this file's `e_shoff` is directly trustworthy.
 Disassembly: `capstone.Cs(capstone.CS_ARCH_PPC, capstone.CS_MODE_BIG_ENDIAN | capstone.CS_MODE_32)`.
+
+============================================================================
+3 NEW discs -- the user reorganized all extracted firmware/maps under a
+new `BASE/` folder and added 3 real, previously-unseen SWL discs to it:
+`RNS510_4366`, `US_RNS-510_SW1140`, `VIM_Berto89`. The first 2 are this
+project's FIRST-EVER North America (`C_NAR`) firmware, opening up
+several subsystems only ever known by reference until now.
+============================================================================
+All 3 confirmed real via the same `Version.txt`/`BlScript.cfg` format
+already cracked above -- no new container format, same disc family.
+
+**`US_RNS-510_SW1140`**: `#Steckbrief: C_NAR_9.442_t950 C3/C4C/C6`,
+`VwSwIndex 1140/1142`, dated 2011-04-12, author `RoNe` (the same
+engineer already known from the EU disc's own `USER.CFG`). Real VW part
+numbers `3C0035684C/7L6035684D/3C0035684D/7L6035684E` -- a completely
+different prefix series from the EU discs' `1T00.../3T00...` (`3C` =
+Passat B6/CC NAR, `7L6` = Touareg NAR, by real VW part-number
+convention).
+
+**`RNS510_4366`**: `#Steckbrief: C_NAR_18.366_t1 C10/C12`, `VwSwIndex
+4366`, dated 2012-11-15, author `MaGo` -- a NEW engineer initial, not
+among the ones already known from `CDSTRUCTTMP.CFG`'s changelog
+(`AKls`/`m.`/`y.`/`MaRu`/`AKr`/`RoNe`). A later-generation NAR build
+than `SW1140` (Steckbrief `18.366` vs `9.442`), same Continental Wetzlar
+facility.
+
+**`VIM_Berto89`**: a real but much OLDER and much SMALLER disc --
+`#Steckbrief: C_EU_9.242_t560`, `VwSwIndex 1300/1302/1304`, dated
+2010-04-27, the SAME `"This is an unofficial SWL CD by josi"` community-
+repack disclaimer already known from the main `5238_ALL` disc, now
+confirmed to be a real, recurring repacker across multiple disc
+generations, not a one-off. Only 159KB total, missing every top-level
+ECU folder (`APPS`/`HOST`/`HDD`/etc) -- just `BlScript.cfg`/`CRC.16`/
+`Dir.inf`/`EcuOrder.txt`/`Version.txt` + a `WA/` folder holding
+`CTEST.OUT` (dated 2006-03-28 -- an OLDER build than every other
+`CTEST.OUT` copy examined so far, a real lead for a future diff) and
+**`VIM.WSH`** (what "VIM" in the folder name actually refers to): a
+minimal, GENERIC coding script -- only the universal register-level
+calls (`SetRegDataHex(0x21,"01",...)` testmode,
+`SetRegDataHex(0x0B3A,"012C",...)` speed-limit), zero `SetCoding` calls
+-- confirming these 2 register-level settings really are
+vehicle/manufacturer-independent baseline setup, cleanly separate from
+the per-variant `SetCoding` calls every other region script carries.
+
+**Both NAR discs ship `WA/NARRADIO.FLI`/`NARADIO6.FLI` directly**
+(previously only known by path reference in the EU disc's own
+`INFO/INOUT.TXT` manifest) plus real NAR region-coding scripts
+(`NARPQTO.WSH`, `NARBY.WSH` on `RNS510_4366`) -- and `RNS510_4366`
+additionally ships **`SIRIUS.DB3`** (its own dedicated section below),
+a real `CH_ARTS.WSH`/`DEL_CA.WSH`/`DEL_CHAR.WSH` trio (resolving the
+previously-unidentified "CH_ARTS" name from `INOUT.TXT` -- "Channel
+ARTS", i.e. Sirius channel-art management, confirmed by the sibling
+`CHARTS/` folder below) and `DEL_SIR.WSH`/`MD_SIR.WSH` (also previously
+only known by name).
+
+**The NAR coding scripts REFINE, not just extend, the coding byte
+map**: `SetCoding(0x400, 2, 7, 1)` -- commented `"SDARS/Sirius: Active
+for NAR"` -- uses value **`2`**, not the plain boolean `1` every other
+flag in this byte array uses. Byte-offset 7 is a small ENUM, not a
+single bit -- plausibly XM=1/Sirius=2 (the 2 satellite-radio providers
+that merged in 2008; RNS510 NAR units shipped with either depending on
+model year/trim), not independently confirmed further. Also: both
+`NARPQTO.WSH`/`NARBY.WSH` set `"Testmode: NOT active"` (`SetRegDataHex
+(0x21,"00",...)`, value `"00"`) -- the FIRST time this project has seen
+that register explicitly OFF; every EU region script found earlier
+left it `"01"`/active. Real, concrete evidence these NAR scripts are
+production-configuration coding, not factory-sample coding like the EU
+ones -- and independent confirmation register `0x21` really is a
+genuine binary active/inactive toggle (both states now directly
+observed).
+
+============================================================================
+`RNS510_4366\SIRIUS\SIRIUS.DB3` -- OPENED: a real, substantial Sirius
+TravelLink content database, same schema family as the map disc's own
+`POI.DB3` -- its coordinate decoder transfers UNMODIFIED
+============================================================================
+A real, standard SQLite database (opens directly, no proprietary
+container -- exactly like `POI.DB3`). 62 tables. The 2 largest --
+**`Poi_BaseAttributes`/`Poi_AddressAttributes`/`Poi_SiriusAttributes`,
+all 158,088 rows each** -- share `POi_BaseAttributes`'s exact column
+shape from the map disc's own `POI.DB3`
+(`Poi_ID`/`PoiPartition_ID`/`Coordinate`/`Name`), plus a
+Sirius-specific sibling table
+(`SiriusPoiId`/`Poi_ID`/`Version`/`CategoryId`/`Constraint_A`/
+`Constraint_B`). Real, immediately recognizable content: `"BLOXHAMS
+SHELL"`, `"CHEVRON"`, `"UNION 76"`, `"FORTUNA CHEVRON"` -- real US gas-
+station brand POIs.
+
+**`decode_coordinate()` (`research/poi_db_reader.py`, already cracked
+against the map disc's `POI.DB3`) applies to this file completely
+UNCHANGED** -- no adaptation needed, tested directly against 15 real
+rows: every one decodes to `lon~-124, lat~40-41`, exactly Humboldt
+County/Eureka, Northern California (the real US-101 corridor) --
+immediately plausible for real "Union 76"/"Chevron"/"Fortuna Chevron"
+station names, not a coincidental range match.
+
+**This is the real, concrete home of `USER.CFG`'s own `TRAVELLINK`
+build flag** (found weeks earlier, disabled on the EU disc): real
+Sirius TravelLink content-service tables exist in the schema --
+`FuelPrice`/`FuelBrand`/`FuelRegions`/`FuelType` (fuel prices),
+`WeatherMessages`/`StormAttributes`/`StormWatchBoxes`/`SkiMessages`
+(weather/ski conditions), `Movies` (showtimes), `Sports`/`Teams`/
+`TeamStatus`/`HeadToHeadSportTable`/`RankedSportEvent` (live sports
+scores), `Headlines` (news) -- all real, named, typed tables, though
+EMPTY on this specific disc (0 rows each; only the POI/fuel-station
+layer is populated here, consistent with this being a factory SWL
+sample rather than a live subscriber unit's own downloaded content).
+`DatabaseAttribute` confirms real per-subsystem schema version stamps
+(`schema/core=001.0001`, `schema/poi=003.0000`, `schema/sirius=
+005.0000`). Not yet explored: `.DDB` channel-art images
+(`CHARTS/CHANNELARTSCACHE/128X88/*.DDB`, hundreds of files) and whether
+`IBOC.FLI` exists on either NAR disc -- both pending, this session.
+
+============================================================================
+`RNS510_4366\CHARTS\CHANNELARTSCACHE\128X88\*.DDB` -- CRACKED completely
+(same session, immediate follow-up): a self-documenting header, a real
+2-plane color+mask bitmap format, real Sirius channel-art logos
+rendered and visually confirmed
+============================================================================
+156 files, one per Sirius channel, in this specific `128X88/` folder
+(the folder name IS the pixel dimensions, confirmed exactly below --
+plausibly sibling folders at other resolutions exist elsewhere,
+not checked). The header is almost entirely self-documenting plain
+ASCII, no guessing needed for most of it:
+
+```
+DDBDDB          -- 6-byte magic
+\x01            -- version = 1
+B               -- 1 byte, role not decoded
+__RGB555\x00    -- 8-byte pixel-format tag, NUL-terminated ("__" padding)
+\x80\x00        -- uint16 LE width  = 128
+\x58\x00        -- uint16 LE height = 88 (0x58 -- byte 19 alone happens
+                   to print as the letter 'X', pure coincidence)
+\x41            -- 1 byte, role not decoded
+<zlib stream>   -- starts immediately after, real `78 da` header
+```
+
+Confirmed on `1.DDB`: width/height fields read back exactly `128`/`88`,
+matching the folder name exactly -- not a coincidence, a real
+cross-check. The zlib stream's own decompressed size is **always
+exactly `width*height*3`** (33,792 bytes for 128x88) -- NOT
+`width*height*2` as a naive reading of the `RGB555` tag would predict
+(2 bytes/pixel). Tested and refuted a first hypothesis (plain
+interleaved 3-byte-per-pixel RGB truecolor, ignoring the format tag
+entirely) by rendering it directly: pure scrambled noise, not a real
+image.
+
+**The real layout is 2 SEPARATE planes, concatenated, not
+interleaved**: a `width*height*2`-byte RGB555 color plane (real 16-bit
+little-endian RGB555 pixels, confirmed -- see below) immediately
+followed by a `width*height*1`-byte plain 8-bit alpha/mask plane.
+`22,528 + 11,264 = 33,792`, exact. Rendering the mask plane alone as a
+grayscale image on `1.DDB` shows a clean, coherent silhouette shape
+(not noise) -- confirms the plane-split hypothesis before even getting
+the color channel order right.
+
+**Channel order is BGR555, not RGB555 despite the header's own literal
+tag** -- confirmed by rendering both orderings directly: `RGB555`
+(interpreting the 16-bit value as `RRRRR GGGGG BBBBB` from the top bit
+down) produces wrong, inverted-looking colors; `BGR555` (`BBBBB GGGGG
+RRRRR`) produces correct, natural colors. **Visually confirmed on 3
+real files, real Sirius channel names, fully legible with correct
+transparency**: `1.DDB` = "40s on 4" (a real 1940s-music Sirius
+channel) with an airplane-silhouette mask; `50.DDB` = "WATERCOLORS"
+(clean cyan/magenta text on transparent background); `100.DDB` =
+"SIRIUS XM Patriot" with an eagle icon. This is the actual Sirius
+channel-logo artwork this project can now decode from any `.DDB` file
+on this disc.
+
+**The filename IS the real key, confirmed exactly against
+`SIRIUS.DB3`'s own `Sources` table**: `<N>.DDB` <-> `Sources.SourceId =
+N`. `1.DDB` = "40s on 4" matches `Sources` row `(1, '40s on 4')`
+exactly; `50.DDB`'s "WATERCOLORS" matches row `(50, 'Watrclrs')`
+(abbreviated in the DB, same channel); `100.DDB`'s "SIRIUS XM Patriot"
+matches row `(100, 'Patriot')` -- 3 for 3, no ambiguity. `Sources` has
+157 rows to this folder's 156 files (off by one -- plausibly
+`SourceId=0`, `"Preview"`, has no dedicated channel-art file; not
+chased further). This `CHARTS/CHANNELARTSCACHE/` folder is a live,
+per-channel logo CACHE keyed directly by `SourceId` -- separate from
+`SIRIUS.DB3`'s own baked-in `Image_BaseAttributes`/
+`ImageBlob_BaseAttributes` tables (which, by the map disc's own already-
+cracked `POI.DB3` icon-chain precedent, most likely hold generic
+category icons, not per-channel logos -- not independently verified
+this session).
+
+============================================================================
+`IBOC.FLI` -- CHECKED directly on both real North America discs, a
+clean, structural NEGATIVE result across ALL 5 real discs this project
+now has (3 EU + 2 NAR)
+============================================================================
+Neither `RNS510_4366` nor `US_RNS-510_SW1140` (the first 2 real NAR
+discs this project has ever had -- the single most plausible place
+In-Band On-Channel/HD Radio firmware would actually ship) contains an
+`IBOC.FLI` file or an `IBOC` folder anywhere -- checked with a
+recursive filename search, not just the top level. Both discs' own
+`USER.CFG`/`user.cfg` confirm exactly why: `IBOC = 0` /
+`FORCE_IBOC_UPDATE = 0`, the SAME disabled state already found on the
+EU disc. Both discs' real `ECUORDER.TXT`/`EcuOrder.txt` flash sequences
+(`SWL -> HOST -> APPS -> HDD -> RADIO -> [MPEG, NAR-disc-only] -> VUCI`)
+confirm this isn't an oversight -- `IBOC` genuinely never appears as a
+flashed target, while `RADIO`/`VUCI`/etc do. `IBOC` IS a real, known
+build option in the shared build-configuration system on every disc
+checked (`CDSTRUCT.CFG`/`USER.CFG` all reference it) -- it's just never
+been ENABLED on any of the 5 real discs this project has. A genuinely
+different disc (one built with `IBOC=1`) would be needed to actually
+open this file -- not something reachable by checking more of the
+discs already on hand.
+
+```python
+import zlib, struct
+
+def decode_ddb(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    zlib_start = data.find(b"x\\xda")
+    header = data[:zlib_start]
+    w = header[17] | (header[18] << 8)
+    h = header[19] | (header[20] << 8)
+    payload = zlib.decompress(data[zlib_start:])
+    color_plane = payload[:w * h * 2]
+    mask_plane = payload[w * h * 2:]
+    rgb = bytearray()
+    for i in range(0, len(color_plane), 2):
+        v = color_plane[i] | (color_plane[i + 1] << 8)
+        b5, g5, r5 = (v >> 10) & 0x1f, (v >> 5) & 0x1f, v & 0x1f
+        rgb += bytes([(r5 * 255) // 31, (g5 * 255) // 31, (b5 * 255) // 31])
+    return w, h, bytes(rgb), mask_plane   # RGB888 pixels + 8-bit alpha, both row-major
+```
 """
 
 # `FHDD6.FLI`'s recovered load base for its 0-24MB native-PowerPC region's
