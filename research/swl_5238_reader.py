@@ -3537,6 +3537,104 @@ docstring said would be needed to push the earlier, explicitly-blocked
 `TpPvVerifyPin` disassembly attempt further. No attempt was made this
 session to actually connect to real hardware -- recorded as a real,
 now fully open, concrete path forward, not as something executed.
+
+============================================================================
+`BASE/Firmware/` official-vs-unofficial pairs (2 new, plus a 3rd real
+`SetConfig`-authored diff) -- the testmode/speed-lockout/hardware-scope
+pattern now confirmed 6 TOTAL times across 4 independent build families,
+plus a genuinely new fact about the `FILE_UPDATE`/`LOAD_ECU_BLOCK`
+gateway-flash sequence, plus SetConfig's own real output signature caught
+in the wild
+============================================================================
+Surveyed every remaining firmware folder's `VERSION.TXT` for same-
+`VwSwIndex`-and-date pairs (the condition that made the `4120` and
+`5270` diffs productive earlier this session) and found 2 more real
+pairs, diffed the same way (`diff_testmode.py`, real recursive
+SHA256 tree diff):
+
+**`5269_josi` vs `5269_update`** (`VwSwIndex:5269`, both
+`#DATE:2013-05-02`) -- a clean 6th-from-the-top confirmation of the
+now-established pattern, no new mechanism: `josi` (unofficial) has
+`Testmode: Active` + the `0x0B3A` speed-lockout override in
+`WA/EURPQTO.WSH`/`WA/ESKHDDL.WSH`, broader hardware scope
+(`C3/C4A/C5C/C6/C10/C12` vs official's `C10/C12`-only), a real,
+zeroed (`0` bytes) `RADIO/1/RNSMIDEC/PROG/RADIO.FLI` in the official
+disc (matching the same zeroing already seen in the `5270` pair), and
+6 files present ONLY in the broader-scope `josi` build (an `EURTO`
+hardware-variant's `CONFIG`/`DLSCRIPT.TXT`/`TOTABLE.FLI` under both
+`HOST` and `VUCI` -- simply a consequence of `EURTO` belonging to the
+`C3/C4A/C5C/C6` scope the official build drops, not a separate
+finding).
+
+**`5274_original_update` vs `5274_vim_update`** (`VwSwIndex:5274`,
+both `#DATE:2013-11-21`) -- same pattern again (testmode +
+`0x0B3A` override in `WA/EURPQTO.WSH`/`WA/ESKHDDL.WSH`, official
+narrowed to `C10/C12`, `vim_update`'s broader scope pulling in the
+same `EURTO` files plus a whole extra `MPEG/` tree) -- **but this pair
+also reveals a genuinely NEW, previously undocumented fact about the
+`FILE_UPDATE`/`LOAD_ECU_BLOCK` gateway-flash command family** first
+found in the `5270` pair. Comparing
+`VUCI/B101/EURPQEE/CONFIG/DLSCRIPT.TXT` directly:
+
+```
+official (original_update):                    unofficial (vim_update):
+FILE_UPDATE .../GATEWAY.FLI ...                 FILE_UPDATE .../GWBOOTL.FLI ...
+LOAD_ECU_BLOCK 131242 884736 .../GATEWAY.FLI     LOAD_ECU_BLOCK 196778 458752 .../GWBOOTL.FLI
+FILE_UPDATE .../PQTABLE.FLI ...                  FILE_UPDATE .../GATEWAY.FLI ...
+LOAD_ECU_BLOCK 65706 8192 .../PQTABLE.FLI        LOAD_ECU_BLOCK 131242 884736 .../GATEWAY.FLI
+FILE_UPDATE .../GWBOOTL.FLI ...                  FILE_UPDATE .../PQTABLE.FLI ...
+LOAD_ECU_BLOCK 196778 458752 .../GWBOOTL.FLI     LOAD_ECU_BLOCK 65706 8192 .../PQTABLE.FLI
+FILE_UPDATE .../GATEWAY.FLI ...    (again)       FINISHED_ECU
+LOAD_ECU_BLOCK 131242 884736 .../GATEWAY.FLI
+FILE_UPDATE .../PQTABLE.FLI ...    (again)
+LOAD_ECU_BLOCK 65706 8192 .../PQTABLE.FLI
+FINISHED_ECU
+```
+
+**The real, official VW delivery process flashes `GATEWAY.FLI` and
+`PQTABLE.FLI` to the gateway ECU TWICE -- once BEFORE flashing
+`GWBOOTL.FLI` (the gateway's own bootloader), and once again AFTER
+it** -- while the unofficial `vim_update` repack does each exactly
+once (bootloader, then gateway, then PQ table, no repeat). A new
+real, concrete fact: each `GATEWAY.FLI` flash step carries a real
+`EXPECTED_TIME 150` (seconds), `PQTABLE.FLI` `EXPECTED_TIME 30`,
+`GWBOOTL.FLI` `EXPECTED_TIME 90` -- so the official sequence budgets
+`150+30+90+150+30` = 450s of ECU-flash time vs the unofficial
+`90+150+30` = 270s, a real ~3-minute difference. Plausibly a genuine
+official reliability measure (re-flash gateway+table after the
+bootloader itself changes, to guard against a bootloader update
+leaving an inconsistent state) that a community repack strips to save
+real flash time -- consistent with the `SetConfig` manual's own
+"Firmware" tab feature ("comment out options to save 20-30 min flash
+time", above). Not verified against real hardware; no claim is made
+about WHY beyond what the two real scripts themselves show.
+
+**`3810` vs `3810a`** (identical `VwSwIndex`/date, found by direct
+folder-name proximity rather than a `VERSION.TXT` match -- worth
+remembering as its own real technique) -- the SAME 0x21/0x0B3A pattern
+a 6th time (`WA/EURPQTO.WSH`, `WA/EURSKHDD.WSH`), but this pair also
+changes `HDD/HDD_20GB/RNSMIDEC/CONFIG/DLSCRIPT.TXT`, and THAT diff
+directly names its own author:
+
+```
+- MULTI_VERIFY_HDD 3 3 50 2 25 2 25 0 0
++ MULTI_VERIFY_HDD 3 3 75 2 20 2 5 0 0
++ # by SetConfig 000015B4
+```
+
+**A real, literal `# by SetConfig 000015B4` comment, left in place by
+the tool itself** -- direct, concrete, unambiguous proof that
+`3810a` is a real disc produced by the exact commercial `SetConfig for
+RNS510` tool whose manual was documented earlier this session (the
+`000015B4` value is presumably some real build/session/serial
+identifier the tool stamps into its own output; not decoded further).
+This is the single most direct link this project has between
+`SetConfig`'s own documented behavior and an actual, real, byte-level
+modified disc -- confirms the tool really does perform exactly the
+kind of coding-script edit already reverse-engineered from disc diffs
+all session (same `0x21`/`0x0B3A` registers), and additionally tweaks
+a `MULTI_VERIFY_HDD` parameter line (real meaning of the 9 numeric
+fields not decoded here) as part of the same edit.
 """
 
 import re
