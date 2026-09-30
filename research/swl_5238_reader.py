@@ -3693,6 +3693,59 @@ obvious unofficial counterpart in this collection, or (for
 `5274_MOD_C6_C12`) a 3rd copy of an already-2x-confirmed pair -- lower
 expected value per the pattern's own consistency, not pursued further
 this session without a specific reason to expect something new.
+
+============================================================================
+Correction/extension: `6276_MOD_C14` vs `6276_original_update` -- a disc
+whose `VERSION.TXT` claims "VW delivery" but actually carries the
+testmode-unlock pattern -- the `#CommentStart` reliability warning found
+in the `5270` pair confirmed a 2nd time, in the OPPOSITE direction
+============================================================================
+Despite the "diminishing returns" note just above, checked this pair
+anyway since both real dates differ (`2014-03-20` vs `2014-07-01`,
+`#CD:P` build `...301` vs `...302`) while the `VwSwIndex`/hardware
+scope (`C14`-only) stay identical -- looked like it might show
+legitimate cross-version firmware evolution rather than the community
+pattern. **Both discs' own `#CommentStart` text reads "This is a SWL
+CD for VW delivery."** -- neither self-identifies as unofficial.
+
+The real, compiled `.FRG` firmware images (`H_PQEE.FRG` and 12 siblings)
+differ by only **19 bytes out of 1,303,600** (0.0015%) -- almost
+certainly an embedded build stamp/CRC field, not a real code change;
+not decoded further. But `WA/EURPQTO.WSH` and 2 siblings show the
+now-familiar pattern, this time as a real size change (+75 bytes, not
+an in-place same-size edit):
+
+```
+< # Testmode: NOT active
+< SetRegDataHex(0x21,"00",0x0,0x1,0x1)
+---
+> # Testmode: Active
+> SetRegDataHex(0x21,"01",0x0,0x1,0x1)
+>
+> #Speed limit DVD/TV: 300km/h
+> SetRegDataHex(0x0B3A,"012C",0x0,0x2,0x89)
+```
+
+**`6276_MOD_C14` (the later of the pair) carries the testmode-active +
+speed-lockout-override pattern DESPITE its own `VERSION.TXT` claiming
+"VW delivery"** -- i.e. an "official"-labeled comment string on a disc
+that actually contains exactly the community-unlock pattern found all
+session. This is the same `#CommentStart`-isn't-reliable warning
+already recorded in the `5270` pair section above, now confirmed a 2nd
+time in the OPPOSITE direction (there, an "unofficial"-labeled disc
+turned out to be the more official-acting one by build number; here, an
+"official"-labeled disc carries the unofficial-looking modification).
+The collector's own folder name (`_MOD_`, not `_update`) suggests
+whoever assembled this `BASE/` collection already suspected as much --
+plausibly this disc had its `VERSION.TXT` comment left unedited by
+whoever produced it (community repacks earlier this session, e.g. the
+`5270`/`5269`/`5274`/`5238` `josi` discs, DO edit this string to say
+"unofficial"; this one apparently didn't), or it is a genuine, rare
+factory build that shipped this way -- not distinguished between the
+two here. Reinforces the file's own standing rule: **only real
+byte-level diffing (`CRC16`, full tree hash) is a reliable signal of
+whether a disc has been altered; the `#CommentStart` text is not,
+in either direction.**
 """
 
 import re
