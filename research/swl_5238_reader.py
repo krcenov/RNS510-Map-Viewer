@@ -3423,24 +3423,72 @@ a real, useful scoping fact, not verified further.
 
 ============================================================================
 `BASE/Other/rns510_dtv-master` -- a full third-party Qt/gstreamer DVB-T
-tuner add-on application, integrating via the same MOST/BAP mechanism
+tuner add-on application -- read in full this time (a later session,
+user-directed: "examine rns510_dtv-master's own code"). CORRECTS an
+earlier guess: its real `QMostInterface` does NOT use the BAP/CAN-bus
+transport documented above at all -- a completely separate, much
+simpler, real custom ASCII protocol over a plain RS232 UART
 ============================================================================
-A large standalone Qt-based Linux application (own icon set, own
-`QTvServiceManager`/`QMostInterface`/`QMenuInfoWindow` UI classes, a
-Polish-language `change_log.txt` spanning real dated entries from
-2014-01-21 onward) that decodes real DVB-T digital terrestrial TV via
-`gstreamer`'s `mpegtsdemux` plugin (the changelog names real functions
-patched there: `gst_mpegts_demux_parse_adaptation_field`,
-`gst_mpegts_demux_parse_transport_packet`) and talks to the RNS510
-through a `QMostInterface` class -- i.e. a full, independent, real-
-world embedded application built on TOP OF the exact same BAP/MOST
-transport documented above (most likely using the TV-tuner function-ID
-catalog from `rns510-tv-input-master`, not independently confirmed
-here). Not read in further detail this session beyond confirming its
-real existence, purpose, and its dependency on the same BAP mechanism
--- a large, self-contained project, lower priority than the protocol-
-level C sources above for THIS project's own firmware-disassembly
-goals.
+A large, genuinely complete, BUILDABLE embedded-Linux Qt/C++
+application (full `src`/`include` tree, a real `nbproject`/Makefile
+NetBeans project, Polish-language comments and a `change_log.txt`
+spanning real dated entries from 2014-01-21 onward, real author names
+`Michał Motyl`/`michalm`) -- a real DVB-T set-top-box product, not a
+thin add-on. Links real, known open-source DVB libraries
+(`libdvbapi`/`libdvbcfg`/`libdvben50221` [the EN50221 CI/CAM
+standard]/`libucsi`/`libtsi`/`libesg`) and a real, named tuner-chipset
+vendor driver, `libdibcomcontrol.so` (Dibcom, a real DVB-T silicon
+tuner chipset maker) -- confirms this runs on real, dedicated DVB-T
+tuner hardware, not a software-only demo. `include/
+sslMap36MB_0x40000000.h` (a real physical memory-map header) and
+`include/sslLcdcApi.h`/`src/overlay/sslLcdcApi.c` (a real LCD-
+controller driver API) are consistent with a TI-style embedded Linux
+SoC BSP naming convention ("ssl"/"PSP"-style driver prefixes), a
+plausible (not confirmed) sibling platform to the `DAB.FLI` TI DSP
+already identified elsewhere in this project -- not independently
+verified as the exact same chip family.
+
+**The real `QMostInterface`/`QCanInterface` class (`src/QT/
+QMostInterface/QMostInterface.cpp`) talks over a PLAIN RS232 SERIAL
+PORT, `/dev/ttyS1`, at 115200 baud** -- confirmed directly reading its
+own real `init_can_uart()`: a Qt `SerialPort` opened 8N1, no flow
+control, `Rate115200`. **This is NOT the real BAP wire protocol**
+already fully documented above (frame format, `opcode`/`lsg_id`/
+`fct_id` bit-packing, real CAN IDs) -- corrects this file's own
+earlier guess that this app "most likely" used the TV-tuner BAP
+function-ID catalog from `rns510-tv-input-master`; it provably does
+not, at least not in this class. Despite the "MOST"/"CAN" naming in
+its own class/file names, the real wire format is a much simpler,
+bespoke ASCII-framed protocol:
+
+```
+STX (0x02) <payload, hex-nibble-encoded> ETB (0x17) <2 hex CRC digits> ETX (0x03)
+```
+
+-- a real two's-complement checksum (`(sum(payload bytes) XOR 0xFF) +
+1`, rendered as 2 ASCII hex digits) over the bytes between `STX` and
+`ETB`. A fixed real ACK frame: `STX 0x06 ETB 0x46 0x41 ETX`. Real,
+named command byte-pairs found in actual use: `(0,9)` = query device
+status, `(0,1)` = send one service/channel-list entry (truncated to
+24 real ASCII characters), `(0,2)` = set the currently-selected
+channel position (`set_pos_on_can()`, with an optional up-to-32-char
+info string). **115200 baud matches the already-documented
+`TpPvVerifyPin` VxWorks-shell serial console and the `rns_code_finders`
+tool's own port speed** -- plausibly a real, platform-wide standard
+UART rate for this whole product family, though `/dev/ttyS1` on this
+box is a genuinely separate physical link, not independently
+confirmed to be the same UART/pins as either of those (this box is a
+retrofit add-on talking INTO the head unit over some real auxiliary
+serial line, not the head unit's own debug console).
+
+Also decodes real DVB-T digital terrestrial TV via `gstreamer`'s
+`mpegtsdemux` plugin (the changelog names real functions patched
+there: `gst_mpegts_demux_parse_adaptation_field`,
+`gst_mpegts_demux_parse_transport_packet`). The rest of this large
+application (EPG/service-scanning, the GStreamer media pipeline, the
+TI-style display/overlay driver) was not read in further detail --
+real, open, lower-priority leads for a future session, now that the
+one claim actually worth correcting (the BAP assumption) has been.
 
 ============================================================================
 `BASE/Other/rns_code_finders` -- decompiled (.NET IL -> real C# source, via
