@@ -355,7 +355,7 @@ class FirmwareViewerApp:
                 else:
                     widget = tk.Label(self.sim_menu_grid, text=name, bg="#1c1c1c", fg="#cfe8ff",
                                        anchor="w", font=("Consolas", 10))
-                widget.grid(row=row + j // 2, column=j % 2, columnspan=cols // 2,
+                widget.grid(row=row + j // 2, column=(j % 2) * (cols // 2), columnspan=cols // 2,
                             sticky="we", padx=8, pady=2)
 
         if not entries and not leaf_classes:
