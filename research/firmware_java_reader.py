@@ -95,11 +95,27 @@ Three independent things can be recovered straight from the raw bytes:
    it still stops at the same byte -- ruling out a corrupted cp_count)
    but garbage immediately in the header fields right after; and others
    still (DefaultBTAudioPlayer.class and 2 more) break inside the
-   constant pool itself. Since it's not anchored to one structural
-   landmark, this looks less like a class-file-format issue and more
-   like a bug in whatever original tool carved each class's bytes out
-   of Jeode's one big romized blob -- see the wiki page for the full
-   per-class breakdown and a concrete next step. Like
+   constant pool itself. The real/good content always runs out
+   somewhere in the first ~100-500 decompressed bytes regardless of
+   total class size (a 7KB and a 3KB class both break well under 500
+   bytes in), ruling out a cause tied to class size; checked firmware
+   offset modulo every plausible block size from 128B-64KB against each
+   break point too, with no correlation, ruling out physical-address
+   alignment. The garbage itself isn't random noise, either -- e.g. a
+   real 13-byte substring from Mp3ActionEvent.class's own earlier,
+   cleanly-decoded text reappears 127 bytes later amid zero-padding and
+   scrambled fragments, the same repeating-fragment signature flagged
+   earlier on this page -- but since this module's own ZIP/DEFLATE
+   decoding is independently proven lossless (bit-level decoder, zlib
+   vs. Java Inflater), that artifact must already exist in the
+   plaintext this module's compressor received, not be introduced by
+   it. Best current explanation: the fault is further upstream than
+   this module can see -- most plausibly Jeode's own ROM-compaction
+   format (itself apparently LZ-style, given the repeating fragments)
+   being imperfectly reconstructed by whatever tool produced these
+   per-class entries, reliably recovering only roughly the first
+   100-500 bytes of each. See the wiki page for the full per-class
+   breakdown. Like
    `find_class_files`, raw `PK\x03\x04` signature hits are
    mostly coincidental collisions (123 raw hits; loosening every filter
    still only finds 7 that fully validate, though checking the OTHER
