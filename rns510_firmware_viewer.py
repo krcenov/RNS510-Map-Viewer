@@ -231,6 +231,18 @@ class FirmwareViewerApp:
         self.sim_splash_label.pack(fill="both", expand=True)
         ttk.Button(self.sim_splash_frame, text="Continue →",
                    command=self._sim_show_menu).place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
+        ttk.Button(self.sim_splash_frame, text="← Prev screen",
+                   command=lambda: self._sim_cycle_splash(-1)).place(
+            relx=0.0, rely=1.0, anchor="sw", x=10, y=-10)
+        ttk.Button(self.sim_splash_frame, text="Next screen →",
+                   command=lambda: self._sim_cycle_splash(1)).place(
+            relx=0.0, rely=1.0, anchor="sw", x=130, y=-10)
+        self.sim_splash_caption = tk.StringVar(value="")
+        tk.Label(self.sim_splash_frame, textvariable=self.sim_splash_caption,
+                 bg="black", fg="#9fd89f", font=("Consolas", 9)).place(
+            relx=0.5, rely=1.0, anchor="s", y=-12)
+        self.sim_splash_images = []
+        self.sim_splash_index = 0
 
         nav_bar = tk.Frame(self.sim_menu_frame, bg="#1c1c1c")
         nav_bar.pack(fill="x", padx=16, pady=(12, 0))
@@ -260,6 +272,32 @@ class FirmwareViewerApp:
     def _sim_show_splash(self):
         self.sim_menu_frame.pack_forget()
         self.sim_splash_frame.pack()
+
+    def _sim_show_splash_image(self):
+        if not self.sim_splash_images:
+            self.sim_splash_label.config(
+                image="", text="(no real screen recovered from this firmware)"
+            )
+            self.sim_splash_caption.set("")
+            return
+        im = self.sim_splash_images[self.sim_splash_index]
+        if ImageTk is not None:
+            photo = ImageTk.PhotoImage(im.image)
+            self._photo_refs.append(photo)
+            self.sim_splash_label.config(image=photo, text="")
+        else:
+            self.sim_splash_label.config(image="", text="(Pillow not installed)")
+        flag = " [partial]" if im.partial else ""
+        self.sim_splash_caption.set(
+            f"real screen {self.sim_splash_index + 1}/{len(self.sim_splash_images)} "
+            f"-- offset 0x{im.offset:x}, {im.width}x{im.height}{flag}"
+        )
+
+    def _sim_cycle_splash(self, direction):
+        if not self.sim_splash_images:
+            return
+        self.sim_splash_index = (self.sim_splash_index + direction) % len(self.sim_splash_images)
+        self._sim_show_splash_image()
 
     def _sim_show_menu(self):
         self.sim_splash_frame.pack_forget()
@@ -376,18 +414,14 @@ class FirmwareViewerApp:
         """(Re)build the simulator's boot screen, menu grid, and CANCEL
         button from whatever was actually found in the currently-loaded
         firmware -- nothing here is hardcoded."""
-        # 1. boot screen: prefer a real, fully-decoded 800x480 screen
-        splash = next((im for im in self.images if not im.partial and im.width == 800), None)
-        if splash is None:
-            splash = self.images[0] if self.images else None
-        if splash is not None and ImageTk is not None:
-            photo = ImageTk.PhotoImage(splash.image)
-            self._photo_refs.append(photo)
-            self.sim_splash_label.config(image=photo, text="")
-        else:
-            self.sim_splash_label.config(
-                image="", text="(no real screen recovered from this firmware)"
-            )
+        # 1. boot screen: cycle through every real, fully-decoded 800x480
+        # screen found (falls back to whatever was found, partial included,
+        # if there's no full-size one)
+        self.sim_splash_images = [im for im in self.images if not im.partial and im.width == 800]
+        if not self.sim_splash_images:
+            self.sim_splash_images = list(self.images)
+        self.sim_splash_index = 0
+        self._sim_show_splash_image()
 
         # 2. CANCEL-style button icon: the real recovered UI widget icons are
         # the 100x50 hits (see find_embedded_images docstring item 3)
