@@ -217,7 +217,12 @@ class FirmwareViewerApp:
             label = f"0x{info.start:x}  ({info.end - info.start} bytes)"
             self.class_listbox.insert(tk.END, label)
         for info in streamed:
-            flag = "" if info.fully_valid else "  [partial/corrupted]"
+            if info.fully_valid:
+                flag = ""
+            elif info.trustworthy_prefix_estimate:
+                flag = f"  [partial/corrupted, ~{info.trustworthy_prefix_estimate} bytes trustworthy]"
+            else:
+                flag = "  [partial/corrupted]"
             label = f"0x{info.offset:x}  {info.name}{flag}"
             self.class_listbox.insert(tk.END, label)
 

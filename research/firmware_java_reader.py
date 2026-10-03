@@ -139,8 +139,16 @@ Three independent things can be recovered straight from the raw bytes:
    build-independent cutoff baked into whatever process has generated
    every release of this firmware for over a decade, most likely a
    fixed-size per-class allocation computed once and never revisited
-   even as the class grew. See the wiki page for the full breakdown.
-   Like
+   even as the class grew. Following up: across 16 classes with enough
+   cross-build samples to measure a reliable cutoff, that cutoff
+   correlates strongly (r=0.985) with the byte offset where each
+   class's OWN constant pool parsing ends -- roughly `cp_end + 44`
+   bytes, though individual classes vary by roughly +-50 bytes around
+   that line. `_estimate_trustworthy_prefix()` operationalizes this as
+   a rough, honestly-caveated estimate (`StreamedClassInfo
+   .trustworthy_prefix_estimate`) of how many leading bytes of any
+   non-fully_valid streamed class are likely real -- useful for display,
+   never a guarantee. See the wiki page for the full breakdown. Like
    `find_class_files`, raw `PK\x03\x04` signature hits are
    mostly coincidental collisions (123 raw hits; loosening every filter
    still only finds 7 that fully validate, though checking the OTHER
@@ -621,6 +629,63 @@ class StreamedClassInfo:
     data: bytes          # the decompressed bytes; starts with CAFEBABE
     fully_valid: bool     # True if this also parses as a complete, well-formed
                           # class file (see note below) -- some currently don't
+    trustworthy_prefix_estimate: object = None  # int or None -- see
+                          # _estimate_trustworthy_prefix(); a rough, non-
+                          # guaranteed estimate of how many leading bytes of
+                          # `data` are likely real, for classes that aren't
+                          # fully_valid
+
+
+def _cp_end_offset(out: bytes):
+    """Parse ONLY the constant pool (the one part of these streamed
+    classes that's reliably intact -- see docstring item 4) and return
+    the byte offset right after it, or None if even that doesn't parse
+    cleanly."""
+    pos = 0
+    def u1():
+        nonlocal pos
+        v = out[pos]; pos += 1; return v
+    def u2():
+        nonlocal pos
+        v = struct.unpack_from(">H", out, pos)[0]; pos += 2; return v
+    try:
+        if out[0:4] != b"\xca\xfe\xba\xbe":
+            return None
+        pos = 8
+        cp_count = u2()
+        i = 1
+        while i < cp_count:
+            tag = u1()
+            if tag == 1:
+                length = u2(); pos += length
+            elif tag in _CONSTANT_SIZES:
+                pos += _CONSTANT_SIZES[tag]
+                if tag in (5, 6):
+                    i += 1
+            else:
+                return None
+            i += 1
+        return pos
+    except (IndexError, struct.error):
+        return None
+
+
+def _estimate_trustworthy_prefix(out: bytes):
+    """Rough estimate of how many leading bytes of a non-fully_valid
+    streamed class are likely real, based on an empirical finding:
+    across 16 classes cross-checked over up to 21 independent firmware
+    builds each, the byte offset where different builds of the SAME
+    class stop agreeing correlates strongly (r=0.985 across those 16)
+    with where this class's OWN constant pool parsing ends -- roughly
+    `cp_end + 44 bytes`, though individual classes vary by roughly
+    +-50 bytes around that line (one well-sampled class, Mp3ActionEvent,
+    sits close to `cp_end + 0`) -- so treat this as a rough, honest
+    estimate for display purposes, never a guarantee. Returns None if
+    even the constant pool doesn't parse cleanly."""
+    cp_end = _cp_end_offset(out)
+    if cp_end is None:
+        return None
+    return min(cp_end + 44, len(out))
 
 
 def _is_plausible_zip_name(name_bytes: bytes) -> bool:
@@ -684,8 +749,10 @@ def find_streamed_zip_classes(data: bytes, max_window: int = 1_000_000) -> list[
             fully_valid = info.end == len(out)
         except (_ClassParseError, struct.error, IndexError):
             fully_valid = False
+        prefix_estimate = None if fully_valid else _estimate_trustworthy_prefix(out)
         results.append(StreamedClassInfo(
             offset=idx, name=name_bytes.decode("ascii"), data=out, fully_valid=fully_valid,
+            trustworthy_prefix_estimate=prefix_estimate,
         ))
     return results
 
@@ -712,4 +779,5 @@ if __name__ == "__main__":
     streamed = find_streamed_zip_classes(data)
     print(f"real streamed-ZIP classes: {len(streamed)} ({sum(s.fully_valid for s in streamed)} fully valid)")
     for s in streamed:
-        print(f"  offset=0x{s.offset:x}  {s.name}  ({len(s.data)} bytes)  fully_valid={s.fully_valid}")
+        estimate = f" ~trustworthy_prefix={s.trustworthy_prefix_estimate}" if s.trustworthy_prefix_estimate else ""
+        print(f"  offset=0x{s.offset:x}  {s.name}  ({len(s.data)} bytes)  fully_valid={s.fully_valid}{estimate}")
