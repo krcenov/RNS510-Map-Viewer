@@ -15,14 +15,19 @@ already have a JVM). This is the firmware-exploration counterpart to
 `rns510_map_viewer.py` (which renders the MAP DISC's road/city/POI data) --
 a separate concern, not an extension of it.
 
-Status: an early step toward the longer-term goal of a full visual
-simulator of the real RNS-510 UI (menus, screens, everything). What's
-recoverable TODAY is real structural/architectural information (the real
-class/package tree, a `MenuManagerService`/`MenuManagerStateMachine`, a
-VW-branded custom widget toolkit) and a handful of real screens/classes --
-not yet a working menu simulation, since the bulk of the real application
-is pre-linked/"romized" into Jeode's own (currently undocumented) bundle
-format. See the wiki page for the full picture and what's still open.
+Status: a first-pass visual mockup toward the longer-term goal of a full
+simulator of the real RNS-510 UI. The "Simulator" tab assembles what's
+actually recoverable today -- a real recovered boot screen, a real
+recovered button icon, and the real top-level `vdo/rns/app/*` package
+names (nav, icdent, mda, ...) as menu entries -- into a boot -> menu ->
+select flow. This is NOT real, verified menu logic: there is no recovered
+navigation/dispatch bytecode behind it (the bulk of the real application
+is pre-linked/"romized" into Jeode's own still-not-fully-cracked bundle
+format -- see the wiki page), so clicking a menu entry only shows which
+real package it came from, not what the unit actually does. Every asset
+and label shown is computed live from whatever firmware file you open --
+nothing is hardcoded -- so the exact screen/icon/menu entries shown can
+vary firmware to firmware.
 
 Run with:
     py rns510_firmware_viewer.py
@@ -73,19 +78,22 @@ class FirmwareViewerApp:
         status_bar = ttk.Label(self.root, textvariable=self.status, anchor="w", relief="sunken")
         status_bar.pack(side="bottom", fill="x")
 
-        notebook = ttk.Notebook(self.root)
+        notebook = self.notebook = ttk.Notebook(self.root)
         notebook.pack(fill="both", expand=True)
 
         self.tab_packages = ttk.Frame(notebook)
         self.tab_classes = ttk.Frame(notebook)
         self.tab_screens = ttk.Frame(notebook)
+        self.tab_simulator = ttk.Frame(notebook)
         notebook.add(self.tab_packages, text="Package tree (names only)")
         notebook.add(self.tab_classes, text="Decompiled classes")
         notebook.add(self.tab_screens, text="Real screens / images")
+        notebook.add(self.tab_simulator, text="Simulator (mockup)")
 
         self._build_packages_tab()
         self._build_classes_tab()
         self._build_screens_tab()
+        self._build_simulator_tab()
 
     # ------------------------------------------------------------------
     def _build_packages_tab(self):
@@ -198,6 +206,120 @@ class FirmwareViewerApp:
         self.screen_canvas.config(scrollregion=(0, 0, info.width, info.height))
 
     # ------------------------------------------------------------------
+    def _build_simulator_tab(self):
+        note = (
+            "Mockup, not verified logic: boot screen + button icon are REAL "
+            "recovered assets; menu entries are REAL vdo/rns/app/* package "
+            "names from this firmware. There is no recovered navigation "
+            "bytecode behind this -- selecting an entry just shows where it "
+            "came from, not real unit behavior. See the wiki for what's "
+            "real vs. placeholder here."
+        )
+        ttk.Label(self.tab_simulator, text=note, wraplength=1000, justify="left",
+                  foreground="#a05a00").pack(fill="x", padx=6, pady=6)
+
+        container = ttk.Frame(self.tab_simulator, relief="sunken", borderwidth=2)
+        container.pack(padx=10, pady=10)
+
+        self.sim_splash_frame = tk.Frame(container, bg="black", width=800, height=480)
+        self.sim_splash_frame.pack_propagate(False)
+        self.sim_menu_frame = tk.Frame(container, bg="#1c1c1c", width=800, height=480)
+        self.sim_menu_frame.pack_propagate(False)
+
+        self.sim_splash_label = tk.Label(self.sim_splash_frame, bg="black",
+                                          fg="white", text="Open a firmware file first.")
+        self.sim_splash_label.pack(fill="both", expand=True)
+        ttk.Button(self.sim_splash_frame, text="Continue →",
+                   command=self._sim_show_menu).place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
+
+        self.sim_menu_grid = tk.Frame(self.sim_menu_frame, bg="#1c1c1c")
+        self.sim_menu_grid.pack(fill="both", expand=True, padx=16, pady=16)
+
+        bottom_bar = tk.Frame(self.sim_menu_frame, bg="#1c1c1c")
+        bottom_bar.pack(fill="x", side="bottom", pady=8)
+        self.sim_cancel_btn_holder = tk.Frame(bottom_bar, bg="#1c1c1c")
+        self.sim_cancel_btn_holder.pack(side="right", padx=10)
+
+        self.sim_status = tk.StringVar(value="")
+        tk.Label(bottom_bar, textvariable=self.sim_status, bg="#1c1c1c", fg="#9fd89f",
+                 anchor="w").pack(side="left", padx=10, fill="x", expand=True)
+
+        self.sim_splash_frame.pack()
+        self._sim_state = "splash"
+
+    def _sim_show_splash(self):
+        self.sim_menu_frame.pack_forget()
+        self.sim_splash_frame.pack()
+
+    def _sim_show_menu(self):
+        self.sim_splash_frame.pack_forget()
+        self.sim_menu_frame.pack()
+
+    def _sim_select(self, real_package_name):
+        self.sim_status.set(
+            f"Selected real package \"{real_package_name}\" -- no recovered "
+            f"navigation logic to actually act on this yet."
+        )
+
+    def _sim_populate(self):
+        """(Re)build the simulator's boot screen, menu grid, and CANCEL
+        button from whatever was actually found in the currently-loaded
+        firmware -- nothing here is hardcoded."""
+        # 1. boot screen: prefer a real, fully-decoded 800x480 screen
+        splash = next((im for im in self.images if not im.partial and im.width == 800), None)
+        if splash is None:
+            splash = self.images[0] if self.images else None
+        if splash is not None and ImageTk is not None:
+            photo = ImageTk.PhotoImage(splash.image)
+            self._photo_refs.append(photo)
+            self.sim_splash_label.config(image=photo, text="")
+        else:
+            self.sim_splash_label.config(
+                image="", text="(no real screen recovered from this firmware)"
+            )
+
+        # 2. CANCEL-style button icon: the real recovered UI widget icons are
+        # the 100x50 hits (see find_embedded_images docstring item 3)
+        for child in self.sim_cancel_btn_holder.winfo_children():
+            child.destroy()
+        icon = next((im for im in self.images if im.width == 100 and im.height == 50), None)
+        if icon is not None and ImageTk is not None:
+            photo = ImageTk.PhotoImage(icon.image)
+            self._photo_refs.append(photo)
+            tk.Button(self.sim_cancel_btn_holder, image=photo, borderwidth=0,
+                      command=self._sim_show_splash).pack()
+        else:
+            ttk.Button(self.sim_cancel_btn_holder, text="CANCEL",
+                       command=self._sim_show_splash).pack()
+
+        # 3. menu entries: real top-level vdo/rns/app/* package names, by
+        # how many real classes were found under each (most-populated first)
+        for child in self.sim_menu_grid.winfo_children():
+            child.destroy()
+        counts = {}
+        needle = "rns/app/"
+        for p in self.class_paths:
+            idx = p.find(needle)
+            if idx == -1:
+                continue
+            rest = p[idx + len(needle):]
+            seg = rest.split("/", 1)[0]
+            if seg:
+                counts[seg] = counts.get(seg, 0) + 1
+        top_entries = sorted(counts.items(), key=lambda kv: -kv[1])[:12]
+        cols = 4
+        for i, (name, count) in enumerate(top_entries):
+            btn = tk.Button(
+                self.sim_menu_grid, text=f"{name}\n({count} real classes)",
+                width=14, height=3, bg="#2e2e2e", fg="white", activebackground="#444",
+                command=lambda n=name: self._sim_select(n),
+            )
+            btn.grid(row=i // cols, column=i % cols, padx=8, pady=8)
+        if not top_entries:
+            tk.Label(self.sim_menu_grid, bg="#1c1c1c", fg="white",
+                     text="(no vdo/rns/app/* package names found)").pack()
+
+    # ------------------------------------------------------------------
     def open_firmware(self):
         path = filedialog.askopenfilename(
             title="Open firmware (e.g. FHDD6.FLI)",
@@ -261,6 +383,9 @@ class FirmwareViewerApp:
             f"{len(self.classes)} decompilable classes ({len(classes)} standalone + "
             f"{len(streamed)} from streamed ZIP entries), {len(images)} real screens/images"
         )
+
+        self._sim_populate()
+        self._sim_show_splash()
 
 
 def main():
