@@ -209,11 +209,11 @@ class FirmwareViewerApp:
     def _build_simulator_tab(self):
         note = (
             "Mockup, not verified logic: boot screen + button icon are REAL "
-            "recovered assets; menu entries are REAL vdo/rns/app/* package "
-            "names from this firmware. There is no recovered navigation "
-            "bytecode behind this -- selecting an entry just shows where it "
-            "came from, not real unit behavior. See the wiki for what's "
-            "real vs. placeholder here."
+            "recovered assets; the menu is the REAL vdo/rns/app/* package "
+            "tree from this firmware, drillable down to real class names. "
+            "There is no recovered navigation bytecode behind this -- "
+            "drilling down just walks the real package structure, not real "
+            "unit behavior. See the wiki for what's real vs. placeholder here."
         )
         ttk.Label(self.tab_simulator, text=note, wraplength=1000, justify="left",
                   foreground="#a05a00").pack(fill="x", padx=6, pady=6)
@@ -232,8 +232,18 @@ class FirmwareViewerApp:
         ttk.Button(self.sim_splash_frame, text="Continue →",
                    command=self._sim_show_menu).place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
 
+        nav_bar = tk.Frame(self.sim_menu_frame, bg="#1c1c1c")
+        nav_bar.pack(fill="x", padx=16, pady=(12, 0))
+        self.sim_back_btn = tk.Button(nav_bar, text="← Back", command=self._sim_back,
+                                       bg="#2e2e2e", fg="white", activebackground="#444")
+        self.sim_back_btn.pack(side="left")
+        self.sim_breadcrumb = tk.StringVar(value="")
+        tk.Label(nav_bar, textvariable=self.sim_breadcrumb, bg="#1c1c1c", fg="#cfe8ff",
+                 font=("Consolas", 10), anchor="w").pack(side="left", padx=12)
+
         self.sim_menu_grid = tk.Frame(self.sim_menu_frame, bg="#1c1c1c")
         self.sim_menu_grid.pack(fill="both", expand=True, padx=16, pady=16)
+        self._sim_path = []  # real vdo/rns/app/* path segments drilled into so far
 
         bottom_bar = tk.Frame(self.sim_menu_frame, bg="#1c1c1c")
         bottom_bar.pack(fill="x", side="bottom", pady=8)
@@ -255,11 +265,74 @@ class FirmwareViewerApp:
         self.sim_splash_frame.pack_forget()
         self.sim_menu_frame.pack()
 
-    def _sim_select(self, real_package_name):
-        self.sim_status.set(
-            f"Selected real package \"{real_package_name}\" -- no recovered "
-            f"navigation logic to actually act on this yet."
-        )
+    def _sim_drill_into(self, name):
+        self._sim_path.append(name)
+        self._sim_render_menu_level()
+
+    def _sim_back(self):
+        if self._sim_path:
+            self._sim_path.pop()
+            self._sim_render_menu_level()
+
+    def _sim_render_menu_level(self):
+        """Render the menu grid for the real package path currently drilled
+        into (`self._sim_path`, segments under `vdo/rns/app/`) -- real
+        sub-package names become further drill-down buttons; once there
+        are no more sub-packages, the real leaf class names at that level
+        are shown as plain (non-interactive) labels, since that's as deep
+        as the real structural information goes without recovered
+        bytecode."""
+        for child in self.sim_menu_grid.winfo_children():
+            child.destroy()
+
+        prefix = "rns/app/" + "".join(seg + "/" for seg in self._sim_path)
+        self.sim_breadcrumb.set("vdo/" + prefix.rstrip("/"))
+        self.sim_back_btn.config(state="normal" if self._sim_path else "disabled")
+
+        counts = {}
+        leaf_classes = []
+        for p in self.class_paths:
+            idx = p.find(prefix)
+            if idx == -1:
+                continue
+            rest = p[idx + len(prefix):]
+            if "/" in rest:
+                seg = rest.split("/", 1)[0]
+                if seg:
+                    counts[seg] = counts.get(seg, 0) + 1
+            elif rest:
+                leaf_classes.append(rest)
+
+        entries = sorted(counts.items(), key=lambda kv: -kv[1])[:12]
+        cols = 4
+        i = 0
+        for name, count in entries:
+            btn = tk.Button(
+                self.sim_menu_grid, text=f"{name}\n({count} real classes)",
+                width=14, height=3, bg="#2e2e2e", fg="white", activebackground="#444",
+                command=lambda n=name: self._sim_drill_into(n),
+            )
+            btn.grid(row=i // cols, column=i % cols, padx=8, pady=8)
+            i += 1
+
+        if entries:
+            self.sim_status.set(f"{len(entries)} real sub-package(s) under vdo/{prefix.rstrip('/')}")
+            return
+
+        if leaf_classes:
+            shown = sorted(leaf_classes)[:20]
+            for j, name in enumerate(shown):
+                tk.Label(self.sim_menu_grid, text=name, bg="#1c1c1c", fg="#cfe8ff",
+                         anchor="w", font=("Consolas", 10)).grid(
+                    row=j // 2, column=j % 2, sticky="w", padx=8, pady=2)
+            self.sim_status.set(
+                f"{len(leaf_classes)} real class(es) at vdo/{prefix.rstrip('/')} "
+                f"(leaf level -- no recovered logic to navigate further)"
+            )
+        else:
+            tk.Label(self.sim_menu_grid, bg="#1c1c1c", fg="white",
+                     text="(no further real structure found here)").pack()
+            self.sim_status.set("")
 
     def _sim_populate(self):
         """(Re)build the simulator's boot screen, menu grid, and CANCEL
@@ -292,32 +365,10 @@ class FirmwareViewerApp:
             ttk.Button(self.sim_cancel_btn_holder, text="CANCEL",
                        command=self._sim_show_splash).pack()
 
-        # 3. menu entries: real top-level vdo/rns/app/* package names, by
-        # how many real classes were found under each (most-populated first)
-        for child in self.sim_menu_grid.winfo_children():
-            child.destroy()
-        counts = {}
-        needle = "rns/app/"
-        for p in self.class_paths:
-            idx = p.find(needle)
-            if idx == -1:
-                continue
-            rest = p[idx + len(needle):]
-            seg = rest.split("/", 1)[0]
-            if seg:
-                counts[seg] = counts.get(seg, 0) + 1
-        top_entries = sorted(counts.items(), key=lambda kv: -kv[1])[:12]
-        cols = 4
-        for i, (name, count) in enumerate(top_entries):
-            btn = tk.Button(
-                self.sim_menu_grid, text=f"{name}\n({count} real classes)",
-                width=14, height=3, bg="#2e2e2e", fg="white", activebackground="#444",
-                command=lambda n=name: self._sim_select(n),
-            )
-            btn.grid(row=i // cols, column=i % cols, padx=8, pady=8)
-        if not top_entries:
-            tk.Label(self.sim_menu_grid, bg="#1c1c1c", fg="white",
-                     text="(no vdo/rns/app/* package names found)").pack()
+        # 3. menu entries: real vdo/rns/app/* package structure, drillable --
+        # see _sim_render_menu_level()
+        self._sim_path = []
+        self._sim_render_menu_level()
 
     # ------------------------------------------------------------------
     def open_firmware(self):
