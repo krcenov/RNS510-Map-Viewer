@@ -34,11 +34,18 @@ Three independent things can be recovered straight from the raw bytes:
    own real UI screens/assets, stored as plain GIF files (PNG/BMP
    signature hits in this file are all coincidental collisions, not
    real images -- GIF's 6-byte magic is long enough to avoid that).
-   Several decode to the confirmed real screen resolution, 800x480
-   (e.g. real per-brand "Software update" splash screens: SEAT, Skoda).
-   Not every GIF-shaped region decodes cleanly (interlacing/variant
-   LZW flavors this reader doesn't special-case) -- callers should
-   expect a mix of successes and skipped failures, not 100% recovery.
+   8 of 11 real `GIF87a`/`GIF89a` hits decode on the reference
+   firmware, all to the confirmed real screen resolution, 800x480
+   (real per-brand "Software update" splash screens). Several of these
+   needed a recovery fallback (`_recover_gif_with_corrected_gct`) for a
+   real, recurring corruption -- a wrong color-table-size field in the
+   header -- the same general kind of localized few-byte corruption
+   documented for the streamed Java classes below, just in a different
+   format; without it only 4 of 11 decoded. The remaining 3 full-screen
+   failures have a deeper corruption in the actual compressed LZW data,
+   not just the header, and 2 small (100x50) icon-shaped hits remain
+   unrecovered -- callers should expect a mix of successes and skipped
+   failures, not 100% recovery.
 
 4. Real classes embedded as streamed ZIP/JAR entries
    (`find_streamed_zip_classes`) -- separately from (2), a real OSGi
@@ -266,6 +273,55 @@ class ImageInfo:
     image: object  # PIL.Image.Image, deferred import so this module has no hard PIL dependency
 
 
+def _gif_header(data: bytes, idx: int):
+    width, height, packed, bg, aspect = struct.unpack_from("<HHBBB", data, idx + 6)
+    return width, height, packed, bg, aspect
+
+
+def _recover_gif_with_corrected_gct(data: bytes, idx: int, width: int, height: int, packed: int,
+                                     bg: int, aspect: int, search_span: int = 20_000):
+    """Some real GIFs in this firmware have a corrupted Logical Screen
+    Descriptor `packed` byte -- specifically a wrong global-color-table
+    -size field (consistent with the same kind of localized few-bit
+    corruption seen elsewhere in this firmware, e.g. in the streamed
+    Java classes -- see this module's docstring item 4). The declared
+    size claims more color-table bytes than are actually there, so the
+    real image descriptor (`0x2C` + left=0,top=0,w=width,h=height --
+    every real example here is a single full-screen frame) sits earlier
+    than where the header says to look. This locates that real
+    boundary by content instead of trusting the declared size, rebuilds
+    a corrected header + real-length color table, and returns the fixed
+    bytes (or None if no plausible image descriptor is found nearby)."""
+    if not (packed >> 7) & 1:
+        return None  # no global color table declared -- not this kind of corruption
+
+    search_start = idx + 13
+    found_desc_at = None
+    for off in range(search_start, min(search_start + search_span, len(data) - 9)):
+        if data[off] != 0x2C:
+            continue
+        left, top, w, h, _ipacked = struct.unpack_from("<HHHHB", data, off + 1)
+        if left == 0 and top == 0 and w == width and h == height:
+            found_desc_at = off
+            break
+    if found_desc_at is None:
+        return None
+
+    real_gct_bytes = found_desc_at - search_start
+    if real_gct_bytes <= 0 or real_gct_bytes % 3 != 0:
+        return None
+    n_colors = real_gct_bytes // 3
+    size_field = 0
+    while 2 ** (size_field + 1) < n_colors:
+        size_field += 1
+    pad_bytes = (2 ** (size_field + 1) - n_colors) * 3
+
+    new_packed = (1 << 7) | ((packed >> 4 & 7) << 4) | size_field
+    header = data[idx:idx + 6] + struct.pack("<HHBBB", width, height, new_packed, bg, aspect)
+    gct = data[search_start:found_desc_at] + b"\x00" * pad_bytes
+    return header + gct + data[found_desc_at:]
+
+
 def find_embedded_images(data: bytes, window: tuple = (20_000, 50_000, 300_000, 1_000_000)):
     """Scan `data` for real embedded raster images. Currently only GIF
     is implemented (its 6-byte magic is long enough that every hit is
@@ -274,11 +330,16 @@ def find_embedded_images(data: bytes, window: tuple = (20_000, 50_000, 300_000, 
     worth the false-positive rate). For each real GIF signature, tries
     increasingly large byte windows and lets Pillow decode it (Pillow
     reads only as many bytes as the real image data needs; the window
-    is just an upper bound to slice from the full file). Returns an
-    `ImageInfo` for every one that decodes successfully; GIFs that fail
-    to decode (a real but unsupported LZW/interlacing variant) are
-    silently skipped, not an error -- callers should not expect 100%
-    recovery.
+    is just an upper bound to slice from the full file). If that fails,
+    falls back to `_recover_gif_with_corrected_gct` -- a real, generic
+    fix for one specific, recurring kind of corruption in this firmware
+    (a wrong color-table-size field in the header), which alone doubled
+    the number of real, full-screen splash images recovered from the
+    reference firmware (4 -> 8 of 11 real `GIF89a`/`GIF87a` hits).
+    Returns an `ImageInfo` for every one that decodes successfully;
+    GIFs that still fail after that (a deeper, genuine corruption in
+    the compressed LZW data itself, not just the header) are silently
+    skipped, not an error -- callers should not expect 100% recovery.
 
     Requires Pillow (`pip install Pillow`) -- imported lazily so this
     module can still be used for class-path/class-file discovery
@@ -286,6 +347,14 @@ def find_embedded_images(data: bytes, window: tuple = (20_000, 50_000, 300_000, 
     """
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None  # these are real, known-small (<=800x480) images
+
+    def _try_decode(chunk: bytes):
+        try:
+            candidate = Image.open(io.BytesIO(chunk))
+            candidate.load()
+            return candidate
+        except Exception:
+            return None
 
     results = []
     for sig in (b"GIF87a", b"GIF89a"):
@@ -297,14 +366,14 @@ def find_embedded_images(data: bytes, window: tuple = (20_000, 50_000, 300_000, 
             search_from = idx + 1
             img = None
             for w in window:
-                chunk = data[idx:idx + w]
-                try:
-                    candidate = Image.open(io.BytesIO(chunk))
-                    candidate.load()
-                    img = candidate
+                img = _try_decode(data[idx:idx + w])
+                if img is not None:
                     break
-                except Exception:
-                    continue
+            if img is None:
+                width, height, packed, bg, aspect = _gif_header(data, idx)
+                fixed = _recover_gif_with_corrected_gct(data, idx, width, height, packed, bg, aspect)
+                if fixed is not None:
+                    img = _try_decode(fixed[:max(window)])
             if img is not None:
                 results.append(ImageInfo(
                     offset=idx, format="GIF", width=img.size[0], height=img.size[1],
