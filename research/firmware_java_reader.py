@@ -54,22 +54,36 @@ Three independent things can be recovered straight from the raw bytes:
    reference firmware) -- the DEFLATE stream reaches a structurally
    valid end-of-stream (`eof=True`) for all of them, but several
    produce a class file CFR can't parse (corrupted-looking constant
-   pool). Rigorously ruled out: a shared preset dictionary (output is
-   byte-identical with several real candidate dictionaries AND with
-   none at all), a wrong wbits/offset (only raw deflate at the exact
-   computed offset decodes at all), and a decoder implementation bug
-   (Python's zlib and Java's own java.util.zip.Inflater, run on the
-   exact same compressed bytes, produce byte-for-byte identical
-   output). The decompressed bytes themselves show a long, completely
-   correct run of real content before degrading into short repeating
-   fragments at one specific point -- the classic signature of an LZ77
-   back-reference reading from the wrong position, most consistent with
-   a premature BFINAL bit in the original ~2000s-era packaging tool's
-   own encoder (a real, documented class of encoder bugs from that
-   era), not a dictionary or decoding problem. Fixing this for real
-   would need a bit-level DEFLATE block parser to locate and clear that
-   bit and continue decoding into the remainder -- not implemented
-   here. Like `find_class_files`, raw `PK\x03\x04` signature hits are
+   pool / bytecode). Rigorously ruled out, in order: a shared preset
+   dictionary (output is byte-identical with several real candidate
+   dictionaries AND with none at all); a wrong wbits/offset (only raw
+   deflate at the exact computed offset decodes at all); a decoder
+   implementation bug (Python's zlib and Java's own
+   java.util.zip.Inflater, run on the exact same compressed bytes,
+   produce byte-for-byte identical output); and a premature BFINAL bit
+   (this project's own earlier working theory) -- a from-scratch,
+   instrumented, bit-level raw-DEFLATE decoder (independent of
+   zlib/Inflater, logging every block header and LZ77 symbol) shows
+   every one of these entries is exactly ONE single, legitimately
+   BFINAL=1 block from the first 3 bits of the stream -- there is no
+   hidden 2nd block, and decoding itself is 100% clean and in-bounds
+   end to end. The corruption is already present inside the correctly
+   -decompressed bytes themselves (e.g. two literal bytes 'e', 0x00
+   appearing mid-string in an otherwise perfectly real UTF8 class-path
+   constant), which a lossless decoder could only emit if they were
+   genuinely present in the compressor's input -- ruling out a
+   decompression bug entirely. It's reproducible byte-for-byte across
+   unrelated firmware builds (same class, same corrupted bytes, same
+   offset, in both `5238_MOD_C3_C4` and the much older `3890` release),
+   ruling out storage bit-rot. The damage is small and localized, not
+   systemic -- e.g. Mp3ActionEvent.class's entire 30-entry constant
+   pool decodes perfectly; CFR's out-of-range constant-pool-index
+   errors (seen in the 15,000-30,000 range across different classes)
+   trace to inside the method bytecode that follows, not the constant
+   pool, hinting these may be leftover references into Jeode's larger
+   shared/global romizer string table rather than random noise -- see
+   the wiki page for the full diagnosis and a concrete next step. Like
+   `find_class_files`, raw `PK\x03\x04` signature hits are
    mostly coincidental collisions (123 raw hits; loosening every filter
    still only finds 7 that fully validate, though checking the OTHER
    30 candidates' names shows they're real too -- e.g.
