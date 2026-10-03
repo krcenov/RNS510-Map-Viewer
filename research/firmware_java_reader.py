@@ -126,8 +126,21 @@ Three independent things can be recovered straight from the raw bytes:
    module's standard-JVM-spec assumptions don't know about -- though
    the patent is architectural, not an implementation spec (no opcode
    byte value or index format given), so it doesn't hand over a
-   working decoder. See the wiki page for the full per-class
-   breakdown. Like
+   working decoder. The decisive evidence came from comparing the SAME
+   class across the 21 independent firmware builds in this repo:
+   BTPremiumItem.class is byte-for-byte IDENTICAL in all 21 (its
+   "garbage" header is perfectly reproducible, not corruption by any
+   reasonable definition), and Mp3ActionEvent.class/
+   TIPlayer$ActivationMode.class each diverge from each other at
+   almost the exact same byte in every build despite wildly different
+   total sizes per build (each class's real implementation evidently
+   changed release to release). With 20+ independent data points,
+   random damage is implausible -- this is a fixed, per-class,
+   build-independent cutoff baked into whatever process has generated
+   every release of this firmware for over a decade, most likely a
+   fixed-size per-class allocation computed once and never revisited
+   even as the class grew. See the wiki page for the full breakdown.
+   Like
    `find_class_files`, raw `PK\x03\x04` signature hits are
    mostly coincidental collisions (123 raw hits; loosening every filter
    still only finds 7 that fully validate, though checking the OTHER
