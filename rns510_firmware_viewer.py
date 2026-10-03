@@ -223,7 +223,8 @@ class FirmwareViewerApp:
 
         self.screen_listbox.delete(0, tk.END)
         for info in images:
-            self.screen_listbox.insert(tk.END, f"0x{info.offset:x}  {info.width}x{info.height}")
+            flag = "  [partial]" if info.partial else ""
+            self.screen_listbox.insert(tk.END, f"0x{info.offset:x}  {info.width}x{info.height}{flag}")
         if images and ImageTk is None:
             messagebox.showwarning(
                 "Pillow not installed",

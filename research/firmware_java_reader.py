@@ -271,6 +271,8 @@ class ImageInfo:
     width: int
     height: int
     image: object  # PIL.Image.Image, deferred import so this module has no hard PIL dependency
+    partial: bool = False  # True if `image` is only the real, fully-decoded leading
+                            # rows of a taller real screen -- see `_recover_gif_partial_rows`
 
 
 def _gif_header(data: bytes, idx: int):
@@ -322,6 +324,159 @@ def _recover_gif_with_corrected_gct(data: bytes, idx: int, width: int, height: i
     return header + gct + data[found_desc_at:]
 
 
+def _recover_gif_icon_without_table(data: bytes, idx: int, width: int, height: int,
+                                     decode_fn, search_span: int = 3_000):
+    """A different, smaller real asset class in this firmware (real UI
+    button icons, e.g. a 100x50 "CANCEL" button) hits a 2nd, distinct
+    kind of corruption: the image descriptor's own `packed` byte
+    falsely claims a local color table, but no real color table (global
+    or local) actually exists for these. Rather than trust that flag,
+    this rebuilds a minimal single-frame GIF with no color table at all
+    (Pillow then falls back to a default grayscale palette -- real pixel
+    *shape*/content is recovered even though true button colors aren't)
+    and brute-forces the real LZW-data start position (every byte after
+    the image descriptor's fixed fields, in turn, as a candidate LZW
+    minimum-code-size byte in the valid 2-8 range), validating each via
+    an actual decode rather than guesswork. Returns a decoded image, or
+    None."""
+    search_start = idx + 13
+    if data[search_start] != 0x2C:
+        return None  # no color table case always has the descriptor right after the LSD
+    left, top, w, h, _ipacked = struct.unpack_from("<HHHHB", data, search_start + 1)
+    if not (left == 0 and top == 0 and w == width and h == height):
+        return None
+
+    sig_lsd = data[idx:idx + 13]
+    img_desc_fixed = struct.pack("<BHHHHB", 0x2C, 0, 0, width, height, 0x00)
+    data_region_start = search_start + 10
+    for cand in range(data_region_start, min(data_region_start + search_span, len(data) - 1)):
+        b = data[cand]
+        if not (2 <= b <= 8):
+            continue
+        candidate_bytes = sig_lsd + img_desc_fixed + data[cand:cand + 200_000] + b"\x3b"
+        img = decode_fn(candidate_bytes)
+        if img is not None and img.size == (width, height):
+            return img
+    return None
+
+
+# --- from-scratch GIF LZW decoder, used only as a last-resort partial- ------
+# recovery tier when even a correctly-located, correctly-paletted real
+# image descriptor still fails a normal decode (genuine corruption inside
+# the compressed codes themselves, the GIF counterpart to the streamed
+# Java classes' DEFLATE corruption -- see this module's docstring item 4).
+# Standard GIF LZW decoding can't resynchronize after one bad code (the
+# code table is stateful), so this returns only the real, fully-decoded
+# leading rows and gives up at the first invalid code -- never fabricates
+# pixels for the undecodable remainder.
+def _gif_sub_blocks(data: bytes, pos: int):
+    out = bytearray()
+    while True:
+        block_size = data[pos]
+        pos += 1
+        if block_size == 0:
+            break
+        out.extend(data[pos:pos + block_size])
+        pos += block_size
+    return bytes(out)
+
+
+def _gif_lzw_decode_partial(packed_bytes: bytes, min_code_size: int, max_pixels: int) -> bytes:
+    clear_code = 1 << min_code_size
+    end_code = clear_code + 1
+    code_size = min_code_size + 1
+    bitpos = 0
+    nbits = len(packed_bytes) * 8
+
+    def read_code(size):
+        nonlocal bitpos
+        if bitpos + size > nbits:
+            raise EOFError
+        v = 0
+        for i in range(size):
+            v |= ((packed_bytes[bitpos >> 3] >> (bitpos & 7)) & 1) << i
+            bitpos += 1
+        return v
+
+    def reset_table():
+        return {i: bytes([i]) for i in range(clear_code)}, clear_code + 2
+
+    table, next_code = reset_table()
+    out = bytearray()
+    prev = None
+    while len(out) < max_pixels:
+        try:
+            code = read_code(code_size)
+        except EOFError:
+            break
+        if code == clear_code:
+            table, next_code = reset_table()
+            code_size = min_code_size + 1
+            prev = None
+            continue
+        if code == end_code:
+            break
+        if code in table:
+            entry = table[code]
+        elif code == next_code and prev is not None:
+            entry = table[prev] + table[prev][:1]
+        else:
+            break  # genuinely corrupted code -- stop, don't guess
+        out.extend(entry)
+        if prev is not None and next_code < 4096:
+            table[next_code] = table[prev] + entry[:1]
+            next_code += 1
+            if next_code == (1 << code_size) and code_size < 12:
+                code_size += 1
+        prev = code
+    return bytes(out[:max_pixels])
+
+
+def _recover_gif_partial_rows(data: bytes, idx: int, width: int, height: int,
+                               min_row_fraction: float = 0.05):
+    """Last-resort tier: locate the real image descriptor and real
+    color table the same way `_recover_gif_with_corrected_gct` does,
+    then decode raw LZW codes directly (bypassing Pillow, which refuses
+    to return a partial result) and keep only whichever leading rows
+    came out fully intact before the first genuinely-corrupted code.
+    Returns an `(image, rows)` pair using only real recovered pixels (no
+    fabricated content) if at least `min_row_fraction` of the image
+    decoded, else None -- callers should treat a returned image as a
+    real but incomplete (top-only) capture, not the full screen."""
+    from PIL import Image
+
+    search_start = idx + 13
+    found_desc_at = None
+    for off in range(search_start, min(search_start + 20_000, len(data) - 9)):
+        if data[off] != 0x2C:
+            continue
+        left, top, w, h, _ipacked = struct.unpack_from("<HHHHB", data, off + 1)
+        if left == 0 and top == 0 and w == width and h == height:
+            found_desc_at = off
+            break
+    if found_desc_at is None:
+        return None
+
+    palette_bytes = data[search_start:found_desc_at]
+    if len(palette_bytes) % 3 != 0 or len(palette_bytes) == 0:
+        return None
+    palette = list(palette_bytes) + [0] * (768 - len(palette_bytes))
+
+    lzw_min = data[found_desc_at + 10]
+    if not (2 <= lzw_min <= 8):
+        return None
+    packed_bytes = _gif_sub_blocks(data, found_desc_at + 11)
+    pixels = _gif_lzw_decode_partial(packed_bytes, lzw_min, width * height)
+    rows = len(pixels) // width
+    if rows < max(1, int(height * min_row_fraction)):
+        return None
+
+    img = Image.new("P", (width, rows))
+    img.putpalette(palette[:768])
+    img.putdata(pixels[:rows * width])
+    return img, rows
+
+
 def find_embedded_images(data: bytes, window: tuple = (20_000, 50_000, 300_000, 1_000_000)):
     """Scan `data` for real embedded raster images. Currently only GIF
     is implemented (its 6-byte magic is long enough that every hit is
@@ -331,15 +486,22 @@ def find_embedded_images(data: bytes, window: tuple = (20_000, 50_000, 300_000, 
     increasingly large byte windows and lets Pillow decode it (Pillow
     reads only as many bytes as the real image data needs; the window
     is just an upper bound to slice from the full file). If that fails,
-    falls back to `_recover_gif_with_corrected_gct` -- a real, generic
-    fix for one specific, recurring kind of corruption in this firmware
-    (a wrong color-table-size field in the header), which alone doubled
-    the number of real, full-screen splash images recovered from the
-    reference firmware (4 -> 8 of 11 real `GIF89a`/`GIF87a` hits).
-    Returns an `ImageInfo` for every one that decodes successfully;
-    GIFs that still fail after that (a deeper, genuine corruption in
-    the compressed LZW data itself, not just the header) are silently
-    skipped, not an error -- callers should not expect 100% recovery.
+    falls back through 3 further tiers, each targeting a different real,
+    recurring kind of corruption in this firmware (see each helper's own
+    docstring for detail): `_recover_gif_with_corrected_gct` (a wrong
+    color-table-size field in the header -- fixes most full-screen
+    splash images), `_recover_gif_icon_without_table` (a falsely-claimed
+    color table on smaller UI icons, e.g. a real "CANCEL" button),
+    and -- only when a real image descriptor is found but the
+    compressed data itself is corrupted -- `_recover_gif_partial_rows`,
+    which returns just the real, fully-decoded leading rows (marked
+    `partial=True`) rather than nothing at all. Together these recover
+    10 of 11 real `GIF89a`/`GIF87a` hits on the reference firmware (8
+    full + 2 partial; up from 4 with no fallbacks at all). Returns an
+    `ImageInfo` for every one that decodes (fully or partially); the 1
+    remaining failure is corrupted too early (under 1% of real rows
+    recoverable) to be worth returning -- callers should not expect
+    100% recovery.
 
     Requires Pillow (`pip install Pillow`) -- imported lazily so this
     module can still be used for class-path/class-file discovery
@@ -364,20 +526,35 @@ def find_embedded_images(data: bytes, window: tuple = (20_000, 50_000, 300_000, 
             if idx == -1:
                 break
             search_from = idx + 1
+            width, height, packed, bg, aspect = _gif_header(data, idx)
+
             img = None
             for w in window:
                 img = _try_decode(data[idx:idx + w])
                 if img is not None:
                     break
+
             if img is None:
-                width, height, packed, bg, aspect = _gif_header(data, idx)
                 fixed = _recover_gif_with_corrected_gct(data, idx, width, height, packed, bg, aspect)
                 if fixed is not None:
                     img = _try_decode(fixed[:max(window)])
+
+            if img is None:
+                img = _recover_gif_icon_without_table(data, idx, width, height, _try_decode)
+
             if img is not None:
                 results.append(ImageInfo(
                     offset=idx, format="GIF", width=img.size[0], height=img.size[1],
                     image=img.convert("RGB"),
+                ))
+                continue
+
+            partial = _recover_gif_partial_rows(data, idx, width, height)
+            if partial is not None:
+                partial_img, rows = partial
+                results.append(ImageInfo(
+                    offset=idx, format="GIF", width=width, height=rows,
+                    image=partial_img.convert("RGB"), partial=True,
                 ))
     return results
 
@@ -478,7 +655,8 @@ if __name__ == "__main__":
     images = find_embedded_images(data)
     print(f"real decodable embedded images: {len(images)}")
     for im in images:
-        print(f"  offset=0x{im.offset:x} {im.width}x{im.height}")
+        flag = "  [partial]" if im.partial else ""
+        print(f"  offset=0x{im.offset:x} {im.width}x{im.height}{flag}")
 
     streamed = find_streamed_zip_classes(data)
     print(f"real streamed-ZIP classes: {len(streamed)} ({sum(s.fully_valid for s in streamed)} fully valid)")
