@@ -54,14 +54,30 @@ Three independent things can be recovered straight from the raw bytes:
    reference firmware) -- the DEFLATE stream reaches a structurally
    valid end-of-stream (`eof=True`) for all of them, but several
    produce a class file CFR can't parse (corrupted-looking constant
-   pool), consistent with a shared PRESET DICTIONARY being used for
-   this compression (common for many small, similar files) that this
-   reader does not yet supply/reconstruct. Like `find_class_files`,
-   raw `PK\x03\x04` signature hits are mostly coincidental collisions
-   (123 raw hits, only 7 validated real ones on the reference
-   firmware) -- this function validates each candidate (plausible
-   filename bytes, successful immediate decompression) before
-   returning it, the same discipline used for class-file recovery.
+   pool). Rigorously ruled out: a shared preset dictionary (output is
+   byte-identical with several real candidate dictionaries AND with
+   none at all), a wrong wbits/offset (only raw deflate at the exact
+   computed offset decodes at all), and a decoder implementation bug
+   (Python's zlib and Java's own java.util.zip.Inflater, run on the
+   exact same compressed bytes, produce byte-for-byte identical
+   output). The decompressed bytes themselves show a long, completely
+   correct run of real content before degrading into short repeating
+   fragments at one specific point -- the classic signature of an LZ77
+   back-reference reading from the wrong position, most consistent with
+   a premature BFINAL bit in the original ~2000s-era packaging tool's
+   own encoder (a real, documented class of encoder bugs from that
+   era), not a dictionary or decoding problem. Fixing this for real
+   would need a bit-level DEFLATE block parser to locate and clear that
+   bit and continue decoding into the remainder -- not implemented
+   here. Like `find_class_files`, raw `PK\x03\x04` signature hits are
+   mostly coincidental collisions (123 raw hits; loosening every filter
+   still only finds 7 that fully validate, though checking the OTHER
+   30 candidates' names shows they're real too -- e.g.
+   `ClimateControlAdapter.class`, `DvdPlayer.class` -- just blocked by
+   this same decompression issue) -- this function validates each
+   candidate (plausible filename bytes, successful immediate
+   decompression) before returning it, the same discipline used for
+   class-file recovery.
 
 Usage:
     with open("FHDD6.FLI", "rb") as f:
