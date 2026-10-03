@@ -83,13 +83,23 @@ Three independent things can be recovered straight from the raw bytes:
    unrelated firmware builds (same class, same corrupted bytes, same
    offset, in both `5238_MOD_C3_C4` and the much older `3890` release),
    ruling out storage bit-rot. The damage is small and localized, not
-   systemic -- e.g. Mp3ActionEvent.class's entire 30-entry constant
-   pool decodes perfectly; CFR's out-of-range constant-pool-index
-   errors (seen in the 15,000-30,000 range across different classes)
-   trace to inside the method bytecode that follows, not the constant
-   pool, hinting these may be leftover references into Jeode's larger
-   shared/global romizer string table rather than random noise -- see
-   the wiki page for the full diagnosis and a concrete next step. Like
+   systemic, but its position varies per class in a way that rules out
+   simpler theories: a full structural walk of all 6 failing classes
+   shows some (TIPlayer$ActivationMode) have a perfectly clean class
+   header (access_flags/this_class/super_class/interfaces_count) right
+   after a perfectly clean constant pool, with the real corruption only
+   showing up deeper inside a method's Code attribute; others
+   (Mp3ActionEvent.class, BTPremiumItem.class) have a fully clean
+   constant pool (independently re-confirmed for Mp3ActionEvent by
+   parsing it open-ended, ignoring the declared cp_count entirely, and
+   it still stops at the same byte -- ruling out a corrupted cp_count)
+   but garbage immediately in the header fields right after; and others
+   still (DefaultBTAudioPlayer.class and 2 more) break inside the
+   constant pool itself. Since it's not anchored to one structural
+   landmark, this looks less like a class-file-format issue and more
+   like a bug in whatever original tool carved each class's bytes out
+   of Jeode's one big romized blob -- see the wiki page for the full
+   per-class breakdown and a concrete next step. Like
    `find_class_files`, raw `PK\x03\x04` signature hits are
    mostly coincidental collisions (123 raw hits; loosening every filter
    still only finds 7 that fully validate, though checking the OTHER
