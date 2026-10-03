@@ -29,6 +29,14 @@ and label shown is computed live from whatever firmware file you open --
 nothing is hardcoded -- so the exact screen/icon/menu entries shown can
 vary firmware to firmware.
 
+File > Open Firmware accepts either a raw `.FLI` file (read whole, as
+before) or a firmware ISO directly -- for an ISO, the main apps image
+(`FHDD*.FLI`) is located and read straight out of the ISO's own byte
+range via `rns510_iso.py`'s existing `find_file()`/`open_file_ref()`,
+the same no-extraction pattern already used elsewhere in this project
+(e.g. `research/swl_5238_reader.py`): nothing is ever written to a
+separate extracted file on disk.
+
 Run with:
     py rns510_firmware_viewer.py
 """
@@ -67,7 +75,7 @@ class FirmwareViewerApp:
     def _build_menu(self):
         menubar = tk.Menu(self.root)
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Open Firmware (.FLI)...", command=self.open_firmware)
+        file_menu.add_command(label="Open Firmware (ISO or .FLI)...", command=self.open_firmware)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -445,16 +453,28 @@ class FirmwareViewerApp:
     # ------------------------------------------------------------------
     def open_firmware(self):
         path = filedialog.askopenfilename(
-            title="Open firmware (e.g. FHDD6.FLI)",
-            filetypes=[("Firmware image", "*.FLI *.fli"), ("All files", "*.*")],
+            title="Open firmware ISO (preferred) or a raw .FLI file",
+            filetypes=[
+                ("Firmware ISO", "*.iso *.ISO"),
+                ("Raw firmware image (.FLI)", "*.FLI *.fli"),
+                ("All files", "*.*"),
+            ],
         )
         if not path:
             return
         self.status.set(f"Loading {os.path.basename(path)}...")
 
         def work():
-            with open(path, "rb") as f:
-                data = f.read()
+            try:
+                if path.lower().endswith(".iso"):
+                    data, source_label = self._read_fli_from_iso(path)
+                else:
+                    with open(path, "rb") as f:
+                        data = f.read()
+                    source_label = os.path.basename(path)
+            except Exception as exc:  # noqa: BLE001
+                self.root.after(0, lambda: self._on_load_error(exc))
+                return
             class_paths = sorted(fjr.find_java_class_paths(data))
             classes = fjr.find_class_files(data)
             streamed = fjr.find_streamed_zip_classes(data)
@@ -462,11 +482,41 @@ class FirmwareViewerApp:
                 images = fjr.find_embedded_images(data)
             except ImportError:
                 images = []
-            self.root.after(0, lambda: self._on_loaded(data, class_paths, classes, streamed, images, path))
+            self.root.after(0, lambda: self._on_loaded(
+                data, class_paths, classes, streamed, images, source_label))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_loaded(self, data, class_paths, classes, streamed, images, path):
+    def _read_fli_from_iso(self, iso_path):
+        """Locate this disc family's main apps firmware image (a
+        `FHDD*.FLI`, see rns510_iso.find_file()'s own docstring for why
+        that pattern, not a hardcoded name) inside a firmware ISO and
+        read just ITS OWN byte range directly out of the ISO file --
+        no extraction to a separate file anywhere -- via rns510_iso.py's
+        existing find_file()/open_file_ref() (the same direct-from-ISO,
+        no-extraction pattern already used elsewhere in this project,
+        e.g. research/swl_5238_reader.py's find_screen_resolution()).
+        Returns `(data, source_label)`."""
+        import rns510_iso as riso
+        iso = riso.open_tolerant(iso_path)
+        try:
+            inner_path = riso.find_file(iso, "FHDD*.FLI")
+            if inner_path is None:
+                raise FileNotFoundError(
+                    "no FHDD*.FLI (the main apps firmware image) found inside this ISO"
+                )
+            ref = riso.open_file_ref(iso, inner_path, iso_path)
+        finally:
+            iso.close()
+        with riso.open_ref_or_path(ref) as f:
+            data = f.read()
+        return data, f"{os.path.basename(iso_path)} :: {inner_path}"
+
+    def _on_load_error(self, exc):
+        self.status.set(f"Failed to load firmware: {exc}")
+        messagebox.showerror("Failed to load firmware", str(exc))
+
+    def _on_loaded(self, data, class_paths, classes, streamed, images, source_label):
         self.data = data
         self.class_paths = class_paths
         # merge both real sources of decompilable classes; both expose .data,
@@ -502,7 +552,7 @@ class FirmwareViewerApp:
             )
 
         self.status.set(
-            f"{os.path.basename(path)}: {len(class_paths)} real Java class names, "
+            f"{source_label}: {len(class_paths)} real Java class names, "
             f"{len(self.classes)} decompilable classes ({len(classes)} standalone + "
             f"{len(streamed)} from streamed ZIP entries), {len(images)} real screens/images"
         )
