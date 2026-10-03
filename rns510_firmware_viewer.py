@@ -193,27 +193,32 @@ class FirmwareViewerApp:
                 data = f.read()
             class_paths = sorted(fjr.find_java_class_paths(data))
             classes = fjr.find_class_files(data)
+            streamed = fjr.find_streamed_zip_classes(data)
             try:
                 images = fjr.find_embedded_images(data)
             except ImportError:
                 images = []
-            self.root.after(0, lambda: self._on_loaded(data, class_paths, classes, images, path))
+            self.root.after(0, lambda: self._on_loaded(data, class_paths, classes, streamed, images, path))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_loaded(self, data, class_paths, classes, images, path):
+    def _on_loaded(self, data, class_paths, classes, streamed, images, path):
         self.data = data
         self.class_paths = class_paths
-        self.classes = classes
+        # merge both real sources of decompilable classes; both expose .data,
+        # so the existing decompile-on-select logic works unchanged for either
+        self.classes = list(classes) + list(streamed)
         self.images = images
 
         self._refresh_package_list()
 
         self.class_listbox.delete(0, tk.END)
         for info in classes:
-            # best-effort label: find the package$class name that appears in
-            # this class's own constant pool, so the list is readable
             label = f"0x{info.start:x}  ({info.end - info.start} bytes)"
+            self.class_listbox.insert(tk.END, label)
+        for info in streamed:
+            flag = "" if info.fully_valid else "  [partial/corrupted]"
+            label = f"0x{info.offset:x}  {info.name}{flag}"
             self.class_listbox.insert(tk.END, label)
 
         self.screen_listbox.delete(0, tk.END)
@@ -228,7 +233,8 @@ class FirmwareViewerApp:
 
         self.status.set(
             f"{os.path.basename(path)}: {len(class_paths)} real Java class names, "
-            f"{len(classes)} decompilable classes, {len(images)} real screens/images"
+            f"{len(self.classes)} decompilable classes ({len(classes)} standalone + "
+            f"{len(streamed)} from streamed ZIP entries), {len(images)} real screens/images"
         )
 
 

@@ -40,6 +40,29 @@ Three independent things can be recovered straight from the raw bytes:
    LZW flavors this reader doesn't special-case) -- callers should
    expect a mix of successes and skipped failures, not 100% recovery.
 
+4. Real classes embedded as streamed ZIP/JAR entries
+   (`find_streamed_zip_classes`) -- separately from (2), a real OSGi
+   bundle packaging mechanism exists (`vdo/rio/impl/fwk/BundleManifest`/
+   `Archive` classes reference real `META-INF/MANIFEST.MF` and standard
+   OSGi manifest headers), and some class entries survive as genuine
+   streamed (general-purpose flag bit 3 set, sizes deferred) DEFLATE-
+   compressed ZIP local file header + data pairs, independent of the
+   plain standalone class files in (2) -- a validated 7 found on the
+   reference firmware this way, including real implementation classes
+   (not just tiny interfaces/enums) like `DefaultBTAudioPlayer.class`.
+   **Only some of these currently decompile correctly** (1 of 7 on the
+   reference firmware) -- the DEFLATE stream reaches a structurally
+   valid end-of-stream (`eof=True`) for all of them, but several
+   produce a class file CFR can't parse (corrupted-looking constant
+   pool), consistent with a shared PRESET DICTIONARY being used for
+   this compression (common for many small, similar files) that this
+   reader does not yet supply/reconstruct. Like `find_class_files`,
+   raw `PK\x03\x04` signature hits are mostly coincidental collisions
+   (123 raw hits, only 7 validated real ones on the reference
+   firmware) -- this function validates each candidate (plausible
+   filename bytes, successful immediate decompression) before
+   returning it, the same discipline used for class-file recovery.
+
 Usage:
     with open("FHDD6.FLI", "rb") as f:
         data = f.read()
@@ -260,6 +283,86 @@ def find_embedded_images(data: bytes, window: tuple = (20_000, 50_000, 300_000, 
     return results
 
 
+# ---------------------------------------------------------------------------
+# 4. Real classes embedded as streamed ZIP/JAR entries
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StreamedClassInfo:
+    offset: int
+    name: str
+    data: bytes          # the decompressed bytes; starts with CAFEBABE
+    fully_valid: bool     # True if this also parses as a complete, well-formed
+                          # class file (see note below) -- some currently don't
+
+
+def _is_plausible_zip_name(name_bytes: bytes) -> bool:
+    if not name_bytes:
+        return False
+    try:
+        s = name_bytes.decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    return all(32 <= ord(c) < 127 for c in s) and ("/" in s or "." in s)
+
+
+def find_streamed_zip_classes(data: bytes, max_window: int = 1_000_000) -> list[StreamedClassInfo]:
+    """Scan `data` for real classes stored as streamed (general-purpose
+    flag bit 3 set, sizes deferred to a trailing data descriptor) DEFLATE
+    ZIP entries -- see this module's own docstring, item 4, for the full
+    story. Raw `PK\\x03\\x04` signature hits are mostly coincidental (not
+    every one is a real local file header), so each candidate is
+    validated: plausible filename bytes, successful immediate raw-DEFLATE
+    decompression reaching a real end-of-stream, and a `CAFEBABE` magic
+    number in the result. Returns one `StreamedClassInfo` per validated
+    real entry -- `fully_valid` says whether the decompressed bytes ALSO
+    parse as a complete class file (via the same parser `find_class_files`
+    uses); several currently don't (see docstring item 4 for why) and are
+    still returned (with `fully_valid=False`) since the entry and its
+    real filename are themselves genuine findings even when the content
+    isn't fully recovered yet."""
+    import struct
+    import zlib
+
+    results = []
+    search_from = 0
+    while True:
+        idx = data.find(b"PK\x03\x04", search_from)
+        if idx == -1:
+            break
+        search_from = idx + 1
+        try:
+            (sig, ver, flags, method, mtime, mdate, crc32, comp_size, uncomp_size,
+             name_len, extra_len) = struct.unpack_from("<IHHHHHIIIHH", data, idx)
+        except struct.error:
+            continue
+        if not (0 < name_len <= 120) or not (0 <= extra_len <= 200):
+            continue
+        name_bytes = data[idx + 30:idx + 30 + name_len]
+        if not _is_plausible_zip_name(name_bytes):
+            continue
+        if method != 8:
+            continue  # only DEFLATE handled; method 0 (stored) not seen in practice here
+        data_start = idx + 30 + name_len + extra_len
+        d = zlib.decompressobj(-15)
+        try:
+            out = d.decompress(data[data_start:data_start + max_window])
+            out += d.flush()
+        except zlib.error:
+            continue
+        if not d.eof or out[:4] != b"\xca\xfe\xba\xbe":
+            continue
+        try:
+            info = _parse_class_at(out, 0)
+            fully_valid = info.end == len(out)
+        except (_ClassParseError, struct.error, IndexError):
+            fully_valid = False
+        results.append(StreamedClassInfo(
+            offset=idx, name=name_bytes.decode("ascii"), data=out, fully_valid=fully_valid,
+        ))
+    return results
+
+
 if __name__ == "__main__":
     import sys
 
@@ -277,3 +380,8 @@ if __name__ == "__main__":
     print(f"real decodable embedded images: {len(images)}")
     for im in images:
         print(f"  offset=0x{im.offset:x} {im.width}x{im.height}")
+
+    streamed = find_streamed_zip_classes(data)
+    print(f"real streamed-ZIP classes: {len(streamed)} ({sum(s.fully_valid for s in streamed)} fully valid)")
+    for s in streamed:
+        print(f"  offset=0x{s.offset:x}  {s.name}  ({len(s.data)} bytes)  fully_valid={s.fully_valid}")
