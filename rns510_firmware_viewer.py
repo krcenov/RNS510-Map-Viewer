@@ -139,10 +139,29 @@ class FirmwareViewerApp:
 
         def work():
             import firmware_java_decompile as fjd
+            import firmware_java_reader as fjr
             try:
                 src = fjd.decompile_class(info.data)
             except Exception as exc:  # noqa: BLE001
                 src = f"decompilation failed: {exc}"
+            # for a partial/corrupted streamed class, the normal attempt above
+            # usually fails outright -- fall back to real signatures mined
+            # from its own intact constant pool (see reconstruct_class_signatures)
+            if not getattr(info, "fully_valid", True) and "Can't load the class" in src:
+                reconstructed = fjr.reconstruct_class_signatures(info)
+                if reconstructed is not None:
+                    try:
+                        recon_src = fjd.decompile_class(reconstructed)
+                        src = (
+                            "// NOTE: this class is only partially recovered (see the\n"
+                            "// wiki's Firmware-Embedded-Java-Application-Layer page).\n"
+                            "// Field/method SIGNATURES below are real, mined from this\n"
+                            "// class's own intact constant pool -- but there is no real\n"
+                            "// bytecode, so method bodies are fabricated stand-ins, not\n"
+                            "// the real implementation.\n\n" + recon_src
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
             self.root.after(0, lambda: self._show_source(src))
 
         threading.Thread(target=work, daemon=True).start()

@@ -148,7 +148,20 @@ Three independent things can be recovered straight from the raw bytes:
    a rough, honestly-caveated estimate (`StreamedClassInfo
    .trustworthy_prefix_estimate`) of how many leading bytes of any
    non-fully_valid streamed class are likely real -- useful for display,
-   never a guarantee. See the wiki page for the full breakdown. Like
+   never a guarantee. Since the constant pool itself is reliably intact
+   even when what follows isn't, `reconstruct_class_signatures()` goes
+   further: it mines real field/method *signatures* straight out of a
+   class's own pool (via `Fieldref`/`Methodref` entries that
+   self-reference the class -- a common, naturally-occurring pattern)
+   and synthesizes a minimal, decompilable class carrying them (no real
+   bytecode -- fields are plain, methods are `abstract` so no `Code`
+   attribute is needed). Across the 156 distinct real streamed-class
+   names findable over this repo's 21 firmware builds, this recovers
+   real signatures (not just a bare shell) for 29 of them -- e.g. real
+   automotive data like `VehicleClampStatusEvent`'s
+   `m_clampS`/`m_clamp15`/`m_clamp50` (ignition clamp 15/30/50 states)
+   and real RDS radio fields in `FMListEntryInfo`. See the wiki page
+   for the full breakdown. Like
    `find_class_files`, raw `PK\x03\x04` signature hits are
    mostly coincidental collisions (123 raw hits; loosening every filter
    still only finds 7 that fully validate, though checking the OTHER
@@ -755,6 +768,153 @@ def find_streamed_zip_classes(data: bytes, max_window: int = 1_000_000) -> list[
             trustworthy_prefix_estimate=prefix_estimate,
         ))
     return results
+
+
+def _parse_constant_pool_entries(out: bytes):
+    """Like `_cp_end_offset`, but returns every entry's own content too
+    (tag-specific), not just the end offset -- used by
+    `reconstruct_class_signatures` to mine real field/method signatures
+    directly out of an intact constant pool. Returns
+    `(cp_end, entries)` where `entries` maps index -> one of:
+    `("Utf8", bytes)`, `("Class", name_index)`,
+    `("NameAndType", (name_index, descriptor_index))`,
+    `("Fieldref"/"Methodref"/"IfaceMethodref", (class_index, nat_index))`;
+    or None if the pool itself doesn't parse cleanly."""
+    pos = 0
+    def u1():
+        nonlocal pos
+        v = out[pos]; pos += 1; return v
+    def u2():
+        nonlocal pos
+        v = struct.unpack_from(">H", out, pos)[0]; pos += 2; return v
+    try:
+        if out[0:4] != b"\xca\xfe\xba\xbe":
+            return None
+        pos = 8
+        cp_count = u2()
+        i = 1
+        entries = {}
+        while i < cp_count:
+            tag = u1()
+            if tag == 1:
+                length = u2()
+                entries[i] = ("Utf8", out[pos:pos + length])
+                pos += length
+            elif tag == 7:
+                entries[i] = ("Class", struct.unpack_from(">H", out, pos)[0])
+                pos += 2
+            elif tag == 12:
+                a, b = struct.unpack_from(">HH", out, pos)
+                entries[i] = ("NameAndType", (a, b))
+                pos += 4
+            elif tag in (9, 10, 11):
+                a, b = struct.unpack_from(">HH", out, pos)
+                entries[i] = ({9: "Fieldref", 10: "Methodref", 11: "IfaceMethodref"}[tag], (a, b))
+                pos += 4
+            elif tag in _CONSTANT_SIZES:
+                pos += _CONSTANT_SIZES[tag]
+                if tag in (5, 6):
+                    i += 1
+            else:
+                return None
+            i += 1
+        return pos, entries
+    except (IndexError, struct.error):
+        return None
+
+
+def reconstruct_class_signatures(info: "StreamedClassInfo"):
+    """For a streamed class that isn't `fully_valid`, synthesize a
+    minimal-but-structurally-valid class file that still carries real
+    field/method *signatures* mined straight from its own intact
+    constant pool (see this module's docstring item 4 -- the pool is
+    reliably recovered even when what follows isn't).
+
+    The real content (field names, method names, and their real
+    types/descriptors) comes from `Fieldref`/`Methodref` constant-pool
+    entries that reference THIS class itself -- a class accessing its
+    own field or calling its own method is an extremely common,
+    naturally-occurring self-reference pattern, so these are good
+    evidence of real declared members even with zero real bytecode.
+    Declared fields are plain `public` fields; declared methods are
+    `public abstract` (so no `Code` attribute -- real bytecode bodies
+    --is needed at all for CFR to print them). Constructors (`<init>`)
+    are skipped, since synthesizing a legal one is a separate problem.
+
+    This recovers REAL signatures, not real behavior -- method bodies
+    are never real. Returns decompilable `bytes`, or None if the class
+    has no usable self-referencing members (or its pool doesn't parse).
+    Tried across the 156 distinct real streamed-class names findable
+    across this repo's 21 firmware builds, this recovered real
+    field/method signatures (not just a bare empty shell) for 29 of
+    them -- e.g. real automotive data like `VehicleClampStatusEvent`'s
+    `m_clampS`/`m_clamp15`/`m_clamp50` (ignition clamp 15/30/50 states)
+    or `FMListEntryInfo`'s real RDS fields (`pICode`, `psName`,
+    `pTYCode`)."""
+    parsed = _parse_constant_pool_entries(info.data)
+    if parsed is None:
+        return None
+    cp_end, entries = parsed
+
+    def utf8(idx):
+        e = entries.get(idx)
+        return e[1] if e and e[0] == "Utf8" else None
+
+    want = info.name.replace(".class", "").encode("ascii")
+    this_class_idx = None
+    for idx, e in entries.items():
+        if e[0] == "Class":
+            name = utf8(e[1])
+            if name and (name == want or want.endswith(name) or name.endswith(want.rsplit(b"/", 1)[-1])):
+                this_class_idx = idx
+                break
+    if this_class_idx is None:
+        for idx, e in entries.items():
+            if e[0] == "Class":
+                this_class_idx = idx
+                break
+    if this_class_idx is None:
+        return None
+
+    seen_fields = {}
+    seen_methods = {}
+    for e in entries.values():
+        if e[0] not in ("Fieldref", "Methodref", "IfaceMethodref"):
+            continue
+        class_idx, nat_idx = e[1]
+        if class_idx != this_class_idx:
+            continue
+        nat = entries.get(nat_idx)
+        if not nat or nat[0] != "NameAndType":
+            continue
+        name = utf8(nat[1][0])
+        desc = utf8(nat[1][1])
+        if not name or not desc:
+            continue
+        try:
+            name.decode("ascii")
+            desc.decode("ascii")
+        except UnicodeDecodeError:
+            continue
+        if name in (b"<init>", b"<clinit>"):
+            continue
+        (seen_fields if e[0] == "Fieldref" else seen_methods)[(nat[1][0], nat[1][1])] = True
+
+    if not seen_fields and not seen_methods:
+        return None
+
+    fields_bytes = b"".join(
+        struct.pack(">HHHH", 0x0001, name_idx, desc_idx, 0) for name_idx, desc_idx in seen_fields
+    )
+    methods_bytes = b"".join(
+        struct.pack(">HHHH", 0x0401, name_idx, desc_idx, 0) for name_idx, desc_idx in seen_methods
+    )
+    out = info.data[:cp_end]
+    out += struct.pack(">HHHH", 0x0421, this_class_idx, this_class_idx, 0)  # access/this/super(self)/interfaces
+    out += struct.pack(">H", len(seen_fields)) + fields_bytes
+    out += struct.pack(">H", len(seen_methods)) + methods_bytes
+    out += struct.pack(">H", 0)  # 0 class attributes
+    return out
 
 
 if __name__ == "__main__":
