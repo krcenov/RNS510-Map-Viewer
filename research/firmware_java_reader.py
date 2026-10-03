@@ -114,7 +114,19 @@ Three independent things can be recovered straight from the raw bytes:
    format (itself apparently LZ-style, given the repeating fragments)
    being imperfectly reconstructed by whatever tool produced these
    per-class entries, reliably recovering only roughly the first
-   100-500 bytes of each. See the wiki page for the full per-class
+   100-500 bytes of each. A later pass found real, external grounding
+   for *why* standard-JVM parsing breaks down at all: Insignia
+   Solutions (Jeode's maker) holds an actual patent, US7240341B2,
+   "Global constant pool to allow deletion of constant pool entries",
+   describing exactly this -- common constants moved out of each
+   class's own pool into one shared global pool, with references
+   rewritten to a new opcode (its own example: `LDC 14` -> `LDCG 523`)
+   and the original local entry deleted. That turns "mysterious
+   out-of-range index" into a specific, real, named mechanism this
+   module's standard-JVM-spec assumptions don't know about -- though
+   the patent is architectural, not an implementation spec (no opcode
+   byte value or index format given), so it doesn't hand over a
+   working decoder. See the wiki page for the full per-class
    breakdown. Like
    `find_class_files`, raw `PK\x03\x04` signature hits are
    mostly coincidental collisions (123 raw hits; loosening every filter
