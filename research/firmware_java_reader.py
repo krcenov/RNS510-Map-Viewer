@@ -226,6 +226,7 @@ class ClassFileInfo:
     cp_count: int
     fields_count: int
     methods_count: int
+    name: object = None  # this class's own real name (str), if resolvable; else None
 
 
 class _ClassParseError(Exception):
@@ -263,11 +264,17 @@ def _parse_class_at(data: bytes, start: int) -> ClassFileInfo:
 
     cp_count = u2()
     i = 1
+    utf8_entries = {}
+    class_entries = {}
     while i < cp_count:
         tag = u1()
         if tag == 1:
             length = u2()  # already advances pos past the length field itself
+            utf8_entries[i] = data[pos:pos + length]
             pos += length  # now skip the UTF8 payload on top
+        elif tag == 7:
+            class_entries[i] = struct.unpack_from(">H", data, pos)[0]
+            pos += _CONSTANT_SIZES[tag]
         elif tag in _CONSTANT_SIZES:
             pos += _CONSTANT_SIZES[tag]
             if tag in (5, 6):
@@ -276,7 +283,9 @@ def _parse_class_at(data: bytes, start: int) -> ClassFileInfo:
             raise _ClassParseError(f"unknown constant pool tag {tag} at index {i}")
         i += 1
 
-    pos += 2 + 2 + 2  # access_flags, this_class, super_class
+    pos += 2  # access_flags
+    this_class = u2()
+    pos += 2  # super_class
     interfaces_count = u2()
     pos += 2 * interfaces_count
 
@@ -301,10 +310,17 @@ def _parse_class_at(data: bytes, start: int) -> ClassFileInfo:
 
     skip_attributes()
 
+    name_bytes = utf8_entries.get(class_entries.get(this_class))
+    try:
+        name = name_bytes.decode("ascii") if name_bytes else None
+    except UnicodeDecodeError:
+        name = None
+
     return ClassFileInfo(
         start=start, end=pos, data=data[start:pos],
         major=major, minor=minor, cp_count=cp_count,
         fields_count=fields_count, methods_count=methods_count,
+        name=name,
     )
 
 

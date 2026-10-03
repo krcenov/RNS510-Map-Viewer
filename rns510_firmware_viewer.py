@@ -265,6 +265,24 @@ class FirmwareViewerApp:
         self.sim_splash_frame.pack_forget()
         self.sim_menu_frame.pack()
 
+    def _sim_find_decompilable(self, full_class_name):
+        """Return the index into self.classes/self.class_listbox of a
+        class (standalone or streamed) whose own real name matches
+        `full_class_name` (e.g. "vdo/rns/app/.../Foo.class"), or None."""
+        want_no_suffix = full_class_name[:-len(".class")]  # standalone ClassFileInfo.name has no ".class"
+        for i, info in enumerate(self.classes):
+            name = getattr(info, "name", None)
+            if name == full_class_name or name == want_no_suffix:
+                return i
+        return None
+
+    def _sim_open_class(self, class_index):
+        self.notebook.select(self.tab_classes)
+        self.class_listbox.selection_clear(0, tk.END)
+        self.class_listbox.selection_set(class_index)
+        self.class_listbox.see(class_index)
+        self._on_class_selected(None)
+
     def _sim_drill_into(self, name):
         self._sim_path.append(name)
         self._sim_render_menu_level()
@@ -276,12 +294,14 @@ class FirmwareViewerApp:
 
     def _sim_render_menu_level(self):
         """Render the menu grid for the real package path currently drilled
-        into (`self._sim_path`, segments under `vdo/rns/app/`) -- real
-        sub-package names become further drill-down buttons; once there
-        are no more sub-packages, the real leaf class names at that level
-        are shown as plain (non-interactive) labels, since that's as deep
-        as the real structural information goes without recovered
-        bytecode."""
+        into (`self._sim_path`, segments under `vdo/rns/app/`): real
+        sub-package names become further drill-down buttons, AND any real
+        classes declared directly at this same level (a package can
+        legitimately have both) are shown right below them -- as a plain
+        label, or as a clickable green button when that exact class also
+        happens to be one of the real decompilable ones found elsewhere
+        in this firmware. This is as deep as real structural information
+        goes without recovered navigation bytecode."""
         for child in self.sim_menu_grid.winfo_children():
             child.destroy()
 
@@ -305,34 +325,52 @@ class FirmwareViewerApp:
 
         entries = sorted(counts.items(), key=lambda kv: -kv[1])[:12]
         cols = 4
-        i = 0
-        for name, count in entries:
-            btn = tk.Button(
+        row = 0
+        for i, (name, count) in enumerate(entries):
+            tk.Button(
                 self.sim_menu_grid, text=f"{name}\n({count} real classes)",
                 width=14, height=3, bg="#2e2e2e", fg="white", activebackground="#444",
                 command=lambda n=name: self._sim_drill_into(n),
-            )
-            btn.grid(row=i // cols, column=i % cols, padx=8, pady=8)
-            i += 1
-
+            ).grid(row=i // cols, column=i % cols, padx=8, pady=8)
         if entries:
-            self.sim_status.set(f"{len(entries)} real sub-package(s) under vdo/{prefix.rstrip('/')}")
-            return
+            row = (len(entries) - 1) // cols + 1
 
+        decompilable = 0
         if leaf_classes:
+            if entries:
+                tk.Frame(self.sim_menu_grid, bg="#444", height=2).grid(
+                    row=row, column=0, columnspan=cols, sticky="we", pady=10)
+                row += 1
             shown = sorted(leaf_classes)[:20]
             for j, name in enumerate(shown):
-                tk.Label(self.sim_menu_grid, text=name, bg="#1c1c1c", fg="#cfe8ff",
-                         anchor="w", font=("Consolas", 10)).grid(
-                    row=j // 2, column=j % 2, sticky="w", padx=8, pady=2)
-            self.sim_status.set(
-                f"{len(leaf_classes)} real class(es) at vdo/{prefix.rstrip('/')} "
-                f"(leaf level -- no recovered logic to navigate further)"
-            )
-        else:
+                full_name = f"vdo/{prefix}{name}.class"
+                class_index = self._sim_find_decompilable(full_name)
+                if class_index is not None:
+                    decompilable += 1
+                    widget = tk.Button(
+                        self.sim_menu_grid, text=f"{name}  ▸ real source", anchor="w",
+                        bg="#28422d", fg="#9fd89f", font=("Consolas", 10), relief="flat",
+                        command=lambda ci=class_index: self._sim_open_class(ci),
+                    )
+                else:
+                    widget = tk.Label(self.sim_menu_grid, text=name, bg="#1c1c1c", fg="#cfe8ff",
+                                       anchor="w", font=("Consolas", 10))
+                widget.grid(row=row + j // 2, column=j % 2, columnspan=cols // 2,
+                            sticky="we", padx=8, pady=2)
+
+        if not entries and not leaf_classes:
             tk.Label(self.sim_menu_grid, bg="#1c1c1c", fg="white",
                      text="(no further real structure found here)").pack()
             self.sim_status.set("")
+            return
+
+        parts = []
+        if entries:
+            parts.append(f"{len(entries)} real sub-package(s)")
+        if leaf_classes:
+            extra = f" ({decompilable} with real recovered source, click to view)" if decompilable else ""
+            parts.append(f"{len(leaf_classes)} real class(es) here{extra}")
+        self.sim_status.set(" + ".join(parts) + f" under vdo/{prefix.rstrip('/')}")
 
     def _sim_populate(self):
         """(Re)build the simulator's boot screen, menu grid, and CANCEL
