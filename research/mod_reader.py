@@ -216,6 +216,39 @@ def extract_strings(path):
             for m in re.finditer(rb"[ -~]{2,}\x00", body)]
 
 
+def decode_field_descriptors(path):
+    """Per-field binary descriptor sitting between one field's own NUL-
+    terminated name and the NEXT field's name -- i.e. entry i's descriptor
+    trails extract_strings()[i], describing THAT field (not the one whose
+    name follows it). Shape: 2-byte tag, then a 4-byte LE width repeated
+    twice more as a 4-byte LE value (byte_width when the two copies
+    agree); for bit-packed fields byte_width reads 0 and the real size
+    lives in 2 more trailing bytes, [bit_width, bit_offset]. Returns a
+    list of dicts {"name", "byte_width", "bit_width", "bit_offset", "raw"}
+    parallel to extract_strings(), one shorter (the last string has no
+    following gap)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    body = data[HEADER_SIZE:]
+    matches = list(re.finditer(rb"[ -~]{2,}\x00", body))
+    out = []
+    for i in range(len(matches) - 1):
+        name = matches[i].group()[:-1].decode("ascii")
+        gap = body[matches[i].end():matches[i + 1].start()]
+        entry = {"name": name, "byte_width": None, "bit_width": None,
+                 "bit_offset": None, "raw": gap}
+        if len(gap) >= 10:
+            width = int.from_bytes(gap[2:6], "little")
+            width2 = int.from_bytes(gap[6:10], "little")
+            if width == width2:
+                entry["byte_width"] = width
+                if width == 0 and len(gap) >= 12:
+                    entry["bit_width"] = gap[10]
+                    entry["bit_offset"] = gap[11]
+        out.append(entry)
+    return out
+
+
 def extract_blocks(path):
     """Split the file's full string stream into (extension_tokens,
     field_names) blocks -- one per real table, in file order.
