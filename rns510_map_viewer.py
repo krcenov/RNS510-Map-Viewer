@@ -1128,11 +1128,20 @@ class SearchHit:
     def jump_span_deg(self, default_span):
         """Suggested half-span (degrees) to load/zoom to when jumping to
         this hit -- for a city, scaled to roughly fit its own bounding box;
-        for a road, the caller's layer-default span."""
+        for a road, scaled to roughly fit the matched segment's own real
+        geographic extent (`delta_lon`/`delta_lat` on the RoadRecord --
+        cracked via eeu.mod's schema, see wiki "eeu.rd" page: a bounding-box
+        width/height, median ~350m/mean ~1.1km real-world segment diagonal);
+        for anything else (POI/Sirius), the caller's layer-default span."""
         if self.kind == "city" and self.extra is not None:
             lon_min, lat_min, lon_max, lat_max = self.extra.bbox
             span = max(lon_max - lon_min, lat_max - lat_min) * 0.75
             return max(0.01, min(span, 2.0))
+        if self.kind == "road" and self.extra is not None:
+            delta_lon = getattr(self.extra, "delta_lon", 0.0)
+            delta_lat = getattr(self.extra, "delta_lat", 0.0)
+            span = max(delta_lon, delta_lat) * 2.0
+            return max(0.01, min(span, default_span))
         return default_span
 
 
