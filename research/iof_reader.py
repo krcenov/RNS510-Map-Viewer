@@ -242,11 +242,21 @@ What remains open
     common case, 0 or 1 (never checked past that) for confirmed anchors,
     and a long tail of other values (129-255) on a very small number of
     records not individually investigated.
-  - **Whether an anchor's own list is ordered by anything** (alphabetical,
-    distance, `.il`'s own on-disk order) was checked on a 100-record sample
-    and found NOT reliably alphabetically sorted (16/100) -- inconclusive,
-    a different ordering hypothesis (e.g. distance-from-anchor, or simply
-    `.il`'s own physical layout order for that area) was not tested.
+  - **Whether an anchor's own list is ordered by anything -- a still
+    later session, now COMPREHENSIVELY tested and REFUTED.** The earlier
+    100-record alphabetical check (16/100, inconclusive) is now joined by
+    5 more orderings, each tested on a real 60-anchor random sample
+    (count>=3 only, so a real sequence exists to check): distance from
+    the anchor's own real coordinate (ascending) -- 0/60; the list
+    entries' own `eeu.rd` index, both ascending and descending -- 0/60
+    each; compass bearing from the anchor -- 0/60; name length, both
+    ascending and descending -- 0/60 each. Every single plausible simple
+    ordering is cleanly refuted, not just weakly -- 0 exact matches out
+    of 60 for each, where even a real but noisy signal would show some
+    partial-match rate above the ~1/`count!` chance floor. The list
+    order is some other construction-time artifact (e.g. literally the
+    order entries were authored/inserted during the disc build) rather
+    than anything a reader can recover from the entries' own content.
 
 ============================================================================
 Practical use
