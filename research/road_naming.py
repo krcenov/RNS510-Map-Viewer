@@ -161,6 +161,7 @@ RD_HEADER_SIZE = 94
 RD_RECORD_SIZE = 67
 RD_LON_OFFSET = 8
 RD_LAT_OFFSET = 12
+RD_ROADINFO_OFFSET = 7   # bit 0 = highway (wiki eeu-rd-Road-Routing-Graph.md)
 RD_NAME_OFFSET = 24
 RD_NAME_SIZE = 43
 
@@ -290,7 +291,7 @@ class RdCache:
     over just the matching records -- fast enough to re-run on every
     pan/zoom settle rather than only once per session."""
 
-    __slots__ = ("body", "lon_i", "lat_i", "lon", "lat", "record_count")
+    __slots__ = ("body", "lon_i", "lat_i", "lon", "lat", "record_count", "highway")
 
     def __init__(self, rd_path):
         with _open(rd_path) as f:
@@ -303,6 +304,27 @@ class RdCache:
         self.lon = self.lon_i / 100000.0
         self.lat = self.lat_i / 100000.0
         self.record_count = n
+        self.highway = (arr[:, RD_ROADINFO_OFFSET] & 1).astype(bool)
+
+    def highway_names(self):
+        """Distinct real road names (same garbage-byte-clearing + void-type
+        numpy.unique() dedup as distinct_names(), filtered to self.highway
+        first) that have at least one record with the real, firmware-
+        confirmed `highway` bit set. Returns a Python set of str."""
+        n = self.record_count
+        arr = np.frombuffer(self.body, dtype=np.uint8, count=n * RD_RECORD_SIZE).reshape(n, RD_RECORD_SIZE)
+        name_cols = np.array(arr[self.highway, RD_NAME_OFFSET:RD_NAME_OFFSET + RD_NAME_SIZE])
+        is_zero = (name_cols == 0)
+        after_first_nul = np.cumsum(is_zero, axis=1) > 0
+        name_cols[after_first_nul] = 0
+        packed = np.ascontiguousarray(name_cols).view(np.dtype((np.void, RD_NAME_SIZE))).reshape(-1)
+        uniq_rows = np.unique(packed)
+        names = set()
+        for row in uniq_rows:
+            raw = row.tobytes().split(b"\x00", 1)[0]
+            if raw:
+                names.add(raw.decode("latin-1"))
+        return names
 
     def index_for_bbox(self, lon_min, lon_max, lat_min, lat_max, cell_deg=0.001):
         """Same contract/return type as build_rd_index(), but filters the

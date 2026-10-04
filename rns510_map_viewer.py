@@ -687,6 +687,13 @@ ROAD_COLOR_UNNAMED = "#d6cfba"   # unmatched/unlabeled connecting-roads LINES, b
 # fill color; connected-roads LINES (see "v9 -> v10") still use
 # ROAD_COLOR_MAJOR/ROAD_COLOR_UNNAMED by named/unnamed status, unaffected.
 DOT_COLOR = "#d32f2f"
+# Confirmed-highway color (this session): eeu.rd's own cracked `highway`
+# bit (wiki eeu-rd-Road-Routing-Graph.md) gives a REAL per-road signal,
+# not the n_vertices-based importance proxy every other dot/line below
+# still falls back to. A strong green reads as "confirmed real data",
+# distinct from every other color already in use (red dots, gold/gray
+# connected-roads lines, orange/blue predicted-divided overlay).
+HIGHWAY_COLOR = "#2e7d32"
 # "Show predicted divided (EXPERIMENTAL)" overlay colors (this session):
 # deliberately bright/saturated and unlike any other color already in use
 # on this screen, so a predicted-divided vs. predicted-non-divided road is
@@ -1551,6 +1558,12 @@ class MapData:
         # road_naming.RdCache.distinct_names()) up front on every "NAV"
         # screen open would be pure waste for that common case.
         self._street_name_index_global = None
+
+        # Confirmed-highway road names (eeu.rd's cracked `roadInfo` bit 0,
+        # see wiki eeu-rd-Road-Routing-Graph.md) -- built lazily on first
+        # _redraw() that needs it, same policy as street_name_index_global
+        # above (a single numpy.unique() pass over all 8.8M records).
+        self._highway_names = None
 
     # ------------------------------------------------------------- loading
 
@@ -3078,6 +3091,20 @@ class MapData:
         if self._street_name_index_global is None and self.rd_cache is not None:
             self._street_name_index_global = cty.PrefixNameIndex(self.rd_cache.distinct_names())
         return self._street_name_index_global
+
+    @property
+    def highway_names(self):
+        """Set of real road names with eeu.rd's cracked `highway` bit set
+        on at least one record (road_naming.RdCache.highway_names() --
+        validated: route-like names are 89.95% of records with this bit
+        set vs. 0.10% without, wiki eeu-rd-Road-Routing-Graph.md). Built
+        lazily on first access and cached on `self._highway_names`, same
+        policy as street_name_index_global above. `_redraw()` uses this to
+        give a confirmed highway a distinct color, instead of the
+        name-length-based importance proxy used for everything else."""
+        if self._highway_names is None and self.rd_cache is not None:
+            self._highway_names = self.rd_cache.highway_names()
+        return self._highway_names
 
     def street_enabled_next_chars(self, prefix):
         """Live "which next letters are possibly valid" query over the real
@@ -4762,7 +4789,13 @@ class App:
                     else:
                         edge_name = _name_at_point(feat.get("named_ranges"), a) or \
                             _name_at_point(feat.get("named_ranges"), b)
-                        if edge_name:
+                        highway_names = self.data.highway_names if self.data else None
+                        if edge_name and highway_names and edge_name in highway_names:
+                            # Real, cracked eeu.rd `highway` bit (not the
+                            # n_vertices-based proxy ROAD_COLOR_MAJOR below
+                            # still uses) -- see HIGHWAY_COLOR's own comment.
+                            line_color, line_width = HIGHWAY_COLOR, 2.2
+                        elif edge_name:
                             line_color, line_width = ROAD_COLOR_MAJOR, 1.6
                         else:
                             line_color, line_width = ROAD_COLOR_UNNAMED, 1.0
