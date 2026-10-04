@@ -683,6 +683,28 @@ future session -- see `research/mod_reader.py`'s `extract_blocks()` with
 token `['fea']` for the complete, ordered field list to work from
 directly.
 
+**A still later session's first concrete attempt at this, inconclusive
+-- mild new evidence toward reconciliation (c) above**: located Iasi's
+own name table precisely inside its 15,687-byte decompressed entry
+(`scan_entry_for_names`'s `(names, end_pos)` return, start at byte
+1336) and inspected the 20 bytes immediately before it, the natural
+place for a `FeatureDataHeader`/geometry block per the schema's own
+field order. Interpreted naively as `category(1)/type(1)/flags(1)/
+feaPointCnt(1)`, the 4th byte reads 7 -- implausible for Iasi (a single
+city label should be a 1-point `point` feature, not a 7-point one) --
+and no int16 LE/BE value in that 20-byte window, scaled by /100000,
+produces anything resembling a small, plausible delta (mostly noise,
+plus a few `0x8000`/`128` values that look like sentinels, not
+coordinates). This doesn't refute the delta-coordinate theory itself
+(the chosen anchor point -- immediately before the name table -- was a
+guess, not derived from the schema), but is a small, real data point
+against "Iasi's own geometry sits directly adjacent to its name table
+in this file's physical layout," and toward reconciliation (c): this
+entry may simply not carry point geometry for Iasi at all. A proper
+test needs a real sub-record walker (respecting `feaPointCnt`-driven
+variable lengths) to reliably isolate which bytes, if any, are a given
+named place's own geometry block -- not yet built.
+
 ============================================================================
 Usage
 ============================================================================
