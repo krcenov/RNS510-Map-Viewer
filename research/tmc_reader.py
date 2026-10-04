@@ -262,7 +262,34 @@ trusting a "mostly constant" finding on this disc):
                                value range actually observed -- not a real
                                signal, just coincidental collisions. Neither
                                hypothesis holds; bytes[1]/[3]'s real meaning
-                               remains open.
+                               remains open. **A new, untested lead (same
+                               later session that cracked byte[2]/byte[4],
+                               not yet followed up)**: byte[1]'s high
+                               nibble is NOT uniform like byte[2]'s arm
+                               candidate -- it decays roughly
+                               geometrically from ~26,000 (nibble=0) down
+                               to ~14,000 (nibble=15), while its own LOW
+                               nibble IS roughly uniform (~19,000-20,400
+                               each) -- the classic shape of a HIGH byte
+                               of a larger little-endian value with a
+                               real-world-skewed (smaller-is-commoner)
+                               distribution, i.e. consistent with byte[1]
+                               being (part of) `vseg_id` itself, with
+                               byte[3] -- whose own nibble split is noisier,
+                               not yet characterized -- as a candidate low
+                               byte. Separately, byte[7] (41 distinct
+                               values) splits into a high nibble
+                               overwhelmingly concentrated at 8/9/10
+                               (~97% of records) and a low nibble
+                               concentrated at 8/9 (~82%) -- the classic
+                               shape of a small value stored with an
+                               "excess-8" bias (centered near 0 after
+                               subtracting 8), worth checking against
+                               `exploration_point`-style small signed
+                               deltas even though minimal records (by
+                               construction) have 0 real exploration
+                               points -- so if real, it's some OTHER
+                               small signed field, not that one.
     byte[2]                -- **CRACKED (a later session): two independent
                                bit-packed sub-fields, not one 3-byte blob**.
                                `eeu.mod`'s schema lists `start` and `vseg_id`
@@ -303,13 +330,36 @@ trusting a "mostly constant" finding on this disc):
                                external ground truth checked against yet)
                                but the BIT-LEVEL SPLIT ITSELF is exact,
                                not just a trend. See `decode_segment_chain_byte2()`.
-    byte[4]                -- ALSO high entropy (96 distinct values, top
-                               value only 5.3% of records) -- CORRECTED:
-                               NOT mostly-constant (see note above). Bit 7
-                               is a real ~50/50 binary flag (candidate
-                               `side`), but the byte's low 7 bits are
-                               high-entropy too, more like a 3rd ID/value
-                               byte than a small enum
+    byte[4]                -- 96 distinct values total (= 6 x 16 --
+                               matches the crack below exactly). **High
+                               nibble CRACKED (a later session), same
+                               shape as byte[2]**: only 6 discrete values
+                               ever occur, `{0,1,2,8,9,10}` -- zero
+                               violations across all 310,888 real minimal
+                               records -- i.e. exactly `(flag << 3) |
+                               val3` with `flag` a real ~50/50 binary bit
+                               (matches the earlier "bit 7" observation)
+                               and `val3` ANOTHER 3-valued field (0,1,2)
+                               with a marginal distribution
+                               (~65.6%/32.7%/1.7%) nearly IDENTICAL to
+                               byte[2]'s own "side" candidate -- yet
+                               statistically INDEPENDENT of it (cross
+                               -tabulated: side's own proportions stay
+                               ~65/33/2% at every val3 value, and vice
+                               versa). Two different 3-valued fields
+                               sharing almost the same real-world
+                               distribution, but provably not the same
+                               information twice, is consistent with a
+                               matched START/END pair -- `eeu.mod`'s
+                               `exception: {start_exception_arm_no,
+                               start_exception_valid, end_exception_
+                               arm_no, end_exception_valid}` is the
+                               obvious candidate structure, though which
+                               specific sub-field maps to which bit
+                               isn't confirmed. The byte's LOW nibble (16
+                               genuinely distinct, uneven values) is not
+                               yet cracked. See
+                               `decode_segment_chain_byte4()`.
     byte[5]                -- 58 distinct values, POWER-LAW distributed:
                                78.6% == 1, decaying sharply up to 106 --
                                ROBUST at full scale, matches real-world
@@ -449,3 +499,21 @@ def decode_segment_chain_byte2(chain_bytes):
     does -- the minimum real size is 8)."""
     b2 = chain_bytes[2]
     return b2 >> 4, b2 & 0x0F
+
+
+def decode_segment_chain_byte4(chain_bytes):
+    """The first `segment_chain`'s byte[4] HIGH NIBBLE (CRACKED -- 2
+    independent bit-packed sub-fields, same shape as byte[2], see module
+    docstring): returns `(flag, val3)` where `flag` is a real ~50/50
+    binary bit (byte[4]'s own bit 7) and `val3` is a 2nd, separate
+    3-valued field (0, 1, or 2 in all real data -- zero violations) with
+    a marginal distribution close to byte[2]'s own "side" candidate but
+    statistically INDEPENDENT of it -- consistent with a matched
+    START/END pair (candidate: `eeu.mod`'s `exception` sub-structure),
+    not confirmed. The byte's LOW nibble is not yet cracked (not
+    returned here). `chain_bytes` is a location's own raw p_bytes/n_bytes
+    (from read_location_chain_bytes() or a slice of `data`); must have
+    at least 5 bytes (every non-empty chain record does -- the minimum
+    real size is 8)."""
+    hi4 = chain_bytes[4] >> 4
+    return (1 if hi4 >= 8 else 0), hi4 & 0x03
