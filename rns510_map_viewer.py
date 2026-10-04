@@ -4309,6 +4309,20 @@ class App:
         hit = self.search_results[sel[0]]
         self._update_breadcrumb_from_hit(hit)
         self._jump_to(hit.lon, hit.lat, span_deg=hit.jump_span_deg(DEFAULT_JUMP_SPAN_DEG))
+        if hit.kind == "road":
+            # Nearby-streets lookup (eeu.iof/.il, MapData.nearby_streets_
+            # for_point()) only needs rd_cache/search_project -- both
+            # already resident, independent of the async tile load
+            # _jump_to() just kicked off -- so this runs synchronously,
+            # right here, rather than racing _jump_to()'s own done()
+            # callback for the status bar. Previously this lookup only
+            # fired after a map click (on_canvas_click's point-pick path);
+            # a road SEARCH result jump never surfaced it even though the
+            # data was equally available. Silent no-op if this road isn't
+            # near a real eeu.iof anchor -- same "bonus enrichment" design
+            # as the click path, see _append_nearby_streets_row()'s own
+            # docstring.
+            self._append_nearby_streets_row(hit.lon, hit.lat)
 
     def on_go_to_coords(self):
         try:
