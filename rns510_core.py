@@ -17,12 +17,64 @@ db/eeu.rd  (road/point records) -- 590,208,521 bytes on the reference disc
             byte[0]      unknown/flags   (preserve on edit, zero on append)
             bytes[1:5]   unknown         (preserve on edit, zero on append)
             bytes[5:8]   unknown         (preserve on edit, zero on append)
-            bytes[8:12]  longitude, little-endian int32, degrees = v/100000
-            bytes[12:16] latitude,  little-endian int32, degrees = v/100000
-            bytes[16:20] unknown         (preserve on edit, zero on append)
-            bytes[20:24] unknown         (preserve on edit, zero on append)
+            bytes[8:12]  longitude (segment's own min/start corner),
+                         little-endian int32, degrees = v/100000
+            bytes[12:16] latitude  (segment's own min/start corner),
+                         little-endian int32, degrees = v/100000
+            bytes[16:20] delta_long -- CRACKED (a later session): the
+                         real field name eeu.mod's own schema gives this
+                         position (research/mod_reader.py, token ['rd'] --
+                         ...min_long, min_lat, delta_long, delta_lat,
+                         name... -- matching this file's own real byte
+                         layout position-for-position). Little-endian
+                         int32, SAME /100000 degrees convention as
+                         longitude/latitude above, but always
+                         NON-NEGATIVE (0 violations across a real
+                         20,000-record full-file random sample) --
+                         i.e. a bounding-box WIDTH, not a signed vector:
+                         this segment's real geographic extent is
+                         [longitude, longitude+delta_long] x [latitude,
+                         latitude+delta_lat]. Validated: the implied
+                         segment diagonal (haversine-ish, cos(lat)
+                         -corrected) has median 350m / mean 1.1km over
+                         that same 20,000-record sample, with 96.8%
+                         under 5km and 99.9% under 50km -- exactly the
+                         real-world range of named road-segment lengths,
+                         not noise. (preserve on edit -- editing a
+                         record's own lon/lat without recomputing this
+                         would silently move the segment's end corner
+                         too; zero on append, giving a new road a
+                         zero-area/point-like extent, same as before)
+            bytes[20:24] delta_lat -- CRACKED, see delta_long directly
+                         above (same field, same validation, same
+                         caveats)
         bytes[24:67]  ASCII name, NUL-padded, 43 bytes
     record_index = (offset_in_file - 94) // 67
+
+    eeu.mod's own real field name list for this table, in order (for a
+    future session -- research/mod_reader.py's extract_blocks(), token
+    ['rd']): cityAndCountryID, cityID, countryID, affixID, suffixID,
+    prefixID, typeID, roadInfo, highway, preferred, explicate, ramp,
+    "name type", interchange, min_long, min_lat, delta_long, delta_lat,
+    name, phoneRoadOffset, roadListIdMain. The first 14 (cityAndCountryID
+    through interchange) must pack into bytes[0:8] (byte[0] + bytes[1:5]
+    + bytes[5:8]) -- mostly small IDs/single-bit flags by name, several
+    plausibly from `eeu.cty`/`eeu.ctr`/`eeu.typ` (`typeID` is a strong
+    candidate for an index into eeu.typ's own 2,574 real entries). NOT
+    yet decoded: a quick test of every individual bit of byte[0] against
+    whether the record's own name looks route-like (candidate `highway`
+    flag, using research/iof_reader.py's is_route_like_name()) found
+    zero correlation on any of the 8 bits (route-like fraction ~0.06
+    regardless of bit value, over a 20,000-record sample) -- `highway`
+    isn't simply one bit of byte[0] alone; the real packing of these 14
+    fields across 8 bytes remains open. The firmware's own dbal/
+    DBAL.OUT binaries (research/dbal_reader.py) confirm real compiled
+    source files exist for this table (`db_road.cpp`/`db_road_list.cpp`/
+    `db_road_cache.cpp`/`db_road_sel_char.cpp`) and one directly relevant
+    accessor name (`db_road_NameListDataByIndex_V004`), but -- unlike
+    eeu.si's rich `db_seg_*` per-field accessor catalog -- no further
+    per-field road-classification accessors were found there to help
+    pin down the byte[0:8] packing.
 
 db/eeu.il  (name index -> eeu.rd record number) -- 39,355,546 bytes
     94-byte header (opaque, preserved byte-for-byte), then variable-length
@@ -78,18 +130,23 @@ class MapToolError(Exception):
 class RoadRecord:
     """Decoded view of one eeu.rd record."""
 
-    __slots__ = ("index", "raw_header", "name", "lon", "lat")
+    __slots__ = ("index", "raw_header", "name", "lon", "lat", "delta_lon", "delta_lat")
 
-    def __init__(self, index, raw_header, name, lon, lat):
+    def __init__(self, index, raw_header, name, lon, lat, delta_lon=0.0, delta_lat=0.0):
         self.index = index
         self.raw_header = raw_header  # 24 raw bytes, unknown fields intact
         self.name = name
         self.lon = lon
         self.lat = lat
+        # this segment's real bounding-box extent (always >= 0 -- see this
+        # module's own file-format docstring above, bytes[16:20]/[20:24]):
+        # the segment spans [lon, lon+delta_lon] x [lat, lat+delta_lat]
+        self.delta_lon = delta_lon
+        self.delta_lat = delta_lat
 
     def __repr__(self):
-        return "RoadRecord(index=%d, name=%r, lon=%s, lat=%s)" % (
-            self.index, self.name, self.lon, self.lat)
+        return "RoadRecord(index=%d, name=%r, lon=%s, lat=%s, delta_lon=%s, delta_lat=%s)" % (
+            self.index, self.name, self.lon, self.lat, self.delta_lon, self.delta_lat)
 
 
 def _decode_rd_record(index, data):
@@ -99,7 +156,9 @@ def _decode_rd_record(index, data):
     name = data[RD_HDR_SIZE:].split(b"\x00", 1)[0].decode("latin-1")
     lon = struct.unpack_from("<i", header, 8)[0] / 100000.0
     lat = struct.unpack_from("<i", header, 12)[0] / 100000.0
-    return RoadRecord(index, header, name, lon, lat)
+    delta_lon = struct.unpack_from("<i", header, 16)[0] / 100000.0
+    delta_lat = struct.unpack_from("<i", header, 20)[0] / 100000.0
+    return RoadRecord(index, header, name, lon, lat, delta_lon, delta_lat)
 
 
 def _encode_rd_record(header24, name):
