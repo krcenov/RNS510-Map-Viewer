@@ -156,33 +156,45 @@ durationminutes, in eeu.mod's own order) with bytes[19:23] always zero
   rich group): typeofentry=121 (0x79, constant); startyear=77
   (constant, plausibly a reference/epoch year rather than a real
   calendar year, since a recurring annual rule doesn't need one);
-  monthorweek=108 (0x6c, constant across BOTH rich groups -- consistent
-  with CET and EET sharing the same real-world transition CALENDAR DATE,
-  last Sunday of March/October, differing only in local clock hour);
-  flcount=0; startday=0; starthour=3 (seqnr=0, "spring forward") or 10
-  (seqnr=1, "fall back") -- NOT independently confirmed to mean literal
-  local clock hour (the real EU-wide DST rule transitions at 01:00 UTC,
-  and CET/EET should differ from each other by 1 local hour, but both
-  show starthour=3 here -- possibly this field is UTC-referenced, or the
-  1-byte-per-field position assignment is off by one field for this
-  specific byte); startminute=1; durationnegative=0; durationyears=1
-  (seqnr=0) growing to match durationmonths; durationmonths=2 (id=1,
-  seqnr=0), 3 (id=1 seqnr=1 / id=3 seqnr=0), 4 (id=3, seqnr=1) --
-  monotonic across sub-entries; durationweeks=0; durationdays=0
-  (seqnr=0) or 1 (seqnr=1); durationhours=0; durationminutes=8
-  (constant). The "duration" fields' literal numeric shape (~1 year,
-  ~8 minutes) does not obviously match a real 1-hour DST clock shift,
-  so these may encode a rule VALIDITY window (how long this specific
-  rule version applies) rather than the shift amount itself -- not
-  resolved.
+  monthorweek=108 (0x6c, constant across BOTH rich groups AND both
+  seqnr=0/seqnr=1 -- i.e. identical for "spring forward" (March) and
+  "fall back" (October) within the same zone, not just across zones);
+  flcount=0; startday=0; starthour=3 (seqnr=0) or 10 (seqnr=1);
+  startminute=1; durationnegative=0; durationyears=1 (seqnr=0) growing
+  to match durationmonths; durationmonths=2 (id=1, seqnr=0), 3 (id=1
+  seqnr=1 / id=3 seqnr=0), 4 (id=3, seqnr=1) -- monotonic across
+  sub-entries; durationweeks=0; durationdays=0 (seqnr=0) or 1
+  (seqnr=1); durationhours=0; durationminutes=8 (constant).
+
+  **REFUTED (a still later session): `monthorweek`/`starthour`/
+  `startminute` are NOT literal per-zone calendar/clock facts.** The
+  original guess (CET/EET should differ in local transition hour, but
+  both show starthour=3) only compared the 2 DST zones to each other.
+  Checking against the 11 "simple default" (non-DST) records below
+  seals it: EVERY ONE of them ALSO carries starthour=3 -- including
+  records with durationyears=durationmonths=...=0, i.e. records that
+  encode NO real transition event at all. A byte storing a literal
+  "DST transition hour" could never appear, unchanged, on a record
+  where no transition happens. Likewise `monthorweek` only ever takes
+  2 distinct values across the WHOLE real dataset (100 on every non-DST
+  record, 108 on every DST record, regardless of spring vs fall) --
+  more consistent with a coarse record-subtype/template discriminator
+  than a real month-or-week value; if real per-zone/per-season
+  calendar data exists at all, it isn't stored in these particular
+  bytes. The "duration" fields remain the most promising real content
+  in this shape -- their literal numeric pattern (~1 year, growing
+  month count, ~8 minutes) doesn't match a real 1-hour DST clock
+  shift, so they may encode a rule VALIDITY window (how long this
+  specific rule version applies) rather than the shift amount itself
+  -- not resolved.
 
   "Simple default" shape (11 singleton records, one per non-DST
   region): every byte identical across all 11 --
   `79 4d 64 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00` -- i.e.
   typeofentry=121, startyear=77, monthorweek=100 (0x64, DIFFERENT from
-  the DST zones' 108 -- consistent with "no real transition month"),
-  starthour=3, everything else 0 (no real DST duration data, as
-  expected for a region without DST).
+  the DST zones' 108), starthour=3 (see REFUTED note above -- this is
+  the direct evidence for it), everything else 0 (no real DST duration
+  data, as expected for a region without DST).
 
   "Terminator" shape (the 2 seqnr=2 records, one per rich group):
   typeofentry=42 (0x2a), every other byte zero -- consistent with a
