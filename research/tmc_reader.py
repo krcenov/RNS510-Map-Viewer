@@ -277,19 +277,44 @@ trusting a "mostly constant" finding on this disc):
                                being (part of) `vseg_id` itself, with
                                byte[3] -- whose own nibble split is noisier,
                                not yet characterized -- as a candidate low
-                               byte. Separately, byte[7] (41 distinct
-                               values) splits into a high nibble
-                               overwhelmingly concentrated at 8/9/10
-                               (~97% of records) and a low nibble
-                               concentrated at 8/9 (~82%) -- the classic
-                               shape of a small value stored with an
-                               "excess-8" bias (centered near 0 after
-                               subtracting 8), worth checking against
-                               `exploration_point`-style small signed
-                               deltas even though minimal records (by
-                               construction) have 0 real exploration
-                               points -- so if real, it's some OTHER
-                               small signed field, not that one.
+                               byte. **Tested and REFUTED (a still later
+                               session)**: combined as a 16-bit value
+                               (either byte order) and checked against
+                               `eeu.si`'s own real, confirmed `seginfoID`
+                               range (0-24,352 -- `research/si_reader.py`,
+                               24,353 records) -- if `vseg_id` really were
+                               a direct cross-reference into `eeu.si`, a
+                               strong majority of combined values should
+                               fall in that range. Instead only
+                               35.9%-44.7% did (both byte orders tried),
+                               matching the ~37.2% rate pure chance alone
+                               predicts (`24353/65536`) for a value
+                               spanning the observed full 0-65,534 range
+                               -- not a real signal. `vseg_id` is not a
+                               direct `eeu.si` index via this byte
+                               pairing; its real meaning (and byte[1]'s
+                               own skewed-high-byte-like shape) remains
+                               unexplained.
+
+                               Separately, byte[7] (41 distinct values)
+                               splits into a high nibble overwhelmingly
+                               concentrated at 8/9/10 (~97% of records)
+                               and a low nibble concentrated at 8/9
+                               (~82%) -- the classic shape of a small
+                               value stored with an "excess-8" bias
+                               (centered near 0 after subtracting 8).
+                               **Tested (a still later session)**: no
+                               correlation with the cracked `arm`
+                               candidate (byte[2] high nibble) at all
+                               (mean high-nibble ~8.70-8.72 across every
+                               one of the 16 arm values, flat); only a
+                               weak, not clearly significant upward trend
+                               against `no_of_segments` (byte[5]: mean
+                               ~8.70 at no_of_segments=1 rising to
+                               ~8.7-8.85 by no_of_segments=7-10, but
+                               those higher groups are much smaller
+                               samples) -- inconclusive, not a crack,
+                               real meaning still open.
     byte[2]                -- **CRACKED (a later session): two independent
                                bit-packed sub-fields, not one 3-byte blob**.
                                `eeu.mod`'s schema lists `start` and `vseg_id`
