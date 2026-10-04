@@ -112,6 +112,8 @@ import struct
 
 import numpy as np
 
+import dbal
+
 
 def _open(path):
     """Return a context-manager binary handle for `path` -- a plain
@@ -304,7 +306,7 @@ class RdCache:
         self.lon = self.lon_i / 100000.0
         self.lat = self.lat_i / 100000.0
         self.record_count = n
-        self.highway = (arr[:, RD_ROADINFO_OFFSET] & 1).astype(bool)
+        self.highway = dbal.decode_roadinfo_byte(arr[:, RD_ROADINFO_OFFSET])["highway"]
 
     def highway_names(self):
         """Distinct real road names (same garbage-byte-clearing + void-type

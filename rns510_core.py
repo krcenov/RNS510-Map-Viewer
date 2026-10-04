@@ -105,9 +105,13 @@ db/eeu.iof (parallel per-eeu.rd-record array) -- 52,854,580 bytes
 import os
 import shutil
 import struct
+import sys
 import tempfile
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "research"))
+
 import rns510_iso as riso
+import dbal
 
 HEADER_SIZE = 94
 
@@ -130,9 +134,11 @@ class MapToolError(Exception):
 class RoadRecord:
     """Decoded view of one eeu.rd record."""
 
-    __slots__ = ("index", "raw_header", "name", "lon", "lat", "delta_lon", "delta_lat")
+    __slots__ = ("index", "raw_header", "name", "lon", "lat", "delta_lon", "delta_lat",
+                 "max_lon", "max_lat")
 
-    def __init__(self, index, raw_header, name, lon, lat, delta_lon=0.0, delta_lat=0.0):
+    def __init__(self, index, raw_header, name, lon, lat, delta_lon=0.0, delta_lat=0.0,
+                 max_lon=None, max_lat=None):
         self.index = index
         self.raw_header = raw_header  # 24 raw bytes, unknown fields intact
         self.name = name
@@ -143,6 +149,13 @@ class RoadRecord:
         # the segment spans [lon, lon+delta_lon] x [lat, lat+delta_lat]
         self.delta_lon = delta_lon
         self.delta_lat = delta_lat
+        # max_lon/max_lat: the real firmware's own bounding-box max corner
+        # (dbal.apply_rd_record_transform(), ported from the real
+        # read_current_record_from_database -- see research/dbal.py),
+        # equal to lon+delta_lon/lat+delta_lat but computed via the same
+        # transform DBAL.OUT itself applies, not just re-derived locally.
+        self.max_lon = max_lon if max_lon is not None else lon + delta_lon
+        self.max_lat = max_lat if max_lat is not None else lat + delta_lat
 
     def __repr__(self):
         return "RoadRecord(index=%d, name=%r, lon=%s, lat=%s, delta_lon=%s, delta_lat=%s)" % (
@@ -154,11 +167,19 @@ def _decode_rd_record(index, data):
         raise MapToolError("bad record length %d at index %d" % (len(data), index))
     header = data[:RD_HDR_SIZE]
     name = data[RD_HDR_SIZE:].split(b"\x00", 1)[0].decode("latin-1")
-    lon = struct.unpack_from("<i", header, 8)[0] / 100000.0
-    lat = struct.unpack_from("<i", header, 12)[0] / 100000.0
-    delta_lon = struct.unpack_from("<i", header, 16)[0] / 100000.0
-    delta_lat = struct.unpack_from("<i", header, 20)[0] / 100000.0
-    return RoadRecord(index, header, name, lon, lat, delta_lon, delta_lat)
+    lon_i = struct.unpack_from("<i", header, 8)[0]
+    lat_i = struct.unpack_from("<i", header, 12)[0]
+    delta_lon_i = struct.unpack_from("<i", header, 16)[0]
+    delta_lat_i = struct.unpack_from("<i", header, 20)[0]
+    _rdtype, max_lon_i, max_lat_i = dbal.apply_rd_record_transform(
+        0, lon_i, lat_i, delta_lon_i, delta_lat_i)
+    lon = lon_i / 100000.0
+    lat = lat_i / 100000.0
+    delta_lon = delta_lon_i / 100000.0
+    delta_lat = delta_lat_i / 100000.0
+    max_lon = max_lon_i / 100000.0
+    max_lat = max_lat_i / 100000.0
+    return RoadRecord(index, header, name, lon, lat, delta_lon, delta_lat, max_lon, max_lat)
 
 
 def _encode_rd_record(header24, name):
