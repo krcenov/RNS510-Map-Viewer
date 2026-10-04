@@ -237,10 +237,11 @@ trusting a "mostly constant" finding on this disc):
                                a real 2nd flag, set on 72.1% of records
                                (candidate: total_no_of_chains, position-
                                matches eeu.mod's next field, not confirmed)
-    bytes[1:4] (3 bytes)   -- high entropy (256/48/256 distinct values
-                               respectively) -- candidate: `start` and/or
-                               `vseg_id`, not individually split. **Tested
-                               and REFUTED (a later session), 2 hypotheses**:
+    bytes[1], byte[3]      -- still high entropy (256 distinct values
+                               each), real meaning open -- candidates for
+                               (part of) `vseg_id`. **Tested and REFUTED
+                               (a later session), 2 hypotheses for the
+                               former bytes[1:4]-as-one-field view**:
                                (a) as a plain within-table LOCATION INDEX
                                (i.e. this location's own position, matching
                                the directory's own `start_location` field
@@ -260,8 +261,48 @@ trusting a "mostly constant" finding on this disc):
                                given that set's own density over the
                                value range actually observed -- not a real
                                signal, just coincidental collisions. Neither
-                               hypothesis holds; bytes[1:4]'s real meaning
+                               hypothesis holds; bytes[1]/[3]'s real meaning
                                remains open.
+    byte[2]                -- **CRACKED (a later session): two independent
+                               bit-packed sub-fields, not one 3-byte blob**.
+                               `eeu.mod`'s schema lists `start` and `vseg_id`
+                               as 2 SEPARATE fields -- the earlier
+                               "bytes[1:4] as one blob" framing above never
+                               actually tested splitting them. Byte[2]'s
+                               own 48 distinct values are EXACTLY
+                               `(high_nibble << 4) | low_nibble` with
+                               `high_nibble` spanning all 16 values 0-15
+                               (count ~12,250-13,100 each -- uniform) and
+                               `low_nibble` only ever 0, 1, or 2 (counts
+                               ~98,000-104,000 / ~51,600-51,700 / ~2,700 --
+                               skewed, but IDENTICAL skew in both the p AND
+                               n direction, ruling out redundancy with the
+                               file's own already-known p/n split) --
+                               `16 x 3 = 48`, an EXACT combinatorial match,
+                               zero violations across all 310,888 real
+                               minimal records, consistent independently in
+                               every one of the 44 tables. The two
+                               sub-fields are also statistically
+                               INDEPENDENT of each other (the 3-value
+                               field's distribution is ~65%/33%/2% at
+                               EVERY one of the 16 high-nibble values,
+                               sampling noise only) -- the classic
+                               signature of two separately-assigned
+                               fields sharing a byte, not a coincidental
+                               split of one combined value. Best real
+                               -world candidates by schema position and
+                               range: high nibble = `start` (a junction
+                               "arm" index, 0-15 -- ALERT-C locations
+                               commonly have few enough arms to fit a
+                               nibble), low 2 bits = `side` (a small,
+                               skewed real-world category, plausibly
+                               "no divided carriageway / right / left" --
+                               most roads being undivided matches the
+                               ~65% dominant value). Neither candidate
+                               NAME is independently confirmed (no
+                               external ground truth checked against yet)
+                               but the BIT-LEVEL SPLIT ITSELF is exact,
+                               not just a trend. See `decode_segment_chain_byte2()`.
     byte[4]                -- ALSO high entropy (96 distinct values, top
                                value only 5.3% of records) -- CORRECTED:
                                NOT mostly-constant (see note above). Bit 7
@@ -393,3 +434,18 @@ def chain_count(chain_bytes):
     or a slice of `data`); must be non-empty (a 0-byte direction has no
     chain_count at all)."""
     return chain_bytes[0] & 0x0F
+
+
+def decode_segment_chain_byte2(chain_bytes):
+    """The first `segment_chain`'s byte[2] (CRACKED -- 2 independent
+    bit-packed sub-fields, see module docstring): returns
+    `(arm_candidate, side_candidate)` where `arm_candidate` is byte[2]'s
+    high nibble (0-15, uniformly distributed -- candidate `start`) and
+    `side_candidate` is its low nibble (only ever 0, 1, or 2 in real
+    data -- candidate `side`). Neither name is independently confirmed,
+    only the bit split itself. `chain_bytes` is a location's own raw
+    p_bytes/n_bytes (from read_location_chain_bytes() or a slice of
+    `data`); must have at least 3 bytes (every non-empty chain record
+    does -- the minimum real size is 8)."""
+    b2 = chain_bytes[2]
+    return b2 >> 4, b2 & 0x0F
