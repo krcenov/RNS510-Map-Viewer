@@ -848,6 +848,100 @@ def find_tile_anchor(raw, declen=None):
     return None
 
 
+_MAPHEADER_PROBE_WINDOW = 400  # generous; real offset measured at 14 on mg4
+
+
+def read_kd_geo_index(path):
+    """Parse the real on-disk k-d spatial index living in the "geo-index
+    prefix" region (byte 80 -> table_start, see wiki MAP_COMPRESSED-
+    Container-Format.md) -- CRACKED via DBAL.OUT disassembly + decompile
+    (not the R-tree symbols found earlier in FHDD6.FLI; those are a real,
+    but apparently DIFFERENT, subsystem -- see the wiki page's own
+    reconciliation note).
+
+    Layout, byte 80 onward: an unidentified short prefix, then a 28-byte
+    mapHeader (`range`{min_long,min_lat,max_long,max_lat} + layer(2) +
+    pcl_cnt(4) + kd_cnt(4) + kd_depth(2), all LE), then `kd_cnt`
+    interleaved 13-byte node records (`edge`(i32) + `lo_index`(i32) +
+    `hi_index`(i32) + `kd_info`(1 byte)). The mapHeader's own offset
+    within the prefix isn't fixed by a known formula yet -- this function
+    locates it by searching for the first position where the record
+    `pcl_cnt` matches `read_directory(path)["num_tiles"]` exactly (a
+    hard, validated signal: exact on mg4 at relative offset 14, zero
+    false positives observed in the first few hundred bytes).
+
+    Returns a dict: {"header_offset", "min_long","min_lat","max_long",
+    "max_lat" (raw ints, scale NOT confirmed -- see below), "layer",
+    "pcl_cnt", "kd_cnt", "kd_depth", "nodes"} where "nodes" is a list of
+    `kd_cnt` dicts {"edge", "lo_index", "hi_index", "cut", "lo_is_subtree",
+    "lo_empty", "lo_leaf", "hi_is_subtree", "hi_empty", "hi_leaf"}.
+
+    HONESTY NOTE: `kd_info`'s bit layout and `lo_index`/`hi_index`'s
+    dual-purpose encoding (full 32-bit node-array index OR, when the
+    corresponding subtree flag is set, just the low byte as a subtree
+    cache-slot id) are both confirmed by directly reading kd_pdecend's/
+    kd_rdecend's/db_page_kd_subtree's real decompiled logic -- not
+    inferred. `edge` is CONFIRMED to be the real split coordinate
+    (traced directly: it gets written into the lo/hi child rectangles'
+    shared boundary field during descent) but its own numeric SCALE
+    is NOT confirmed -- it does not match mapHeader's own min_long/
+    max_long/min_lat/max_lat range directly (tested, 0% match even
+    restricted to pure-internal, non-leaf/non-subtree nodes), so it is
+    returned as the raw stored int32 with no `/100000`-style conversion
+    applied. The first ~14 bytes of the prefix (before mapHeader) are
+    also not yet identified."""
+    directory = read_directory(path)
+    num_tiles = directory["num_tiles"]
+    first_tile_off = directory["entries"][0][0] if directory["entries"] else None
+
+    with _open(path) as f:
+        f.seek(80)
+        probe = f.read(_MAPHEADER_PROBE_WINDOW)
+
+    header_offset = None
+    for i in range(0, len(probe) - 28):
+        pcl_cnt = struct.unpack_from("<I", probe, i + 18)[0]
+        if pcl_cnt == num_tiles:
+            header_offset = i
+            break
+    if header_offset is None:
+        return None
+
+    min_long, min_lat = struct.unpack_from("<ii", probe, header_offset)
+    max_long, max_lat = struct.unpack_from("<ii", probe, header_offset + 8)
+    layer = struct.unpack_from("<H", probe, header_offset + 16)[0]
+    pcl_cnt = struct.unpack_from("<I", probe, header_offset + 18)[0]
+    kd_cnt = struct.unpack_from("<I", probe, header_offset + 22)[0]
+    kd_depth = struct.unpack_from("<H", probe, header_offset + 26)[0]
+
+    nodes_start = 80 + header_offset + 28
+    nodes_size = kd_cnt * 13
+    if first_tile_off is not None and first_tile_off - 8 * num_tiles < nodes_start + nodes_size:
+        return None  # defensive -- predicted node array runs past the real table_start
+
+    with _open(path) as f:
+        f.seek(nodes_start)
+        raw = f.read(nodes_size)
+
+    nodes = []
+    for i in range(kd_cnt):
+        off = i * 13
+        edge, lo_index, hi_index = struct.unpack_from("<iii", raw, off)
+        info = raw[off + 12]
+        nodes.append({
+            "edge": edge, "lo_index": lo_index, "hi_index": hi_index,
+            "cut": info & 1,
+            "lo_is_subtree": (info >> 1) & 1, "lo_empty": (info >> 2) & 1, "lo_leaf": (info >> 3) & 1,
+            "hi_is_subtree": (info >> 5) & 1, "hi_empty": (info >> 6) & 1, "hi_leaf": (info >> 7) & 1,
+        })
+
+    return {
+        "header_offset": header_offset, "min_long": min_long, "min_lat": min_lat,
+        "max_long": max_long, "max_lat": max_lat, "layer": layer,
+        "pcl_cnt": pcl_cnt, "kd_cnt": kd_cnt, "kd_depth": kd_depth, "nodes": nodes,
+    }
+
+
 def build_geo_index(path):
     """Decompress EVERY tile in a MAP_COMPRESSED file (mp0/mg1-mg4) and
     extract each one's derived anchor coordinate (see scheme documented
