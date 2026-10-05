@@ -164,8 +164,10 @@ brand-new tile at a location with no existing tile.
 """
 
 import collections
+import hashlib
 import math
 import os
+import pickle
 import re
 import struct
 import zlib
@@ -1079,6 +1081,70 @@ def build_bbox_index(path):
             lats = [p[1] for p in pts]
             index[tile_id] = (min(lons), max(lons), min(lats), max(lats))
     return index
+
+
+def _decode_cache_key(path):
+    """Identity key for the real file span `build_geo_index()`/
+    `build_bbox_index()` would decode -- (ISO image path, its size+mtime,
+    byte offset, byte length) for an `rns510_iso.IsoFileRef`, or (plain
+    path, size, mtime) otherwise. Used by the `*_cached()` wrappers below
+    so a cache entry is invalidated if the underlying file actually
+    changes, not just keyed by filename."""
+    if hasattr(path, "image_path") and hasattr(path, "offset"):
+        st = os.stat(path.image_path)
+        return (os.path.abspath(path.image_path), st.st_size, int(st.st_mtime),
+                path.offset, path.length)
+    st = os.stat(path)
+    return (os.path.abspath(path), st.st_size, int(st.st_mtime))
+
+
+def _cached(cache_dir, name, path, build_fn):
+    """Shared implementation for build_geo_index_cached()/
+    build_bbox_index_cached() below: compute path's _decode_cache_key(),
+    load a pickled result from `cache_dir` if present, else call
+    `build_fn(path)` and persist the result (atomically -- write to a
+    `.tmp` file then os.replace(), so a process killed mid-write never
+    leaves a corrupt cache file that a later run would load as real
+    data)."""
+    key = _decode_cache_key(path)
+    digest = hashlib.sha1(repr(key).encode("utf-8")).hexdigest()
+    cache_path = os.path.join(cache_dir, "%s_%s.pkl" % (name, digest))
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass  # corrupt/truncated cache entry -- fall through and rebuild
+    result = build_fn(path)
+    os.makedirs(cache_dir, exist_ok=True)
+    tmp_path = cache_path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(tmp_path, cache_path)
+    return result
+
+
+def build_geo_index_cached(path, cache_dir):
+    """Same return value as build_geo_index(path) -- the slow, decode-
+    every-tile anchor index -- but checks/writes a persistent on-disk
+    cache first (see _cached()/_decode_cache_key()). The real cost
+    (measured 34-55s for the reference disc's `mp0`, this module's own
+    docstring) is only ever paid ONCE per real ISO: every later "Open
+    Map ISO" on the SAME disc loads the cached result near-instantly
+    instead of re-decompressing every tile. build_geo_index() itself is
+    left unchanged/pure (directly testable, no caching logic mixed in)
+    -- this is purely an opt-in wrapper for interactive callers like
+    rns510_map_viewer.py."""
+    return _cached(cache_dir, "geo_index", path, build_geo_index)
+
+
+def build_bbox_index_cached(path, cache_dir):
+    """Same relationship to build_bbox_index() as build_geo_index_
+    cached() has to build_geo_index() above -- same cache_dir/key, so
+    both naturally share one cache directory without colliding (the
+    "geo_index_"/"bbox_index_" filename prefix keeps their digests
+    apart even on the same path)."""
+    return _cached(cache_dir, "bbox_index", path, build_bbox_index)
 
 
 def find_tile_for_coord_bbox(bbox_index, geo_index, lon, lat, pad_deg=0.002):

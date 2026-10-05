@@ -1330,6 +1330,14 @@ class MapData:
         self._owns_workdir = workdir is None
         self.workdir = workdir or tempfile.mkdtemp(prefix="rns510_viewer_")
         os.makedirs(self.workdir, exist_ok=True)
+        # PERSISTENT (not self.workdir -- that's a fresh tempdir every run)
+        # disk cache for the slow, decode-every-tile geo/bbox indexes --
+        # see mcr.build_geo_index_cached()/build_bbox_index_cached()'s own
+        # docstrings. Lives next to this script, survives across runs, so
+        # re-opening the SAME disc never re-pays the real 34-55s/layer
+        # decode cost (this module's own docstring) after the first time.
+        self.geo_index_cache_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "geo_index_cache")
         self.cty_path = None         # rns510_iso.IsoFileRef, set by load() -- no extraction (README §4)
 
         self.layer_paths = {}       # {layer: rns510_iso.IsoFileRef into the ISO -- no extraction, see load()}
@@ -1585,7 +1593,7 @@ class MapData:
         return layers
 
     def _build_layer_geo_index(self, layer):
-        gi = mcr.build_geo_index(self.layer_paths[layer])
+        gi = mcr.build_geo_index_cached(self.layer_paths[layer], self.geo_index_cache_dir)
         self.geo_indexes[layer] = gi
         ids = list(gi.keys())
         self._geo_arrays[layer] = (
@@ -1603,7 +1611,7 @@ class MapData:
         decode-every-tile cost model as _build_layer_geo_index() (they
         could share one decode pass in principle, but are kept separate
         calls for now -- see that function's own note about this)."""
-        bi = mcr.build_bbox_index(self.layer_paths[layer])
+        bi = mcr.build_bbox_index_cached(self.layer_paths[layer], self.geo_index_cache_dir)
         self.bbox_indexes[layer] = bi
         ids = list(bi.keys())
         self._bbox_arrays[layer] = (
