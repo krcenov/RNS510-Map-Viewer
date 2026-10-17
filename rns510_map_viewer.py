@@ -694,6 +694,22 @@ DOT_COLOR = "#d32f2f"
 # distinct from every other color already in use (red dots, gold/gray
 # connected-roads lines, orange/blue predicted-divided overlay).
 HIGHWAY_COLOR = "#2e7d32"
+# Real-junction markers (this session): map_compressed_reader.py's
+# decode_topology()/resolve_topology_adjacency() degree 5-8 continuation
+# fix (db_copy_node, db/db_upack.cpp:6110 in the dbal_gen tree) made
+# complex-junction connectivity reliably correct for the first time --
+# worth SHOWING, not just computing. Degree here means a point's real
+# connection count in the SAME resolved adjacency graph connected-roads
+# mode already draws lines from (`adj["edges"]`), not the vertex-density
+# importance proxy ROAD_COLOR_MAJOR/MINOR still use. Two tiers, both
+# visually distinct from every color already on screen (red dots, gold/
+# gray connected-roads lines, green confirmed-highway, orange/blue
+# predicted-divided overlay): an ordinary 3-4-way junction vs. a genuine
+# 5+-way one (exactly the shape today's fix corrected) gets its own,
+# louder marker, so a real complex intersection reads as obviously
+# different from a simple fork at a glance.
+JUNCTION_COLOR = "#0277bd"        # medium blue -- degree 3-4
+MAJOR_JUNCTION_COLOR = "#6a1b9a"  # deep purple -- degree 5+ (today's fix)
 # "Show predicted divided (EXPERIMENTAL)" overlay colors (this session):
 # deliberately bright/saturated and unlike any other color already in use
 # on this screen, so a predicted-divided vs. predicted-non-divided road is
@@ -3338,6 +3354,22 @@ class App:
         # behavior. See _on_connected_roads_changed()/_redraw().
         self.connected_roads_var = tk.BooleanVar(value=True)
 
+        # "Highlight junctions" checkbox (this session): marks real
+        # intersections -- points whose resolved adjacency degree (from the
+        # SAME graph connected-roads mode already draws lines from) is >= 3
+        # -- with a distinct JUNCTION_COLOR/MAJOR_JUNCTION_COLOR dot instead
+        # of the usual DOT_COLOR red, so a real junction (and especially a
+        # genuine 5+-way one, see JUNCTION_COLOR's own comment) is visible
+        # at a glance rather than only inferrable from where lines happen to
+        # converge. CHECKED by default, matching connected_roads_var above,
+        # since it's purely additive (only ever recolors a dot that would
+        # already be drawn) and only activates on the exact same
+        # found+confidence=="high" features connected-roads mode already
+        # gates on -- never a guessed/low-confidence marker. Has no effect
+        # at all when connected_roads_var is off (no resolved adjacency
+        # graph to compute degree from in the first place). See _redraw().
+        self.show_junctions_var = tk.BooleanVar(value=True)
+
         self._build_menu()
         self._build_widgets()
         self._set_status("No ISO loaded. Use File > Open Map ISO...")
@@ -3553,6 +3585,22 @@ class App:
             activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
             font=("Segoe UI", 9), highlightthickness=0)
         self.connected_roads_cb.pack(side="left", padx=(10, 0))
+
+        # ---- "Highlight junctions" checkbox (this session) ---- see
+        # show_junctions_var's own comment in __init__ for what this does
+        # and why it's checked by default. Unlike "Draw connected roads" /
+        # "Show predicted divided", toggling this needs no reload at all --
+        # it only recolors dots using adjacency data connected-roads mode
+        # already fetched, so its command is a plain self._redraw(), not
+        # the force-reload path those use (see _on_show_junctions_changed()).
+        self._status_divider(layers_row)
+        self.show_junctions_cb = tk.Checkbutton(
+            layers_row, text="Highlight junctions", variable=self.show_junctions_var,
+            onvalue=True, offvalue=False, command=self._on_show_junctions_changed,
+            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
+            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
+            font=("Segoe UI", 9), highlightthickness=0)
+        self.show_junctions_cb.pack(side="left", padx=(10, 0))
 
         # ---- "Show predicted divided (EXPERIMENTAL)" checkbox (this
         # session) ---- mg4-only overlay coloring each connected-roads edge
@@ -4894,6 +4942,32 @@ class App:
                         mx, my = self._to_canvas(mlon, mlat)
                         road_label_candidates.append((pix_len, name, mx, my))
 
+            # "Highlight junctions" (this session, see show_junctions_var's
+            # own comment in __init__): drawn AFTER the normal per-vertex
+            # dots above (so a junction marker always paints on top, never
+            # hidden under a plain red dot), using the SAME `adj["edges"]`
+            # connected-roads mode already resolved for this feature -- no
+            # new data, just a different interpretation of data already in
+            # hand. Degree is counted fresh per feature from `edges`
+            # (not decode_topology()'s own `graph_degree`, which is keyed
+            # by raw table-record position, not by the real point index
+            # this rendering loop needs -- resolve_topology_adjacency()'s
+            # `edges` are already point-index pairs, post-shift-resolution).
+            if adj is not None and self.show_junctions_var.get():
+                degree = {}
+                for a, b in adj["edges"]:
+                    degree[a] = degree.get(a, 0) + 1
+                    degree[b] = degree.get(b, 0) + 1
+                for pt_idx, deg in degree.items():
+                    if deg < 3 or pt_idx >= len(pts):
+                        continue
+                    color = MAJOR_JUNCTION_COLOR if deg >= 5 else JUNCTION_COLOR
+                    radius = 3.2 if deg >= 5 else 2.4
+                    px, py = self._to_canvas(*pts[pt_idx])
+                    draw.ellipse(
+                        [px - radius, py - radius, px + radius, py + radius],
+                        fill=color)
+
         # Real POIs (README §10 "v19 -> v20"/"v20 -> v21", EDB/POI/POI.DB3)
         # -- rasterized into the SAME `img` bitmap as the road dots above,
         # for the exact same reason (README §10 "v17 -> v18"): a wide,
@@ -5662,6 +5736,14 @@ class App:
         if self.data is None or self.center_lon is None:
             return  # nothing loaded yet -- the checkbox state is remembered for when it is
         self._maybe_reload_viewport(force=True)
+
+    def _on_show_junctions_changed(self):
+        """Checkbutton command for "Highlight junctions" (this session):
+        a plain redraw, not a force-reload -- see show_junctions_var's own
+        comment in __init__ for why no new data ever needs fetching."""
+        if self.data is None or self.center_lon is None:
+            return
+        self._redraw()
 
     def _on_show_seg_predict_changed(self):
         """Checkbutton command for "Show predicted divided (EXPERIMENTAL,
