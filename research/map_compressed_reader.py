@@ -878,20 +878,31 @@ def read_kd_geo_index(path):
     `kd_cnt` dicts {"edge", "lo_index", "hi_index", "cut", "lo_is_subtree",
     "lo_empty", "lo_leaf", "hi_is_subtree", "hi_empty", "hi_leaf"}.
 
-    HONESTY NOTE: `kd_info`'s bit layout and `lo_index`/`hi_index`'s
+    CONFIRMED (this is the full, working decode -- see find_tile_for_coord_kdtree()
+    and the wiki's "Geo-index prefix" section for the full story of how the
+    earlier "proven wall" conclusion turned out to be a 4-byte reader bug,
+    not a real limit): `kd_info`'s bit layout and `lo_index`/`hi_index`'s
     dual-purpose encoding (full 32-bit node-array index OR, when the
     corresponding subtree flag is set, just the low byte as a subtree
-    cache-slot id) are both confirmed by directly reading kd_pdecend's/
-    kd_rdecend's/db_page_kd_subtree's real decompiled logic -- not
-    inferred. `edge` is CONFIRMED to be the real split coordinate
-    (traced directly: it gets written into the lo/hi child rectangles'
-    shared boundary field during descent) but its own numeric SCALE
-    is NOT confirmed -- it does not match mapHeader's own min_long/
-    max_long/min_lat/max_lat range directly (tested, 0% match even
-    restricted to pure-internal, non-leaf/non-subtree nodes), so it is
-    returned as the raw stored int32 with no `/100000`-style conversion
-    applied. The first ~14 bytes of the prefix (before mapHeader) are
-    also not yet identified."""
+    cache-slot id -- never observed on `mg4`, every node resolves without
+    ever needing one) are confirmed by directly reading kd_pdecend's/
+    kd_rdecend's/db_page_kd_subtree's real decompiled logic. `edge` is
+    the real split coordinate, in the SAME `/100000`-degree convention
+    used everywhere else on this disc (`raw_edge / 100000` on the axis
+    `cut` selects) -- confirmed two ways: the node array's real start
+    offset (`mapHeader` + `maxPclId`, found via `eeu.mod`'s own schema,
+    which names a 13-byte `pcl_dir` field this project had previously
+    and wrongly folded into the node array) makes a full top-down
+    traversal from node 0 visit all `kd_cnt` nodes and reach all
+    `pcl_cnt` leaves exactly once, a perfect zero-overlap partition of
+    `mapHeader`'s own range; and comparing every leaf's reconstructed
+    raw box (root range narrowed by each ancestor's `edge` cut) against
+    `build_bbox_index()`'s independently-decompressed real content boxes
+    for the SAME tile id gives a median error of ~0.003-0.013 degrees
+    (effectively exact) with 90.2% full containment at a 0.02-degree
+    tolerance -- the remaining gap is `build_bbox_index()`'s own already-
+    documented proxy imprecision (content doesn't always reach a tile's
+    true edge), not a kd-tree decode error."""
     directory = read_directory(path)
     num_tiles = directory["num_tiles"]
     first_tile_off = directory["entries"][0][0] if directory["entries"] else None
@@ -916,7 +927,7 @@ def read_kd_geo_index(path):
     kd_cnt = struct.unpack_from("<I", probe, header_offset + 22)[0]
     kd_depth = struct.unpack_from("<H", probe, header_offset + 26)[0]
 
-    nodes_start = 80 + header_offset + 28
+    nodes_start = 80 + header_offset + 28 + 4  # mapHeader(28) + maxPclId(4), both confirmed via eeu.mod's schema
     nodes_size = kd_cnt * 13
     if first_tile_off is not None and first_tile_off - 8 * num_tiles < nodes_start + nodes_size:
         return None  # defensive -- predicted node array runs past the real table_start
@@ -942,6 +953,131 @@ def read_kd_geo_index(path):
         "max_long": max_long, "max_lat": max_lat, "layer": layer,
         "pcl_cnt": pcl_cnt, "kd_cnt": kd_cnt, "kd_depth": kd_depth, "nodes": nodes,
     }
+
+
+KD_SCALE = 100000  # same raw-to-degree convention as every other coordinate on this disc
+
+
+def find_tile_for_coord_kdtree(path, lon, lat, kd=None):
+    """Real, firmware-accurate point lookup: walks the actual on-disk k-d
+    tree (read_kd_geo_index()) the same single-path way `kd_pdecend` does
+    in DBAL.OUT, instead of build_geo_index()'s brute-force full-file
+    decompression. O(kd_depth) -- ~22 steps on `mg4` -- vs. decompressing
+    every tile.
+
+    Pass a pre-parsed `kd` (read_kd_geo_index(path)'s own return value) to
+    skip re-reading/re-parsing the tree on every call -- essential for
+    more than a handful of lookups (parsing `mg4`'s ~87KB tree from disk
+    dominates a single call's cost; the walk itself is ~22 dict lookups).
+    When omitted, `path` is read and parsed fresh each call.
+
+    Returns the tile_id (matching build_geo_index()'s own numbering --
+    both are the file's real parcel index) whose k-d tree region contains
+    (lon, lat), or None if the point falls outside this layer's own
+    mapHeader range, or if the real path requires paging a subtree
+    (`_is_subtree` flag -- never observed on `mg4`'s top-level tree, but
+    `mp0`/larger layers may need it; not implemented, returns None rather
+    than guess).
+
+    Mirrors kd_pdecend's actual branch logic exactly: at each node, the
+    split axis is `cut` (0 or 1), and the query coordinate on that axis
+    is compared against `edge` -- `<= edge` descends lo (whose own upper
+    bound on that axis IS `edge`), `> edge` descends hi (whose lower
+    bound is `edge + 1`)."""
+    if kd is None:
+        try:
+            kd = read_kd_geo_index(path)
+        except RuntimeError:
+            return None
+    if kd is None:
+        return None
+    raw_lon = round(lon * KD_SCALE)
+    raw_lat = round(lat * KD_SCALE)
+    if not (kd["min_long"] <= raw_lon <= kd["max_long"] and
+            kd["min_lat"] <= raw_lat <= kd["max_lat"]):
+        return None
+    coord = (raw_lon, raw_lat)
+    nodes = kd["nodes"]
+    idx = 0
+    seen = set()
+    while True:
+        if idx in seen or idx >= kd["kd_cnt"]:
+            return None  # defensive -- would indicate a corrupt/cyclic tree
+        seen.add(idx)
+        n = nodes[idx]
+        axis = n["cut"]
+        if coord[axis] <= n["edge"]:
+            if n["lo_empty"]:
+                return None
+            if n["lo_leaf"]:
+                return n["lo_index"]
+            if n["lo_is_subtree"]:
+                return None  # subtree paging not implemented
+            idx = n["lo_index"]
+        else:
+            if n["hi_empty"]:
+                return None
+            if n["hi_leaf"]:
+                return n["hi_index"]
+            if n["hi_is_subtree"]:
+                return None
+            idx = n["hi_index"]
+
+
+def build_kdtree_bbox_index(path):
+    """Fast alternative to build_bbox_index(): derives every tile's real
+    bounding box (in degrees) directly from the k-d tree structure --
+    a single O(kd_cnt) traversal, NO tile decompression at all -- instead
+    of decompressing and content-scanning every tile. Returns
+    {tile_id: (lon_min, lon_max, lat_min, lat_max)}, tile_id matching
+    build_geo_index()'s own numbering.
+
+    Unlike build_bbox_index()'s content-derived boxes (a proxy -- real
+    road geometry doesn't always reach a tile's true edge), these boxes
+    are the tile's actual stored partition boundary from the index
+    itself -- confirmed accurate (median ~0.003-0.013 degree agreement,
+    90.2% full containment at 0.02 degree tolerance against
+    build_bbox_index()'s own independently-decompressed boxes on `mg4`;
+    see read_kd_geo_index()'s docstring). Falls back to returning
+    whatever was reached if the tree contains subtree references this
+    function can't page in (not observed on `mg4`). Returns {} (rather
+    than raising) if this file doesn't use the expected directory/table
+    format at all (read_directory()'s own RuntimeError case, e.g.
+    `eeuz.fea`) or if the mapHeader scan simply doesn't find a match."""
+    try:
+        kd = read_kd_geo_index(path)
+    except RuntimeError:
+        return {}
+    if kd is None:
+        return {}
+    nodes = kd["nodes"]
+    kd_cnt = kd["kd_cnt"]
+    root_box = (kd["min_long"], kd["min_lat"], kd["max_long"], kd["max_lat"])
+    result = {}
+    visited = set()
+    stack = [(0, root_box)]
+    while stack:
+        idx, box = stack.pop()
+        if idx in visited or idx >= kd_cnt:
+            continue
+        visited.add(idx)
+        n = nodes[idx]
+        axis = n["cut"]
+        lo_box = list(box)
+        lo_box[axis + 2] = n["edge"]
+        hi_box = list(box)
+        hi_box[axis] = n["edge"] + 1
+        if n["lo_leaf"]:
+            b = lo_box
+            result[n["lo_index"]] = (b[0] / KD_SCALE, b[2] / KD_SCALE, b[1] / KD_SCALE, b[3] / KD_SCALE)
+        elif not (n["lo_empty"] or n["lo_is_subtree"]):
+            stack.append((n["lo_index"], tuple(lo_box)))
+        if n["hi_leaf"]:
+            b = hi_box
+            result[n["hi_index"]] = (b[0] / KD_SCALE, b[2] / KD_SCALE, b[1] / KD_SCALE, b[3] / KD_SCALE)
+        elif not (n["hi_empty"] or n["hi_is_subtree"]):
+            stack.append((n["hi_index"], tuple(hi_box)))
+    return result
 
 
 def build_geo_index(path):
@@ -2136,6 +2272,77 @@ def _find_topology_table_start(raw, declen, n_records, region_end, max_gap=2000,
     return None
 
 
+def _walk_topology_logical(raw, table_start, n_records):
+    """**NOT CURRENTLY USED by decode_topology() or resolve_topology_
+    adjacency() -- wiring this in was tried directly and REGRESSED the
+    validated ground truth (`mp0` 91124: 16/18 -> 11/18; see
+    decode_topology()'s own "Degree 5-8 continuation records" caveat for
+    the full writeup of what broke and why). Kept as a correctly-behaving,
+    byte-level-confirmed building block for a future attempt with a
+    better theory for tiles that have TWO degree>=5 records in a row (like
+    `mp0` 91124's own header) -- do not wire this back in without first
+    reproducing that regression test and understanding why it happens.**
+
+    Walk a topology table by LOGICAL entry (one per real node/header --
+    exactly `n_records` of them, matching `point_count + 1` -- not by raw
+    physical byte position), consuming TWO physical 10-byte slots instead
+    of one whenever a record's own degree is >= 5.
+
+    DBAL-SOURCED mechanism (see decode_topology()'s own "REAL DBAL SOURCE"
+    docstring section): `db_copy_node__FP5VNodeUsUiP7DBSNodeP8position`
+    (`db/db_upack.cpp:6110`) reads up to 8 segment-index fields starting 4
+    bytes into a degree>=5 record -- 3 from this record's own trailing
+    space (bytes 4,6,8) and the rest from the IMMEDIATELY FOLLOWING
+    physical slot's own bytes (0,2,4,6,8), which is therefore pure
+    overflow/continuation data for THIS record, not a separate real node.
+    Confirmed by direct byte inspection on a real tile (`mg4` offset
+    11,298,518): a degree-5 record's own continuation slot is `f3 00 f4
+    00 00 00 00 00 00 00` -- the first 2 values are real (the 2 extra
+    segment indices this degree needs beyond its own 3), and the
+    remaining 3 slots are zero-padded, exactly matching an unused
+    continuation tail rather than a coincidentally-small independent
+    record.
+
+    Returns `(records, physical_end)`: `records` has exactly `n_records`
+    entries (same shape as decode_topology()'s own per-record dicts --
+    `offset`/`tag`/`fields`), and `physical_end` is the byte offset one
+    past the last physical slot actually consumed (equals `table_start +
+    n_records*10` when no degree>=5 record was seen; strictly greater
+    whenever one or more were, since each adds one extra physical slot
+    beyond the naive point-count-based estimate).
+
+    Safe to use as a drop-in for decode_topology()'s own per-feature walk
+    and for the greedy multi-feature search's byte-range reservation:
+    `resolve_topology_adjacency()` only ever indexes into a feature's
+    `records` by LOGICAL position (`records[(i + shift) % n_records]`),
+    never by physical byte offset, so correcting the physical/logical
+    relationship here does not require any change to that function."""
+    records = []
+    slot = 0
+    for _ in range(n_records):
+        pos = table_start + slot * 10
+        rec = raw[pos:pos + 10]
+        tag_bytes = rec[:2]
+        a, b, c, d = struct.unpack_from("<HHHH", rec, 2)
+        low = tag_bytes[0]
+        degree = low & 0xf
+        if degree <= 4:
+            fields = (a, b, c, d)[:degree]
+            records.append({"offset": pos, "tag": tag_bytes.hex(), "fields": fields})
+            slot += 1
+        else:
+            d_count = min(degree, 8)
+            own_fields = struct.unpack_from("<HHH", rec, 4)  # offsets 4, 6, 8
+            next_pos = table_start + (slot + 1) * 10
+            next_rec = raw[next_pos:next_pos + 10]
+            cont_fields = struct.unpack_from("<HHHHH", next_rec.ljust(10, b"\x00"), 0)
+            fields = (own_fields + cont_fields)[:d_count]
+            records.append({"offset": pos, "tag": tag_bytes.hex(), "fields": fields})
+            slot += 2
+    physical_end = table_start + slot * 10
+    return records, physical_end
+
+
 def decode_topology(raw, declen=None, features=None):
     """PARTIALLY CRACKED (this session) -- decode the tagged record table
     that follows a tile's coordinate region (see decode_features()). This
@@ -2465,6 +2672,146 @@ def decode_topology(raw, declen=None, features=None):
     this new understanding, vs. none at all, and see whether it renders/
     routes differently) remains the fastest way to learn whether real
     hardware actually depends on this table for a newly-added feature.
+
+    **UPDATE (later session): REAL DBAL SOURCE FOUND for this record's bit
+    layout -- the "numeric link-id VALUES have no independently-confirmed
+    meaning" gap just above is now partly closed.** `BASE/CUSTOM/CD_CUSTOM/
+    DBAL/` (a from-scratch demangled, reorganized reconstruction of
+    `DBAL.OUT`'s own Ghidra decompile -- the real compiled "Database
+    Abstraction Layer" the RNS510 firmware itself loads to read this exact
+    file family; see that directory's own `PROVENANCE.md`) contains a
+    function chain that reads a 10-byte-stride node array with EXACTLY
+    this record's own bit layout:
+    `db_find_node_main__FPC8positioncP5VNodeib` (`db/db_find.cpp:95`) ->
+    `db_find_node_from_parcel__FiUiPcN22` (`db/db_find.cpp:381`, binary
+    search by lon/lat/alt over a parallel 12-byte `DBSNode` coordinate
+    array) -> `db_copy_node__FP5VNodeUsUiP7DBSNodeP8position`
+    (`db/db_upack.cpp:6110`) -> `db_convert_ninfo__FPlP9SNodeInfo`
+    (`db/db_upack.cpp:6080`). Together they give a byte-exact formula:
+    `degree = byte[0] & 0xf` (the node's real connection count -- this IS
+    the "tag's role" this docstring could previously only describe
+    structurally); for `degree < 5`, `byte[0] >> 4` is a 4-bit node-type
+    attribute, `byte[1] & 7` a secondary attribute, `(byte[1] >> 3) & 1` a
+    traffic-light-present flag (only meaningful when a separate
+    `db_trafficlight_valid` global is set), and the trailing `degree`
+    many `uint16`s starting at byte offset 2 are SEGMENT-INDEX references
+    (local indices into this parcel's own routing-segment array, i.e.
+    exactly the "link id" this docstring's own edge-finding logic already
+    treats as "shared by the two adjacent points" -- a segment, by
+    definition, connects exactly two endpoints) -- confirming the
+    "link id" terminology this module already used independently was the
+    right intuition. For `degree` 5-8 the SAME attribute fields shift one
+    byte later and the segment-index list can exceed this one record's own
+    10 bytes (needing a follow-on record this per-record reader does not
+    attempt to stitch together -- see the code's own fallback below).
+
+    Cross-checked two ways against this module's own, completely
+    independent prior work, with no information shared in either
+    direction beforehand:
+      - The formula's predicted field count matches 8 of the 9 entries the
+        OLD hand-built `low-byte -> field-count` table listed from pure
+        byte-pattern observation, EXACTLY (`0x01`/`0x11` -> 1, `0x22`/
+        `0x02` -> 2, `0x23`/`0x43`/`0x63` -> 3, `0xc4` -> 4) -- only
+        `0x32` disagreed (hand-table said 3 fields, the degree formula
+        says 2; on priors, a lone disagreement against 8 clean matches
+        plus a real source citation reads as the hand-table's own sampling
+        noise, not a flaw in the formula). The code below now uses the
+        formula directly; the hand-built table has been removed.
+      - Decoding the FULL record (not just the field count) against the
+        two single-feature ground-truth tiles already used elsewhere in
+        this docstring and counting how many times each extracted segment-
+        index value recurs gives a strongly graph-shaped result on both:
+        83-point `mg4` tile (offset 5,138,331) -- 81 values appear exactly
+        twice (a real two-ended edge) and 24 once (a boundary edge), 105
+        distinct total, matching this docstring's own earlier-reported "105
+        distinct node-ids" for this exact tile; 2-feature `mg4` "Iasi" tile
+        (offset 11,298,518), feature 0's own 393 records -- 546 distinct
+        segment values, matching this docstring's own earlier-reported
+        "546, combined point total across BOTH features" for this exact
+        tile. Both numbers were derived independently, sessions apart, by
+        two unrelated methods (pure statistical graph analysis here vs.
+        reading real decompiled source) -- landing on the identical count
+        each time is strong convergent evidence, not a coincidence.
+      - Applying the degree formula instead of the old hand-table to BOTH
+        of `resolve_topology_adjacency()`'s own human-verified ground-truth
+        tiles leaves its scores UNCHANGED (still 16/16 on `mg2` 20597,
+        still 16/18 on `mp0` 91124) -- confirmed directly by re-running
+        that function after this change. Expected, given the formula
+        matches the old table almost everywhere, but worth stating
+        plainly: this was a real regression check, not an assumption.
+
+    Still open even with the real source in hand:
+      - WHICH exact file `db_find_node_main`'s own parcel read resolves to
+        at runtime is NOT provable from DBAL.OUT alone: it calls through
+        `db_page_pcl` via an externally-supplied function-pointer global
+        (`_fp_db_page_pcl`) that is never assigned anywhere in the 1,915-
+        function DBAL.OUT decompile -- the real file/layer-number lookup
+        lives in a DIFFERENT, not-decompiled firmware module. The call site
+        that reaches this code (`db_find_node_from_draw_map_V000`, `db/
+        db_find.cpp:426`) debug-logs its own layer argument as
+        `"MAP_DRAWING_PARCEL"`, and `8` does not correspond to `mp0`/`mg1-4`
+        in the disc's own `files.cfg` fileId table (`fea` is `8` there) --
+        so this may be reading a logically-separate "drawing parcel" layer
+        that happens to share this record FORMAT with `mp0`/`mg*`, rather
+        than literally the same bytes this module opens directly. The
+        structural/numerical match above is strong evidence for a shared
+        format regardless of the exact file-identity question.
+      - The multi-feature case is NOT yet closed: applying this SAME
+        formula to the 2-feature tile's feature 1 (the 154-point one, the
+        154 records immediately following feature 0's own 393 in the
+        shared table) gives a visibly messier degree distribution and an
+        implausible segment-value multiplicity (one value recurring 91
+        times) -- i.e. either feature 1's own table starts somewhere other
+        than immediately after feature 0's, or there is additional
+        structure (another gap, like the single-feature tile's own 104
+        bytes) between them that has not been located. ~2,384 bytes of
+        this specific tile remain fully unaccounted for after feature 1's
+        naively-expected table region. This is the SAME category of "exact
+        byte-placement rule for table N>0" gap this docstring's own
+        earlier sections already flagged as unresolved for `_find_
+        topology_table_start()` -- this session narrowed WHAT the bytes
+        mean once correctly located, not WHERE they start for every
+        feature in a tile.
+      - **Degree 5-8 continuation records: mechanism CONFIRMED by direct
+        byte evidence, but a real integration attempt REGRESSED the
+        validated ground truth and was reverted -- do not re-attempt
+        without a new idea.** `db_copy_node` reads up to 8 segment-index
+        fields starting 4 bytes into a degree>=5 record (3 from its own
+        trailing space, the rest from the immediately-following physical
+        slot) -- confirmed directly on a real tile (`mg4` offset
+        11,298,518): a degree-5 record's own continuation slot is `f3 00
+        f4 00 00 00 00 00 00 00`, 2 real values followed by clean zero
+        padding, exactly the shape of unused overflow space rather than a
+        coincidentally-small independent record. A `_walk_topology_logical()`
+        helper implementing this (consuming 2 physical slots per
+        degree>=5 logical entry instead of 1, keeping each feature's
+        LOGICAL entry count at exactly `point_count + 1` so `resolve_
+        topology_adjacency()`'s own `(i + shift) % n_records` indexing
+        would not need to change) was built and wired into both this
+        function's per-feature walk and the greedy search's byte-range
+        reservation. Result: `mg2` 20597 stayed 16/16 (different
+        auto-detected shift, same score), but **`mp0` 91124 dropped from
+        16/18 to 11/18** -- that tile has a SECOND degree>=5 record
+        (degree 13, immediately after the degree-12 header record) whose
+        own continuation consumption does not simply shift everything
+        after it by a constant amount the way a single isolated
+        continuation does elsewhere; no shift value recovered better than
+        11/18 under the corrected indexing, including with the header
+        record exempted from the continuation rule (tried directly -- no
+        change, since the header and the record right after it between
+        them still consume the identical number of physical slots either
+        way). The confirmed byte-level mechanism is real, but applying it
+        broadly needs a correct theory for the two-degree>=5-records-in-
+        a-row case (or for whatever ELSE is different about `mp0` 91124's
+        own header) that this session did not find -- reverted rather
+        than shipped. The helper function's own docstring preserves the
+        full mechanism for a future attempt; `decode_topology()` itself
+        still uses the original fixed-10-byte-stride walk with the
+        generic "strip trailing zero fields, keep >= 2" fallback for any
+        degree>=5 record, exactly as before this investigation (not a
+        regression from before -- the old hand-table never had an entry
+        for any degree>=5 low byte either, every one of its 9 entries has
+        low nibble 0-4).
 
     Args:
         raw, declen: as for decode_features().
@@ -3925,13 +4272,6 @@ def decode_topology(raw, declen=None, features=None):
     if features is None:
         features = decode_features(raw, declen)
 
-    _FIELDCOUNT_BY_LOW_BYTE = {
-        0x01: 1, 0x11: 1,
-        0x22: 2, 0x02: 2,
-        0x23: 3, 0x32: 3, 0x43: 3, 0x63: 3,
-        0xc4: 4,
-    }
-
     # Anchor the search after the LAST feature's block_end (the overall
     # coordinate-region end) -- matches the 2-feature tile's observed
     # zero-gap behavior; _find_topology_table_start()'s search window
@@ -3992,7 +4332,22 @@ def decode_topology(raw, declen=None, features=None):
                 tag_bytes = raw[pos:pos + 2]
                 a, b, c, d = struct.unpack_from("<HHHH", raw, pos + 2)
                 low = tag_bytes[0]
-                nfields = _FIELDCOUNT_BY_LOW_BYTE.get(low)
+                # DBAL-SOURCED (see docstring's "REAL DBAL SOURCE" section):
+                # the low nibble of byte 0 is the real node DEGREE (segment
+                # count), per db_convert_ninfo__FPlP9SNodeInfo -- matches 8
+                # of the 9 entries the old hand-built low-byte->field-count
+                # table used to list exactly (only low byte 0x32 disagreed:
+                # that table said 3 fields, the real degree formula says 2;
+                # removed in favor of this explained, source-backed rule).
+                # Only reliable for degree 0-4, where the segment fields
+                # start right at this record's own +2 offset -- degree 5-8
+                # shifts the attribute bits by a byte and needs MORE than
+                # this one 10-byte record's own trailing space (see
+                # docstring), which this per-record reader doesn't attempt,
+                # so it falls through to the same strip-trailing-zero
+                # fallback already used for every other unrecognized shape.
+                degree = low & 0xf
+                nfields = degree if degree <= 4 else None
                 allf = [a, b, c, d]
                 if nfields is None:
                     # best-effort fallback: strip trailing zero fields,

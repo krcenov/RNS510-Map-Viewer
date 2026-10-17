@@ -1604,14 +1604,27 @@ class MapData:
 
     def _build_layer_bbox_index(self, layer):
         """README §8 item 3 "true tile bounding boxes" -- builds this
-        layer's real per-tile CONTENT bbox index (mcr.build_bbox_index(),
-        validated: median neighbor-tile gap 8-24m at full-layer scale,
-        see that function's docstring) and its numpy-vectorized form for
-        tile_ids_in_bbox()'s fast overlap test below. Same one-time,
-        decode-every-tile cost model as _build_layer_geo_index() (they
-        could share one decode pass in principle, but are kept separate
-        calls for now -- see that function's own note about this)."""
-        bi = mcr.build_bbox_index_cached(self.layer_paths[layer], self.geo_index_cache_dir)
+        layer's real per-tile bbox index for tile_ids_in_bbox()'s fast
+        overlap test below.
+
+        **As of the k-d tree edge-scale resolution** (wiki MAP_COMPRESSED-
+        Container-Format.md -- the earlier "proven hard wall" conclusion
+        turned out to be a 4-byte reader offset bug, found via eeu.mod's
+        own schema, not a real limit), this tries mcr.
+        build_kdtree_bbox_index() FIRST: a single O(kd_cnt) structural
+        traversal of the file's own real k-d tree, no tile decompression
+        at all (~0.2s on `mg4`, FULL coverage -- 6,110/6,110 tiles vs.
+        content-scanning's 5,935/6,110 -- and MORE accurate, since these
+        are the tree's actual stored partition boundaries, not a content
+        proxy; see build_kdtree_bbox_index()'s own docstring for the
+        validation numbers). Falls back to the original content-decode
+        approach (mcr.build_bbox_index_cached(), median neighbor-tile gap
+        8-24m at full-layer scale) when the k-d tree can't be parsed for
+        this layer (e.g. `eeuz.fea`, which doesn't use this table format
+        at all) or comes back empty."""
+        bi = mcr.build_kdtree_bbox_index(self.layer_paths[layer])
+        if not bi:
+            bi = mcr.build_bbox_index_cached(self.layer_paths[layer], self.geo_index_cache_dir)
         self.bbox_indexes[layer] = bi
         ids = list(bi.keys())
         self._bbox_arrays[layer] = (
