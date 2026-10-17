@@ -330,6 +330,7 @@ Known v2 limitations (explicit, not oversights) -- see README §10:
 """
 
 import io
+import json
 import math
 import os
 import shutil
@@ -360,6 +361,41 @@ import swl_5238_reader as swlfw
 from rns510_gui import BackgroundTask
 
 APP_TITLE = "RNS510 Map Viewer (read-only)"
+
+# Last-opened-ISO persistence (this session): a tiny JSON file next to the
+# script itself, same "beside __file__" convention MapData already uses for
+# geo_index_cache_dir above -- no user-wide config dir, no registry, just a
+# plain file this app owns. Only ever holds {"last_iso_path": "..."}; never
+# grows, so no need for anything heavier than json.load/json.dump.
+VIEWER_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "viewer_config.json")
+
+
+def _load_last_iso_path():
+    """Returns the last-opened ISO path from VIEWER_CONFIG_PATH, or None if
+    there isn't one yet, the file is corrupt, or (this is the common case
+    right after a fresh git checkout) it simply doesn't exist. Deliberately
+    silent on any failure here -- a missing/bad config file should degrade
+    to "no remembered ISO", never crash app startup."""
+    try:
+        with open(VIEWER_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        path = data.get("last_iso_path")
+        return path if isinstance(path, str) and path else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_last_iso_path(path):
+    """Persists `path` as the remembered ISO for next launch. Best-effort:
+    a write failure here (read-only install dir, locked file, etc.) should
+    never block or crash a successful Open Map ISO -- it only means the
+    "Load last ISO" button won't have anything to offer next time."""
+    try:
+        with open(VIEWER_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"last_iso_path": path}, f)
+    except OSError:
+        pass
+
 
 LAYER_ISO_PATHS = {
     "mg1": "/DB/EEUZ.MG1",
@@ -3370,6 +3406,14 @@ class App:
         # graph to compute degree from in the first place). See _redraw().
         self.show_junctions_var = tk.BooleanVar(value=True)
 
+        # Last-opened-ISO path (this session), read once at startup from
+        # VIEWER_CONFIG_PATH -- see that constant's own comment. None if
+        # nothing's been opened yet (or the config file is missing/corrupt).
+        # Saved fresh on every SUCCESSFUL on_open_iso(); drives whether the
+        # "Load last ISO" button (see _build_widgets()) is enabled and what
+        # path it loads.
+        self.last_iso_path = _load_last_iso_path()
+
         self._build_menu()
         self._build_widgets()
         self._set_status("No ISO loaded. Use File > Open Map ISO...")
@@ -3408,6 +3452,7 @@ class App:
         menubar = tk.Menu(self.root)
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label="Open Map ISO...", command=self.on_open_iso)
+        filemenu.add_command(label="Load Last ISO", command=self.on_load_last_iso)
         filemenu.add_command(label="Load Sirius POIs...", command=self.on_load_sirius)
         filemenu.add_command(label="Open Firmware ISO (real screen shape)...", command=self.on_open_firmware_iso)
         filemenu.add_separator()
@@ -3438,9 +3483,23 @@ class App:
         search_panel = tk.Frame(self.root, bg=SEARCH_PANEL_BG)
         search_panel.pack(fill="x", side="top")
 
-        self.iso_label = tk.Label(search_panel, text="(no ISO loaded)", anchor="w",
+        iso_row = tk.Frame(search_panel, bg=SEARCH_PANEL_BG)
+        iso_row.pack(fill="x", padx=10, pady=(6, 0))
+        initial_iso_text = "(no ISO loaded)"
+        if self.last_iso_path:
+            initial_iso_text = "(no ISO loaded -- last used: %s)" % self.last_iso_path
+        self.iso_label = tk.Label(iso_row, text=initial_iso_text, anchor="w",
                                    bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG_DIM, font=("Segoe UI", 8))
-        self.iso_label.pack(fill="x", padx=10, pady=(6, 0))
+        self.iso_label.pack(side="left", fill="x", expand=True)
+        # "Load last ISO" button (this session): one click reopens
+        # self.last_iso_path (see its own comment in __init__) without the
+        # file-picker dialog on_open_iso() normally requires. Disabled
+        # (not hidden -- its own label is the explanation) whenever there's
+        # nothing remembered yet; _refresh_last_iso_button() keeps that in
+        # sync whenever last_iso_path changes.
+        self.load_last_iso_btn = self._make_pill_button(iso_row, "Load last ISO", self.on_load_last_iso)
+        self.load_last_iso_btn.pack(side="right")
+        self._refresh_last_iso_button()
 
         # Breadcrumb-style address display, in the spirit of photo #2's
         # "BALGARIA / SOFIA / ZHK LYULIN..." country->city->street build-up
@@ -4091,9 +4150,19 @@ class App:
             except tk.TclError:
                 pass
 
+    def _refresh_last_iso_button(self):
+        """Keeps load_last_iso_btn (built in _build_widgets()) in sync with
+        self.last_iso_path and self.busy. Deliberately NOT routed through
+        _set_controls_enabled()/self._controls -- unlike those (which only
+        make sense once an ISO is already open), this button's whole point
+        is to work from the very first launch, before self.data exists."""
+        enabled = bool(self.last_iso_path) and not self.busy
+        self.load_last_iso_btn.configure(state="normal" if enabled else "disabled")
+
     def _begin_busy(self, msg):
         self.busy = True
         self._set_controls_enabled(False)
+        self._refresh_last_iso_button()
         self._set_status(msg)
         self.progress.start(12)
 
@@ -4101,6 +4170,7 @@ class App:
         self.busy = False
         self.progress.stop()
         self._set_controls_enabled(self.data is not None)
+        self._refresh_last_iso_button()
 
     # ------------------------------------------------------------- actions
 
@@ -4113,7 +4183,32 @@ class App:
         )
         if not path:
             return
+        self._open_iso_path(path)
 
+    def on_load_last_iso(self):
+        """File > Load Last ISO, and the "Load last ISO" pill button next
+        to iso_label (this session) -- reopens self.last_iso_path directly,
+        skipping on_open_iso()'s filedialog.askopenfilename() prompt.
+        Shares _open_iso_path() with on_open_iso() so the actual load
+        (background task, done() callback, stale-points clearing,
+        persisting the path again) is identical either way; only HOW the
+        path is obtained differs."""
+        if self.busy:
+            return
+        if not self.last_iso_path:
+            messagebox.showinfo("Load Last ISO", "No previously-opened ISO is remembered yet.\n"
+                                                   "Use File > Open Map ISO... first.")
+            return
+        if not os.path.isfile(self.last_iso_path):
+            messagebox.showerror("Load Last ISO", "The remembered ISO is no longer there:\n%s" % self.last_iso_path)
+            return
+        self._open_iso_path(self.last_iso_path)
+
+    def _open_iso_path(self, path):
+        """Shared by on_open_iso() (user just picked `path` via the file
+        dialog) and on_load_last_iso() (`path` is the remembered
+        self.last_iso_path) -- everything past "we have a path" is
+        identical either way."""
         if self.data is not None:
             self.data.close()
         self.data = MapData(path)
@@ -4135,6 +4230,13 @@ class App:
                 self._set_status("Failed to open ISO: %s" % error)
                 self.data = None
                 return
+            # Remember this ISO for next launch's "Load last ISO" (saved
+            # only on a CONFIRMED-working open, never on the mere attempt
+            # above -- a bad/corrupt path should never become "the
+            # remembered one").
+            self.last_iso_path = result
+            _save_last_iso_path(result)
+            self._refresh_last_iso_button()
             n_tiles = sum(self.data.directories[l]["num_tiles"] for l in FAST_LAYERS)
             n_resolved = sum(len(self.data.geo_indexes[l]) for l in FAST_LAYERS)
             self.iso_label.config(text="Loaded: %s  [%d/%d overview-to-neighborhood tiles ready, %d cities]" % (
