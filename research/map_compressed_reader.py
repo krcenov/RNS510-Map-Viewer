@@ -2272,75 +2272,52 @@ def _find_topology_table_start(raw, declen, n_records, region_end, max_gap=2000,
     return None
 
 
-def _walk_topology_logical(raw, table_start, n_records):
-    """**NOT CURRENTLY USED by decode_topology() or resolve_topology_
-    adjacency() -- wiring this in was tried directly and REGRESSED the
-    validated ground truth (`mp0` 91124: 16/18 -> 11/18; see
-    decode_topology()'s own "Degree 5-8 continuation records" caveat for
-    the full writeup of what broke and why). Kept as a correctly-behaving,
-    byte-level-confirmed building block for a future attempt with a
-    better theory for tiles that have TWO degree>=5 records in a row (like
-    `mp0` 91124's own header) -- do not wire this back in without first
-    reproducing that regression test and understanding why it happens.**
+def _topology_record_fields(raw, pos, degree):
+    """Extract one topology record's own `fields` tuple at byte offset
+    `pos` (see decode_topology()'s "REAL DBAL SOURCE" docstring section
+    for the real citation chain). `degree` (the record's own byte-0 low
+    nibble) is passed in rather than re-read so callers that already
+    computed it don't repeat the work.
 
-    Walk a topology table by LOGICAL entry (one per real node/header --
-    exactly `n_records` of them, matching `point_count + 1` -- not by raw
-    physical byte position), consuming TWO physical 10-byte slots instead
-    of one whenever a record's own degree is >= 5.
+    For degree 0-4 this is just this record's own 4 trailing `uint16`s,
+    truncated to `degree` of them (`db_convert_ninfo`'s degree<5 branch).
 
-    DBAL-SOURCED mechanism (see decode_topology()'s own "REAL DBAL SOURCE"
-    docstring section): `db_copy_node__FP5VNodeUsUiP7DBSNodeP8position`
-    (`db/db_upack.cpp:6110`) reads up to 8 segment-index fields starting 4
-    bytes into a degree>=5 record -- 3 from this record's own trailing
-    space (bytes 4,6,8) and the rest from the IMMEDIATELY FOLLOWING
-    physical slot's own bytes (0,2,4,6,8), which is therefore pure
-    overflow/continuation data for THIS record, not a separate real node.
-    Confirmed by direct byte inspection on a real tile (`mg4` offset
-    11,298,518): a degree-5 record's own continuation slot is `f3 00 f4
-    00 00 00 00 00 00 00` -- the first 2 values are real (the 2 extra
-    segment indices this degree needs beyond its own 3), and the
-    remaining 3 slots are zero-padded, exactly matching an unused
-    continuation tail rather than a coincidentally-small independent
-    record.
+    For degree 5-8 (`db_copy_node`'s degree>=5 branch, `db/
+    db_upack.cpp:6110`): reads 3 fields from THIS record's own trailing
+    space (byte offsets 4, 6, 8) plus up to 5 more from the
+    IMMEDIATELY FOLLOWING record's own bytes (offsets 0, 2, 4, 6, 8) --
+    **a PEEK, not a consume**: that following record is NOT removed
+    from independent circulation -- when ITS OWN index is looked up
+    later, it is read completely normally, on its own degree and
+    fields, same as any other record. The two readings don't conflict:
+    a low-degree record's own UNUSED trailing fields are already zero
+    by construction (the standard fixed-10-byte-slot convention every
+    degree<5 record already uses), so a record that happens to serve
+    double duty as a high-degree neighbor's overflow space simply has
+    real values in the slots its OWN modest degree needs and zeros
+    elsewhere -- exactly what an ordinary record already looks like.
 
-    Returns `(records, physical_end)`: `records` has exactly `n_records`
-    entries (same shape as decode_topology()'s own per-record dicts --
-    `offset`/`tag`/`fields`), and `physical_end` is the byte offset one
-    past the last physical slot actually consumed (equals `table_start +
-    n_records*10` when no degree>=5 record was seen; strictly greater
-    whenever one or more were, since each adds one extra physical slot
-    beyond the naive point-count-based estimate).
-
-    Safe to use as a drop-in for decode_topology()'s own per-feature walk
-    and for the greedy multi-feature search's byte-range reservation:
-    `resolve_topology_adjacency()` only ever indexes into a feature's
-    `records` by LOGICAL position (`records[(i + shift) % n_records]`),
-    never by physical byte offset, so correcting the physical/logical
-    relationship here does not require any change to that function."""
-    records = []
-    slot = 0
-    for _ in range(n_records):
-        pos = table_start + slot * 10
-        rec = raw[pos:pos + 10]
-        tag_bytes = rec[:2]
-        a, b, c, d = struct.unpack_from("<HHHH", rec, 2)
-        low = tag_bytes[0]
-        degree = low & 0xf
-        if degree <= 4:
-            fields = (a, b, c, d)[:degree]
-            records.append({"offset": pos, "tag": tag_bytes.hex(), "fields": fields})
-            slot += 1
-        else:
-            d_count = min(degree, 8)
-            own_fields = struct.unpack_from("<HHH", rec, 4)  # offsets 4, 6, 8
-            next_pos = table_start + (slot + 1) * 10
-            next_rec = raw[next_pos:next_pos + 10]
-            cont_fields = struct.unpack_from("<HHHHH", next_rec.ljust(10, b"\x00"), 0)
-            fields = (own_fields + cont_fields)[:d_count]
-            records.append({"offset": pos, "tag": tag_bytes.hex(), "fields": fields})
-            slot += 2
-    physical_end = table_start + slot * 10
-    return records, physical_end
+    CONFIRMED by a direct regression test: this is what "wiring the
+    confirmed degree>=5 continuation mechanism into the live decoder"
+    actually needed -- an EARLIER attempt in this same investigation
+    tried shrinking each feature's table to `point_count + 1` LOGICAL
+    entries by having a degree>=5 record CONSUME (skip) its
+    continuation slot, which regressed `mp0` 91124's validated ground
+    truth (16/18 -> 11/18, see git history for the reverted commit) --
+    the mistake was assuming the overflow slot had to stop being an
+    independently-addressable record. It doesn't: every slot stays
+    addressable at its own fixed `table_start + k*10` offset, `n_records`
+    stays exactly `point_count + 1`, and NEITHER ground-truth tile's
+    score changes at all once each degree>=5 record simply reads a
+    little further without touching anyone else's indexing."""
+    rec = raw[pos:pos + 10]
+    if degree <= 4:
+        return struct.unpack_from("<HHHH", rec, 2)[:degree]
+    d_count = min(degree, 8)
+    own_fields = struct.unpack_from("<HHH", rec, 4)  # offsets 4, 6, 8
+    next_rec = raw[pos + 10:pos + 20]
+    cont_fields = struct.unpack_from("<HHHHH", next_rec.ljust(10, b"\x00"), 0)
+    return (own_fields + cont_fields)[:d_count]
 
 
 def decode_topology(raw, declen=None, features=None):
@@ -2756,62 +2733,62 @@ def decode_topology(raw, declen=None, features=None):
         than literally the same bytes this module opens directly. The
         structural/numerical match above is strong evidence for a shared
         format regardless of the exact file-identity question.
-      - The multi-feature case is NOT yet closed: applying this SAME
-        formula to the 2-feature tile's feature 1 (the 154-point one, the
-        154 records immediately following feature 0's own 393 in the
-        shared table) gives a visibly messier degree distribution and an
-        implausible segment-value multiplicity (one value recurring 91
-        times) -- i.e. either feature 1's own table starts somewhere other
-        than immediately after feature 0's, or there is additional
-        structure (another gap, like the single-feature tile's own 104
-        bytes) between them that has not been located. ~2,384 bytes of
-        this specific tile remain fully unaccounted for after feature 1's
-        naively-expected table region. This is the SAME category of "exact
-        byte-placement rule for table N>0" gap this docstring's own
-        earlier sections already flagged as unresolved for `_find_
-        topology_table_start()` -- this session narrowed WHAT the bytes
-        mean once correctly located, not WHERE they start for every
-        feature in a tile.
-      - **Degree 5-8 continuation records: mechanism CONFIRMED by direct
-        byte evidence, but a real integration attempt REGRESSED the
-        validated ground truth and was reverted -- do not re-attempt
-        without a new idea.** `db_copy_node` reads up to 8 segment-index
-        fields starting 4 bytes into a degree>=5 record (3 from its own
-        trailing space, the rest from the immediately-following physical
-        slot) -- confirmed directly on a real tile (`mg4` offset
-        11,298,518): a degree-5 record's own continuation slot is `f3 00
-        f4 00 00 00 00 00 00 00`, 2 real values followed by clean zero
-        padding, exactly the shape of unused overflow space rather than a
-        coincidentally-small independent record. A `_walk_topology_logical()`
-        helper implementing this (consuming 2 physical slots per
-        degree>=5 logical entry instead of 1, keeping each feature's
-        LOGICAL entry count at exactly `point_count + 1` so `resolve_
-        topology_adjacency()`'s own `(i + shift) % n_records` indexing
-        would not need to change) was built and wired into both this
-        function's per-feature walk and the greedy search's byte-range
-        reservation. Result: `mg2` 20597 stayed 16/16 (different
-        auto-detected shift, same score), but **`mp0` 91124 dropped from
-        16/18 to 11/18** -- that tile has a SECOND degree>=5 record
-        (degree 13, immediately after the degree-12 header record) whose
-        own continuation consumption does not simply shift everything
-        after it by a constant amount the way a single isolated
-        continuation does elsewhere; no shift value recovered better than
-        11/18 under the corrected indexing, including with the header
-        record exempted from the continuation rule (tried directly -- no
-        change, since the header and the record right after it between
-        them still consume the identical number of physical slots either
-        way). The confirmed byte-level mechanism is real, but applying it
-        broadly needs a correct theory for the two-degree>=5-records-in-
-        a-row case (or for whatever ELSE is different about `mp0` 91124's
-        own header) that this session did not find -- reverted rather
-        than shipped. The helper function's own docstring preserves the
-        full mechanism for a future attempt; `decode_topology()` itself
-        still uses the original fixed-10-byte-stride walk with the
-        generic "strip trailing zero fields, keep >= 2" fallback for any
-        degree>=5 record, exactly as before this investigation (not a
-        regression from before -- the old hand-table never had an entry
-        for any degree>=5 low byte either, every one of its 9 entries has
-        low nibble 0-4).
+      - The multi-feature case is NOT yet closed, and is a SEPARATE
+        question from the degree 5-8 mechanism above (re-tested directly
+        after that was fixed, to make sure: feature 0's own 393 records
+        get CLEANER with the real degree formula applied, 548 distinct
+        segment values vs the previous 546-547 estimates, but feature 1's
+        naively-expected 154 records immediately after still come out
+        messy -- degree values scattered across the full 0-15 range and
+        a segment value recurring 13 times, down from the pre-fix
+        session's 91 but still clearly wrong -- confirming this is a real
+        table-PLACEMENT gap, not a side effect of the old field-count
+        bug). Either feature 1's own table starts somewhere other than
+        immediately after feature 0's, or there is additional structure
+        (another gap, like the single-feature tile's own 104 bytes)
+        between them that has not been located. ~2,384 bytes of this
+        specific tile remain fully unaccounted for after feature 1's
+        naively-expected table region. This is the SAME category of
+        "exact byte-placement rule for table N>0" gap this docstring's
+        own earlier sections already flagged as unresolved for `_find_
+        topology_table_start()` -- narrowing WHAT the bytes mean once
+        correctly located doesn't by itself say WHERE they start for
+        every feature in a tile.
+      - **Degree 5-8 continuation records: CRACKED and shipped (a later
+        session).** `db_copy_node` (`db/db_upack.cpp:6110`) reads up to 8
+        segment-index fields starting 4 bytes into a degree>=5 record (3
+        from its own trailing space, the rest from the IMMEDIATELY
+        FOLLOWING record's own bytes) -- confirmed directly on a real
+        tile (`mg4` offset 11,298,518): a degree-5 record's own
+        continuation data is `f3 00 f4 00 00 00 00 00 00 00`, 2 real
+        values followed by clean zero padding. A first integration
+        attempt got the MECHANISM right but the INTEGRATION wrong: it
+        had a degree>=5 record CONSUME (skip) its continuation slot --
+        removing it from independent addressing, shrinking each
+        feature's table to exactly `point_count + 1` LOGICAL entries
+        spread over MORE physical slots -- which regressed `mp0` 91124's
+        validated ground truth (16/18 -> 11/18; that tile has a SECOND
+        degree>=5 record immediately after the first, and the two
+        consumptions don't combine into a simple constant indexing
+        shift). The actual fix needed no skipping at all: a degree>=5
+        record's continuation data is a PEEK into the next record, not a
+        consume of it -- the next record is NOT removed from
+        circulation, and is read completely normally, on its OWN degree
+        and fields, when its OWN index comes up later. This isn't a
+        conflict: a low-degree record's unused trailing fields are
+        already zero by construction (every degree<5 record already
+        works this way), so a record serving double duty as a neighbor's
+        overflow space just has real values where its own modest degree
+        needs them and zeros elsewhere -- indistinguishable from an
+        ordinary record when read on its own terms. `_topology_record_
+        fields()` implements this; `decode_topology()`'s own `records`
+        list keeps the exact same length and per-slot addressing as
+        before (`n_records = point_count + 1`, `table_start + k*10` for
+        every `k`), so `resolve_topology_adjacency()` needed NO changes
+        at all. Regression-tested directly: BOTH ground-truth tiles
+        reproduce their exact prior scores (`mg2` 20597 16/16, `mp0`
+        91124 16/18, same auto-detected shifts) -- a real fix, not just a
+        structural improvement with an unverified cost.
 
     Args:
         raw, declen: as for decode_features().
@@ -4329,36 +4306,23 @@ def decode_topology(raw, declen=None, features=None):
             table_end = table_start + n_records * 10
             for k in range(n_records):
                 pos = table_start + k * 10
-                tag_bytes = raw[pos:pos + 2]
-                a, b, c, d = struct.unpack_from("<HHHH", raw, pos + 2)
-                low = tag_bytes[0]
+                low = raw[pos]
                 # DBAL-SOURCED (see docstring's "REAL DBAL SOURCE" section):
                 # the low nibble of byte 0 is the real node DEGREE (segment
                 # count), per db_convert_ninfo__FPlP9SNodeInfo -- matches 8
                 # of the 9 entries the old hand-built low-byte->field-count
-                # table used to list exactly (only low byte 0x32 disagreed:
-                # that table said 3 fields, the real degree formula says 2;
-                # removed in favor of this explained, source-backed rule).
-                # Only reliable for degree 0-4, where the segment fields
-                # start right at this record's own +2 offset -- degree 5-8
-                # shifts the attribute bits by a byte and needs MORE than
-                # this one 10-byte record's own trailing space (see
-                # docstring), which this per-record reader doesn't attempt,
-                # so it falls through to the same strip-trailing-zero
-                # fallback already used for every other unrecognized shape.
+                # table used to list exactly (only low byte 0x32 disagreed).
+                # degree 5-8 reads past this record's own 10 bytes into the
+                # NEXT record's own bytes too (db_copy_node, db/
+                # db_upack.cpp:6110) -- a PEEK, not a consume, see
+                # _topology_record_fields()'s own docstring for why that
+                # following record still gets read completely normally,
+                # on its own degree, when ITS OWN index comes up.
                 degree = low & 0xf
-                nfields = degree if degree <= 4 else None
-                allf = [a, b, c, d]
-                if nfields is None:
-                    # best-effort fallback: strip trailing zero fields,
-                    # keep at least 2 -- see caveat in the docstring above
-                    nfields = 4
-                    while nfields > 2 and allf[nfields - 1] == 0:
-                        nfields -= 1
-                fields = tuple(allf[:nfields])
+                fields = _topology_record_fields(raw, pos, degree)
                 records.append({
                     "offset": pos,
-                    "tag": tag_bytes.hex(),
+                    "tag": raw[pos:pos + 2].hex(),
                     "fields": fields,
                 })
                 if k == 0:
