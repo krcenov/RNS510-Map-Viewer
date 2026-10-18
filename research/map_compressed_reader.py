@@ -5919,11 +5919,21 @@ def resolve_cross_tile_adjacency(tile_data, max_edge_m=CROSS_TILE_MAX_EDGE_M,
         just because each is the OTHER's least-bad option. `max_edge_m`
         is what separates the real <150m cluster from that noise tail.
 
-    **Honestly scoped**: tested only on single-feature tiles so far (a
-    multi-feature tile's own degree-1 set is just as computable from
-    `resolve_topology_adjacency()`'s per-feature output, but combining
-    multiple features' points into one per-TILE degree-1 pool was not
-    tried this session); the ~38-68% of real neighbor pairs that do NOT
+    **UPDATE, immediately following: multi-feature tiles tested too,
+    same signal holds.** The write-up above validated single-feature
+    tiles only; `point_a`/`point_b` for a multi-feature tile's own
+    degree-1 pool needs a `(feature_index, point_index)` pair, not a
+    bare point index, since a tile-level pool combines every feature's
+    points -- a caller building `tile_data` for a multi-feature tile
+    should key `deg1` entries that way. Re-ran the SAME `mg4` Sofia
+    cluster with multi-feature tiles included (434 usable tiles, 182 of
+    them multi-feature, vs 263/0 single-feature-only above): 524 NEAR
+    pairs, 169 matches; 1,572 FAR control pairs (explicit distant pairs,
+    `bbox_gap_max_deg` forced open since they're far by construction):
+    **0 matches**, same exact-zero signal as every other control run.
+    Safe to use for every tile, not just single-feature ones.
+
+    **Honestly scoped**: the ~38-68% of real neighbor pairs that do NOT
     produce a match were not individually audited (plausibly genuine --
     not every tile boundary cuts through a road -- but not confirmed
     tile-by-tile); and bidirectional many-to-many cases (a tile boundary
@@ -5933,14 +5943,19 @@ def resolve_cross_tile_adjacency(tile_data, max_edge_m=CROSS_TILE_MAX_EDGE_M,
     observed in this validation sample, but not proven impossible).
 
     Args:
-        tile_data: {tile_id: {"deg1": [(point_index, (lon, lat)), ...],
+        tile_data: {tile_id: {"deg1": [(point_id, (lon, lat)), ...],
             "bbox": (lon_min, lon_max, lat_min, lat_max)}} -- a caller
             assembles this from already-computed `resolve_topology_
             adjacency()` results (degree-1 = exactly one edge touches
-            that point index across ALL of a tile's features combined)
-            and `build_bbox_index()`/equivalent per-tile content bboxes.
-            Only tiles actually present here are considered -- this
-            function does no tile decoding or lookup of its own.
+            that point across ALL of a tile's features combined) and
+            `build_bbox_index()`/equivalent per-tile content bboxes.
+            `point_id` is opaque to this function (never indexed or
+            compared beyond equality) -- a bare point index for a
+            single-feature tile, or a `(feature_index, point_index)`
+            pair for a multi-feature one (see the multi-feature UPDATE
+            below), whatever the caller finds useful to get back in the
+            results. Only tiles actually present here are considered --
+            this function does no tile decoding or lookup of its own.
         max_edge_m: real-world distance cutoff for a match -- see the
             validation above for why 150.0 (`CROSS_TILE_MAX_EDGE_M`) is
             the validated default, not an arbitrary round number.
