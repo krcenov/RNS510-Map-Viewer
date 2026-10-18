@@ -83,7 +83,7 @@ Usage:
     tile_id = mcr.find_tile_for_coord(geo_index, lon, lat)  # nearest-anchor tile lookup
     bbox_index = mcr.build_bbox_index(path)                 # NEW: {tile_id: (lon_min,lon_max,lat_min,lat_max)}, ~O(filesize) -- real content bbox per tile
     tile_id, method = mcr.find_tile_for_coord_bbox(bbox_index, geo_index, lon, lat)  # NEW: prefers exact bbox containment, falls back to nearest-anchor -- see its docstring/README §8 item 3
-    hints = mcr.scan_native_geo_hints(path)                 # NEW: {tile_id: coord_degrees} straight from Continental's own pre-table region, NO tile decompression -- ~20-100x faster, ~42% validated coverage, see its own docstring/README §8 item 1
+    hints = mcr.scan_native_geo_hints(path)                 # NEW: {tile_id: (coord_degrees, axis)} straight from Continental's own pre-table region, NO tile decompression -- ~20-100x faster, ~45% validated coverage, axis ("lon"/"lat") no longer ambiguous, see its own docstring/README §8 item 1
     lon, lat, method = mcr.find_tile_anchor(raw, declen)    # per-tile anchor, given raw bytes
     points = mcr.decode_vertex_chain(raw, declen)           # [(lon,lat), ...] absolute vertex chain (single-feature only, see caveat)
     features = mcr.decode_features(raw, declen)             # [{"count","offset","block_end","points":[(lon,lat),...]}, ...] -- multi-feature-aware, CRACKED this session
@@ -451,23 +451,26 @@ def scan_native_geo_hints(path):
     content-bbox bound (`build_bbox_index()`'s own already-validated
     proxy for the tile's true edge, README §8 item 3).
 
-    Returns {tile_id: coord_degrees} -- NOTE: this is a single bound
-    (whichever of lon_max/lat_max this tile's own record encodes, not
-    distinguishable from the value alone), NOT a full bbox and NOT
-    reliably present for every tile -- see Coverage.
+    Returns {tile_id: (coord_degrees, axis)} -- `axis` is `"lon"` or
+    `"lat"` (see the axis-tag UPDATE below: no longer ambiguous), telling
+    the caller WHICH bound this is; still a single bound, NOT a full
+    bbox, and NOT reliably present for every tile -- see Coverage.
 
     Coverage, VALIDATED directly against build_bbox_index()'s own
     already-validated full-decompress bounds (candidate entries found /
     real tiles in the file / exact-match rate among checkable
-    candidates):
-        eeuz.mg4 (6,110 tiles):  2,796 candidates, 1,151/2,729 checkable
+    candidates) -- **re-measured after the axis-tag filter below**,
+    which drops the untagged (non-0x88/0x89) noise candidates a
+    caller was previously getting mixed in with no way to tell them
+    apart from a real hint:
+        eeuz.mg4 (6,110 tiles):  2,422 candidates, 1,064/2,367 checkable
                                  exact-matched a real lon_max or lat_max
-                                 (42.2%)
-        eeuz.mg3 (16,503 tiles): 8,000 candidates, 3,316/7,881 checkable
-                                 exact-matched (42.1%)
-    Both files independently land within 0.1 percentage points of each
+                                 (45.0%)
+        eeuz.mg3 (16,503 tiles): 6,772 candidates, 3,049/6,671 checkable
+                                 exact-matched (45.7%)
+    Both files independently land within 0.7 percentage points of each
     other -- a real, reproducible rate, not a fluke of one file's own
-    byte layout. **Honestly scoped**: the ~58% non-matching candidates
+    byte layout. **Honestly scoped**: the ~55% non-matching candidates
     are NOT necessarily wrong -- some plausibly encode a DIFFERENT
     tile's bound that happens to also look valid (min-corner entries,
     internal-node MBRs covering multiple tiles, or a different
@@ -533,7 +536,49 @@ def scan_native_geo_hints(path):
         coincidental byte patterns, not real records at all -- but not
         confirmed either way). A future session would need a genuinely
         new idea here, not more of the same trial-and-error; logged so
-        the 4 refuted hypotheses above aren't re-tried from scratch."""
+        the 4 refuted hypotheses above aren't re-tried from scratch.
+
+    UPDATE, a still-later session: the "why lon_max vs lat_max" open
+    question above is now CRACKED -- the byte immediately following each
+    12-byte `[coord][tile_id][tile_id+1]` triple is a real, deterministic
+    axis tag: **136 (0x88) on every single `lon_max`-validated record,
+    137 (0x89) on every single `lat_max`-validated record, with ZERO
+    exceptions**, confirmed at full scale on 2 independent files (`mg4`:
+    607/607 lon_max + 457/457 lat_max; `mg3`: 1662/1662 lon_max + 1387/
+    1387 lat_max). 136 and 137 differ only in their low bit (0x88 = real
+    high-nibble "entry" tag, bit0 = axis: 0 -> longitude, 1 -> latitude)
+    -- a clean, structural confirmation, not a correlation found by
+    chance (the sample sizes and 100% consistency rule that out).
+
+    This directly removes the ambiguity `rns510_map_viewer.py`'s own
+    `tile_ids_in_bbox()` docstring names as the reason its own 3rd,
+    hint-based viewport test was added and then REVERTED (a hint's axis
+    was previously undiscoverable from the value alone, so that test had
+    to check a candidate against the query bbox's lon-range OR lat-range
+    -- axis-ambiguous by construction -- which inflated pooled tile
+    counts 4.5-10x at real viewport scale). With the axis now known
+    per-hint, a caller can test ONLY the correct one of the two ranges,
+    which is what `tile_ids_in_bbox()` now does again -- see its own
+    docstring for the re-validation numbers.
+
+    NOT yet pursued, logged so it isn't re-investigated from scratch:
+    among candidates that DON'T exactly match a real tile's own content-
+    proxy bbox (the ~58% "none" bucket from the Coverage section above),
+    a sizeable majority (731/1900 tag=136, 573/1900 tag=137 on `mg4`)
+    carry this SAME 136/137 tag -- plausibly genuine real/genuine R-tree
+    records for tiles whose true boundary sits a bit beyond what the
+    content-based bbox proxy captures (consistent with checking: 421/731
+    tag=136 "none" records DO have `coord >= real lon_max`, as a genuine
+    tile boundary should), but a real fraction of these also have
+    wildly implausible magnitudes (diffs up to 123 degrees) once
+    checked, so this group is a MIX of recoverable real records and
+    scan noise, not cleanly either -- deliberately NOT included in this
+    function's own returned coverage below, which stays restricted to
+    the already-individually-validated subset. A separate ~0/1-tagged
+    group (319/277 on `mg4`) is also unexplained -- plausibly a
+    DIFFERENT record kind (internal R-tree node MBRs spanning multiple
+    tiles, given the tag's missing high nibble vs the leaf-entry 0x88/
+    0x89 pattern) but not tested."""
     directory = read_directory(path)
     n_tiles = directory["num_tiles"]
     with _open(path) as f:
@@ -541,14 +586,17 @@ def scan_native_geo_hints(path):
         region = f.read(directory["table_start"] - 80)
 
     hints = {}
-    for pos in range(len(region) - 12):
+    for pos in range(len(region) - 13):
         a = struct.unpack_from("<i", region, pos)[0]
         b = struct.unpack_from("<i", region, pos + 4)[0]
         c = struct.unpack_from("<i", region, pos + 8)[0]
         if 0 <= b < n_tiles and c == b + 1:
             x = a / 100000.0
             if -180 <= x <= 180 and abs(x) > 0.01:
-                hints[b] = x
+                tag = region[pos + 12]
+                axis = "lon" if tag == 0x88 else "lat" if tag == 0x89 else None
+                if axis is not None:
+                    hints[b] = (x, axis)
     return hints
 
 

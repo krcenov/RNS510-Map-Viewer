@@ -1398,8 +1398,8 @@ class MapData:
         self._geo_arrays = {}       # {layer: (tile_ids_np, lons_np, lats_np)}
         self.bbox_indexes = {}      # {layer: {tile_id: (lon_min,lon_max,lat_min,lat_max)}} -- README S8 item 3
         self._bbox_arrays = {}      # {layer: (tile_ids_np, lon_min_np, lon_max_np, lat_min_np, lat_max_np)}
-        self.native_hints = {}      # {layer: {tile_id: coord_degrees}} -- mcr.scan_native_geo_hints(), README S8 item 1
-        self._hint_arrays = {}      # {layer: (tile_ids_np, coord_np)}
+        self.native_hints = {}      # {layer: {tile_id: (coord_degrees, axis)}} -- mcr.scan_native_geo_hints(), README S8 item 1
+        self._hint_arrays = {}      # {layer: (lon_tile_ids_np, lon_coords_np, lat_tile_ids_np, lat_coords_np)} -- split by axis (see scan_native_geo_hints()'s axis-tag update), so tile_ids_in_bbox() can test each hint against only its own correct range
 
         self.mp0_ready = False      # True once HEAVY_LAYER's geo-index is built
         self.mp0_building = False   # True while load_heavy_layer() is running
@@ -1700,18 +1700,32 @@ class MapData:
         index, deliberately NOT deferred to its own background task) --
         see load()'s own call site. **Honestly scoped, per that
         function's own docstring**: each hint is ONE bound (lon_max or
-        lat_max, not distinguishable from the value alone), validated at
-        only ~42-46% exact-match coverage against real tile bboxes, and
-        not individually guaranteed for any single tile -- treated
-        accordingly by tile_ids_in_bbox() below (an ADDITIONAL, purely
-        inclusive union test, never a replacement for the existing
-        anchor/bbox tests, and never used to EXCLUDE a tile)."""
+        lat_max -- the axis tag resolves WHICH one, see scan_native_
+        geo_hints()'s own later update, but still not a full bbox),
+        validated at only ~45% exact-match coverage against real tile
+        bboxes, and not individually guaranteed for any single tile.
+        **NOT currently used as a live viewport filter** -- tile_ids_
+        in_bbox() tried wiring this in as a 3rd union test TWICE now
+        (once axis-ambiguous, once axis-precise after scan_native_
+        geo_hints()'s own axis-tag update) and measured a real 4.5x-12.5x
+        pooled-tile-count inflation BOTH times -- see that function's own
+        docstring for the full story (a single-axis hint structurally
+        can't constrain the orthogonal axis, so fixing the axis ambiguity
+        alone was never going to fix the inflation). Kept here, split
+        into separate lon-tagged/lat-tagged arrays, purely so this real,
+        validated per-tile data is available for a future, genuinely
+        different use (e.g. combined with a second, independent signal)
+        without needing to re-scan -- not dead weight, but also not
+        wired into any live filtering path today."""
         hints = mcr.scan_native_geo_hints(self.layer_paths[layer])
         self.native_hints[layer] = hints
-        ids = list(hints.keys())
+        lon_ids = [t for t, (x, axis) in hints.items() if axis == "lon"]
+        lat_ids = [t for t, (x, axis) in hints.items() if axis == "lat"]
         self._hint_arrays[layer] = (
-            np.array(ids, dtype=np.int64),
-            np.array([hints[t] for t in ids], dtype=np.float64),
+            np.array(lon_ids, dtype=np.int64),
+            np.array([hints[t][0] for t in lon_ids], dtype=np.float64),
+            np.array(lat_ids, dtype=np.int64),
+            np.array([hints[t][0] for t in lat_ids], dtype=np.float64),
         )
 
     def load(self, progress=None):
@@ -2167,7 +2181,34 @@ class MapData:
         ordering (back to waiting on `build_geo_index()`, README's own
         v35->v36 entry) -- without this test, flipping `mp0_ready` right
         after the hint scan would have left mp0 "ready" but functionally
-        empty for the ~150s gap until `build_geo_index()` finishes."""
+        empty for the ~150s gap until `build_geo_index()` finishes.
+
+        **UPDATE, a still-later session: re-adding the 3rd test with the
+        axis ambiguity fixed was TRIED and MEASURED, not just reasoned
+        about -- and the fix alone does NOT solve the regression.**
+        `scan_native_geo_hints()` was extended to report WHICH axis each
+        hint is (a real, 100%-consistent byte tag, not a guess -- see
+        that function's own docstring), removing the exact ambiguity
+        named above. Wired in, axis-correct (`lon_min <= x <= lon_max`
+        for a lon-tagged hint, `lat_min <= x <= lat_max` for a lat-tagged
+        one -- never the other axis), and measured at the same kind of
+        Sofia-area viewport sweep (170m-21km) used to catch the original
+        regression: pooled tile count still inflated **4.5x-12.5x** over
+        tests 1+2 alone, on both `mg1` and `mp0` -- essentially the SAME
+        magnitude as the original, supposedly-fixed defect. **Root cause
+        was mis-diagnosed the first time**: axis ambiguity was A problem
+        (comparing a value against the wrong axis's range is obviously
+        wrong) but was never the MAIN source of inflation. The real
+        issue is structural and axis-correctness can't fix it: a hint is
+        ONE coordinate (a max edge on one axis), so a 1-D range test
+        against it has NO way to constrain the orthogonal axis at all --
+        a lon-tagged hint whose value sits inside the viewport's lon
+        range matches regardless of how far away that tile actually is
+        in latitude. Reverted this specific re-wiring again (kept OUT of
+        the live test below); `scan_native_geo_hints()`'s own axis-tag
+        improvement is kept, as a correct, independently useful fact
+        about the format, but using single-axis hints as a 2-D viewport
+        filter remains the wrong tool for this job either way."""
         result_ids = set()
 
         geo_arrays = self._geo_arrays.get(layer)
