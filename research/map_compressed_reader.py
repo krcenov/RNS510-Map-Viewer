@@ -2299,6 +2299,14 @@ def decode_topology_gap(raw, header=None):
 # `n_records*6 + 200` formula finds nothing at all for a given feature.
 _TOPOLOGY_CAP_LADDER_EXTRA = (5000, 10000, 20000, 40000, 50000)
 
+# Second-pass search WINDOW width (a later session, see decode_topology()'s
+# own "SEARCH-WINDOW WIDTH" docstring update) -- only used to retry a
+# feature still unresolved after the original max_gap=2000 first pass, so
+# it never changes an already-successful feature's result. 10000 was
+# chosen as the validated value (60 improved, 0 regressions across 123
+# sampled multi-feature tiles) -- not re-tuned further this session.
+_TOPOLOGY_WIDE_MAX_GAP = 10000
+
 
 def _find_topology_table_start(raw, declen, n_records, region_end, max_gap=2000, cap=None,
                                 reserved=()):
@@ -2868,6 +2876,45 @@ def decode_topology(raw, declen=None, features=None):
         reproduce their exact prior scores (`mg2` 20597 16/16, `mp0`
         91124 16/18, same auto-detected shifts) -- a real fix, not just a
         structural improvement with an unverified cost.
+      - **SEARCH-WINDOW WIDTH: a real, measured bug found and fixed (a
+        still-later session), independent of the table-placement mystery
+        above.** Investigating the 2-feature "Iasi" tile's own still-open
+        feature-1 gap (above) found that `_find_topology_table_start()`'s
+        `max_gap=2000` default search window is narrower than feature
+        0's own reservation on this exact tile (3,930 bytes) -- i.e.
+        feature 1's search NEVER reaches a single byte past the
+        reservation's end under the OLD single-pass code, regardless of
+        which cap in the ladder is tried; it isn't "the heuristic looked
+        and found nothing real", it's "the heuristic couldn't look at
+        most of the remaining tile at all." (This specific tile's own
+        real table still wasn't found even after widening -- see the
+        "NOT SOLVED" section's own still-open entry -- but the search-
+        window bug itself is real and separable from that mystery.)
+        Measured the blast radius at scale (250 random `mg4` + 100
+        random `mp0` tiles, every multi-feature one checked): naively
+        widening `max_gap` for EVERY feature, not just stragglers,
+        recovers real wins (42/78 `mg4`, 19/45 `mp0` multi-feature tiles
+        gain a feature reaching `"confidence": "high"`) but ALSO
+        regresses 6 previously-`"high"`-confidence features on `mg4` (0
+        on `mp0`) -- the wider candidate pool changes the GREEDY
+        resolution order itself, letting a later feature's new wide match
+        occasionally out-compete (reserve before) an earlier feature that
+        used to win cleanly at the narrow width, cascading into multiple
+        features in the same tile flipping at once (one single tile
+        accounted for 5 of the 6 `mg4` regressions). **Fixed with a
+        TWO-PASS search, not a wider single pass**: run the exact
+        original `max_gap=2000` pass first, completely unchanged (every
+        feature that already resolved keeps the IDENTICAL `table_start`
+        it always had -- directly verified, 0/123 sampled multi-feature
+        tiles saw any already-found feature's `table_start` change), and
+        only afterward retry whatever is STILL unresolved with a wider
+        `max_gap` (`_TOPOLOGY_WIDE_MAX_GAP = 10000`), using the
+        reservations pass 1 already made. Re-measured with this fix: the
+        SAME 60 real wins (41 `mg4` + 19 `mp0`) with **zero regressions**
+        on both files. Ground-truth tiles (`mg2` 20597, `mp0` 91124,
+        both single-feature) are byte-identical before/after, as
+        expected -- a second pass only ever runs when something is left
+        over after the first.
 
     Args:
         raw, declen: as for decode_features().
@@ -4348,30 +4395,44 @@ def decode_topology(raw, declen=None, features=None):
     # reserved, and the next round repeats over the remaining pending
     # features (now excluding the reserved byte range). Stops when no
     # remaining pending feature can be found at any rung.
+    #
+    # TWO-PASS (a later session, see the "SEARCH-WINDOW WIDTH" update
+    # below): this whole block runs once at the original tight
+    # `max_gap` (unchanged from every prior session -- byte-for-byte
+    # identical results for anything that already resolved here), then
+    # ONLY whatever is still unresolved afterward gets a second,
+    # wider-window retry, never touching what pass 1 already reserved.
     resolved_start = [None] * n
     reserved = []
-    pending = list(range(n))
-    while pending:
-        best_i = None
-        best_rank = None
-        best_start = None
-        for i in pending:
-            nr = n_records_list[i]
-            tight = nr * 6 + 200
-            cap_ladder = sorted(set(
-                c for c in (tight,) + _TOPOLOGY_CAP_LADDER_EXTRA if c >= tight))
-            for rank, cap_try in enumerate(cap_ladder):
-                s = _find_topology_table_start(
-                    raw, declen, nr, search_from, cap=cap_try, reserved=reserved)
-                if s is not None:
-                    if best_rank is None or rank < best_rank:
-                        best_rank, best_i, best_start = rank, i, s
-                    break  # this feature's own tightest available match -- don't loosen further
-        if best_i is None:
-            break  # no remaining pending feature can be located anywhere
-        resolved_start[best_i] = best_start
-        reserved.append((best_start, best_start + n_records_list[best_i] * 10))
-        pending.remove(best_i)
+
+    def _resolve_pending(pending, max_gap):
+        pending = list(pending)
+        while pending:
+            best_i = None
+            best_rank = None
+            best_start = None
+            for i in pending:
+                nr = n_records_list[i]
+                tight = nr * 6 + 200
+                cap_ladder = sorted(set(
+                    c for c in (tight,) + _TOPOLOGY_CAP_LADDER_EXTRA if c >= tight))
+                for rank, cap_try in enumerate(cap_ladder):
+                    s = _find_topology_table_start(
+                        raw, declen, nr, search_from, max_gap=max_gap, cap=cap_try, reserved=reserved)
+                    if s is not None:
+                        if best_rank is None or rank < best_rank:
+                            best_rank, best_i, best_start = rank, i, s
+                        break  # this feature's own tightest available match -- don't loosen further
+            if best_i is None:
+                break  # no remaining pending feature can be located anywhere at this max_gap
+            resolved_start[best_i] = best_start
+            reserved.append((best_start, best_start + n_records_list[best_i] * 10))
+            pending.remove(best_i)
+        return pending
+
+    leftover = _resolve_pending(range(n), max_gap=2000)
+    if leftover:
+        _resolve_pending(leftover, max_gap=_TOPOLOGY_WIDE_MAX_GAP)
 
     results = []
     for i, feat in enumerate(features):
