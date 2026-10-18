@@ -759,6 +759,15 @@ MAJOR_JUNCTION_COLOR = "#6a1b9a"  # deep purple -- degree 5+ (today's fix)
 # feature, since there is no real adjacency graph to compute a degree
 # from in either case.
 UNRESOLVED_TOPOLOGY_COLOR = "#757575"
+# "Draw cross-tile connections (EXPERIMENTAL)" line color (a later
+# session): bright orange, chosen to stand out clearly from every
+# existing line color (green HIGHWAY_COLOR, gold/gray ROAD_COLOR_*, the
+# SEG_PREDICT_* overlay colors below) since a cross-tile connection is a
+# genuinely different KIND of claim than a normal drawn road segment --
+# it's an INFERRED edge (mcr.resolve_cross_tile_adjacency()'s mutual-
+# nearest-neighbor match across tiles), not a directly-decoded one, and
+# should read as "the viewer figured this out", not "this is on disc".
+CROSS_TILE_LINE_COLOR = "#ff6f00"
 # "Show predicted divided (EXPERIMENTAL)" overlay colors (this session):
 # deliberately bright/saturated and unlike any other color already in use
 # on this screen, so a predicted-divided vs. predicted-non-divided road is
@@ -3477,6 +3486,25 @@ class App:
         # connected_roads_var is off (no cached result to check at all).
         self.show_unresolved_topology_var = tk.BooleanVar(value=False)
 
+        # "Draw cross-tile connections (EXPERIMENTAL)" checkbox (a later
+        # session): draws real edges found by `mcr.resolve_cross_tile_
+        # adjacency()` -- a road cut in half by a tile boundary, stitched
+        # back together by matching each half's own degree-1 ("dead end")
+        # point to its MUTUAL nearest degree-1 point in a geographically
+        # neighboring tile. Validated (see that function's own docstring)
+        # on 2 independent layers with a real NEAR-vs-FAR controlled
+        # comparison: a real hit rate of 30-60%+ among genuine tile-
+        # boundary pairs vs. an exact ZERO false positives across over
+        # 2,000 combined control pairs -- a strong, not a speculative,
+        # signal. OFF by default anyway, same reasoning as show_seg_
+        # predict_var/show_unresolved_topology_var: this is a genuinely
+        # NEW, inferred edge (not something directly decoded off the
+        # disc), recomputed fresh every redraw from whatever tiles
+        # happen to be currently pooled (not cached across redraws --
+        # cheap enough not to need it, see _redraw()'s own timing), so
+        # toggling it needs no reload, just self._redraw().
+        self.show_cross_tile_var = tk.BooleanVar(value=False)
+
         # Last-opened-ISO path (this session), read once at startup from
         # VIEWER_CONFIG_PATH -- see that constant's own comment. None if
         # nothing's been opened yet (or the config file is missing/corrupt).
@@ -3746,6 +3774,20 @@ class App:
             activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
             font=("Segoe UI", 9), highlightthickness=0)
         self.show_unresolved_topology_cb.pack(side="left", padx=(10, 0))
+
+        # ---- "Draw cross-tile connections (EXPERIMENTAL)" checkbox (a
+        # later session) ---- see show_cross_tile_var's own comment in
+        # __init__ for the mechanism and validation. Same no-reload-
+        # needed reasoning as the other EXPERIMENTAL checkboxes here.
+        self._status_divider(layers_row)
+        self.show_cross_tile_cb = tk.Checkbutton(
+            layers_row, text="Draw cross-tile connections (EXPERIMENTAL)",
+            variable=self.show_cross_tile_var,
+            onvalue=True, offvalue=False, command=self._on_show_cross_tile_changed,
+            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
+            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
+            font=("Segoe UI", 9), highlightthickness=0)
+        self.show_cross_tile_cb.pack(side="left", padx=(10, 0))
 
         # ---- "Show predicted divided (EXPERIMENTAL)" checkbox (this
         # session) ---- mg4-only overlay coloring each connected-roads edge
@@ -5171,6 +5213,65 @@ class App:
                         [px - radius, py - radius, px + radius, py + radius],
                         fill=color)
 
+        # "Draw cross-tile connections (EXPERIMENTAL)" (a later session,
+        # see show_cross_tile_var's own comment in __init__): computed
+        # ONCE here, after the per-feature loop above, because it needs
+        # every currently-pooled tile's degree-1 points gathered TOGETHER
+        # (mcr.resolve_cross_tile_adjacency() compares across tiles), not
+        # one feature at a time like everything else in that loop.
+        if self.show_cross_tile_var.get() and connected_roads_on and self.data is not None:
+            # Group self.features by (layer, tile_id) -> {feature_index: feat}
+            # so a multi-feature tile's degree-1 pool can be built from ALL
+            # its features, keyed (feature_index, point_index) -- matches
+            # resolve_cross_tile_adjacency()'s own documented opaque-point-id
+            # convention for multi-feature tiles.
+            features_by_tile = {}
+            for feat in self.features:
+                layer = feat.get("layer")
+                tile_id = feat.get("tile_id")
+                f_idx = feat.get("feature_index")
+                if layer is None or tile_id is None or f_idx is None:
+                    continue
+                features_by_tile.setdefault((layer, tile_id), {})[f_idx] = feat
+
+            tile_data = {}
+            for (layer, tile_id), by_feature in features_by_tile.items():
+                bbox = self.data.bbox_indexes.get(layer, {}).get(tile_id)
+                if bbox is None:
+                    continue  # no real content bbox yet -- can't safely compare
+                tlist = self.data.topo_caches.get(layer, {}).get(tile_id)
+                if not tlist:
+                    continue
+                deg1 = []
+                for f_idx, feat in by_feature.items():
+                    if not (0 <= f_idx < len(tlist)):
+                        continue
+                    cand = tlist[f_idx]
+                    if not (cand.get("found") and cand.get("confidence") == "high"):
+                        continue
+                    pts = feat["points"]
+                    degree = {}
+                    for u, v in cand["edges"]:
+                        degree[u] = degree.get(u, 0) + 1
+                        degree[v] = degree.get(v, 0) + 1
+                    for pt_idx, deg in degree.items():
+                        if deg == 1 and pt_idx < len(pts):
+                            deg1.append(((f_idx, pt_idx), pts[pt_idx]))
+                if deg1:
+                    # tile_data is keyed by (layer, tile_id) here, not a
+                    # bare tile_id -- safe, since resolve_cross_tile_
+                    # adjacency() treats its dict keys as opaque too.
+                    tile_data[(layer, tile_id)] = {"deg1": deg1, "bbox": bbox}
+
+            for match in mcr.resolve_cross_tile_adjacency(tile_data):
+                feat_a = features_by_tile[match["tile_a"]][match["point_a"][0]]
+                feat_b = features_by_tile[match["tile_b"]][match["point_b"][0]]
+                pa = feat_a["points"][match["point_a"][1]]
+                pb = feat_b["points"][match["point_b"][1]]
+                ax, ay = self._to_canvas(*pa)
+                bx, by = self._to_canvas(*pb)
+                draw.line([(ax, ay), (bx, by)], fill=CROSS_TILE_LINE_COLOR, width=2)
+
         # Real POIs (README §10 "v19 -> v20"/"v20 -> v21", EDB/POI/POI.DB3)
         # -- rasterized into the SAME `img` bitmap as the road dots above,
         # for the exact same reason (README §10 "v17 -> v18"): a wide,
@@ -5953,6 +6054,15 @@ class App:
         (EXPERIMENTAL)" (a later session): a plain redraw, not a force-
         reload -- see show_unresolved_topology_var's own comment in
         __init__ for why no new data ever needs fetching."""
+        if self.data is None or self.center_lon is None:
+            return
+        self._redraw()
+
+    def _on_show_cross_tile_changed(self):
+        """Checkbutton command for "Draw cross-tile connections
+        (EXPERIMENTAL)" (a later session): a plain redraw -- see
+        show_cross_tile_var's own comment in __init__ for why this is
+        recomputed fresh each redraw rather than needing a reload."""
         if self.data is None or self.center_lon is None:
             return
         self._redraw()
