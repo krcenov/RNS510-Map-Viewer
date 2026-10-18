@@ -5448,12 +5448,49 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
        these functions index into at fixed offsets (node table pointer
        +0x30/count +0x34, two more table pointers at +0x20/+0x28 with
        counts at +0x24/+0x2c, a 4th at +0x38) -- lives outside DBAL.OUT
-       entirely. Confirmed this is the ONLY navigation-related `.OUT`
-       binary anywhere in this project's whole extracted firmware tree
-       (`find BASE -iname "*.OUT"` across every firmware version turns up
+       entirely (confirmed this is the ONLY navigation-related `.OUT`
+       binary anywhere in this project's whole extracted firmware tree --
+       `find BASE -iname "*.OUT"` across every firmware version turns up
        only `DBAL.OUT`, plus unrelated `CTEST.OUT`/`SCREENSH.OUT` test
-       utilities) -- so this isn't "look in a different DBAL function," it
-       would need a DIFFERENT compiled module this project does not have.
+       utilities). **Followed up directly into the firmware image that
+       DOES contain it** (`FHDD6.FLI`, the real flashed head-unit
+       application -- see `research/swl_5238_reader.py`): `DBAL.OUT` is
+       dynamically loaded BY this firmware at runtime (`"loadModule for
+       dbal.out"`/`"dbal_link_symbols failed!"` strings confirm it), and
+       the real symbol name `db_page_pcl_V000` genuinely exists inside it.
+       But this exact question -- does `db_page_pcl_V000` (or any of its
+       `db_get_parcel_dir_V005`/`db_load_pcl_dir_V005`/`db_map_dir_V000`
+       sibling catalog) have a recoverable code address -- was ALREADY
+       asked and answered in an EARLIER session (`swl_5238_reader.py`'s
+       own "MAP_COMPRESSED spatial index" section): checked against that
+       session's own `parse_symbol_table()` (an 8,000+-entry REAL,
+       address-resolved function catalog for this exact file) and
+       refuted -- none of them have any resolvable code address, at any
+       range. Independently RE-CONFIRMED this session with a fresh,
+       direct test: brute-forced every byte offset within 600 bytes of
+       the real `db_page_pcl_V000` string (both endiannesses) for
+       anything that decodes to a plausible code address -- zero hits --
+       and confirmed zero overlap between the 77-name `db_*_V0NN` catalog
+       and the 8,041 real address-resolved symbol names. Root cause (also
+       already established, same file): this string lives in what a
+       dedicated DWARF2 parser confirmed is NOT real surviving debug info
+       at all (zero `DW_AT_producer`/`DW_AT_comp_dir` hits anywhere, where
+       a real one would appear on every compilation unit) -- some other,
+       debug-only, flat string pool that the executing code never
+       references (confirmed via a `lis`/`addi` absolute-address
+       correlation sweep across the whole 24MB code region finding no
+       consistent load-base for any of several known strings), and whose
+       own real `.text`-equivalent code region (1.2-9MB) and debug-string
+       region (8.9MB+) are physically separate, non-adjacent byte ranges
+       by construction. **So this isn't "a different compiled module this
+       project does not have" -- the module IS available and the
+       function's real NAME survives in it, but the specific link from
+       that name to its own machine code does not survive anywhere in the
+       data this project has**, confirmed by multiple independent
+       techniques across two sessions now. Closing it further would need
+       either the original unstripped build (debug symbols, a linker map)
+       or a debugger attached to real hardware -- not more searching of
+       files already in this project's possession.
 
     2. `db_upack.cpp`'s `db_upack_nodes_compressed_fast__FP11DBActivePcli
        11UpackAction` (line 2037) looked, at first read, like exactly the

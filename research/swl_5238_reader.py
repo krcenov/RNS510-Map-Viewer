@@ -1526,6 +1526,16 @@ address in the symbol table, at any range (unlike `readNodeMP0`, which
 at least has a table entry, just in the already-confirmed-unreachable
 9MB+ zone) -- worse off than the routing-graph problem, not better.
 
+**Cross-referenced from a still-later session**: `db_page_pcl` (via
+DBAL.OUT's own `_fp_db_page_pcl`, the external function pointer that
+would locate a MAP_COMPRESSED tile's node/topology table) came up
+independently from the MAP_COMPRESSED "found: False" topology-table
+investigation (`research/map_compressed_reader.py`'s own
+`resolve_topology_adjacency()` docstring). Re-confirmed this exact
+`db_page_pcl_V000` finding still holds (zero resolvable address, zero
+overlap with the 8,041-entry address-resolved catalog) -- same wall,
+reached from two independent directions now.
+
 **The real breakthrough came from the LOOSE catalog's much larger
 `CfcMapViewProxy`/`MapViewImpl`/`MapController`/`MapCache`/`MDCache*`
 cluster** (586 matches for a `Map*`-family keyword sweep, 120 of them
