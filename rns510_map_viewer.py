@@ -746,6 +746,19 @@ HIGHWAY_COLOR = "#2e7d32"
 # different from a simple fork at a glance.
 JUNCTION_COLOR = "#0277bd"        # medium blue -- degree 3-4
 MAJOR_JUNCTION_COLOR = "#6a1b9a"  # deep purple -- degree 5+ (today's fix)
+# "Highlight unresolved topology (EXPERIMENTAL)" dot color (a later
+# session): neutral gray, deliberately UNLIKE every other color already on
+# screen (red dots, blue/purple junctions, green/gold/gray road lines) --
+# reads as "data unavailable here", not as a road-classification choice.
+# Covers BOTH `resolve_topology_adjacency()` outcomes a user can't tell
+# apart just by looking at a plain red dot: `"found": False` (no topology
+# table could be located for this feature at all -- see that function's
+# own docstring) and `"confidence": "low"` (a table was found, but its
+# best shift's geometry was too implausible to trust). Not degree-specific
+# like JUNCTION_COLOR above -- this marks EVERY point of an unresolved
+# feature, since there is no real adjacency graph to compute a degree
+# from in either case.
+UNRESOLVED_TOPOLOGY_COLOR = "#757575"
 # "Show predicted divided (EXPERIMENTAL)" overlay colors (this session):
 # deliberately bright/saturated and unlike any other color already in use
 # on this screen, so a predicted-divided vs. predicted-non-divided road is
@@ -3447,6 +3460,23 @@ class App:
         # graph to compute degree from in the first place). See _redraw().
         self.show_junctions_var = tk.BooleanVar(value=True)
 
+        # "Highlight unresolved topology (EXPERIMENTAL)" checkbox (a later
+        # session, prompted directly by a user right-clicking a real point
+        # that rendered as a plain dot with no explanation -- see
+        # UNRESOLVED_TOPOLOGY_COLOR's own comment for exactly what this
+        # covers). OFF by default, same reasoning as show_seg_predict_var
+        # below: this is a diagnostic/debugging aid, not a normal viewing
+        # mode, and (per the AT-SCALE numbers in resolve_topology_
+        # adjacency()'s own docstring) could recolor a meaningful fraction
+        # of points in a dense `mp0` area, which would be visual clutter
+        # for anyone not specifically investigating a missing connection.
+        # Like show_junctions_var, needs no reload when toggled -- it only
+        # recolors dots using adjacency data connected-roads mode already
+        # fetched (or the cached "found": False result of trying to), so
+        # its command is a plain self._redraw(). Has no effect when
+        # connected_roads_var is off (no cached result to check at all).
+        self.show_unresolved_topology_var = tk.BooleanVar(value=False)
+
         # Last-opened-ISO path (this session), read once at startup from
         # VIEWER_CONFIG_PATH -- see that constant's own comment. None if
         # nothing's been opened yet (or the config file is missing/corrupt).
@@ -3701,6 +3731,21 @@ class App:
             activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
             font=("Segoe UI", 9), highlightthickness=0)
         self.show_junctions_cb.pack(side="left", padx=(10, 0))
+
+        # ---- "Highlight unresolved topology (EXPERIMENTAL)" checkbox (a
+        # later session) ---- see show_unresolved_topology_var's own
+        # comment in __init__ for what this does and why it's OFF by
+        # default. Same no-reload-needed reasoning as "Highlight
+        # junctions" above.
+        self._status_divider(layers_row)
+        self.show_unresolved_topology_cb = tk.Checkbutton(
+            layers_row, text="Highlight unresolved topology (EXPERIMENTAL)",
+            variable=self.show_unresolved_topology_var,
+            onvalue=True, offvalue=False, command=self._on_show_unresolved_topology_changed,
+            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
+            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
+            font=("Segoe UI", 9), highlightthickness=0)
+        self.show_unresolved_topology_cb.pack(side="left", padx=(10, 0))
 
         # ---- "Show predicted divided (EXPERIMENTAL)" checkbox (this
         # session) ---- mg4-only overlay coloring each connected-roads edge
@@ -4945,6 +4990,16 @@ class App:
             # an edge can only ever be picked if it's actually drawn here.
             adj = None
             seg_pred = None
+            # "Highlight unresolved topology (EXPERIMENTAL)" (a later
+            # session): True iff this feature's own cached resolve_
+            # topology_adjacency() result EXISTS (connected-roads mode
+            # actually tried) but did NOT reach "confidence": "high" --
+            # see UNRESOLVED_TOPOLOGY_COLOR's own comment for why both
+            # "found": False and "confidence": "low" are treated the
+            # same here. Computed regardless of show_unresolved_topology_
+            # var itself (cheap, just a dict lookup) so the per-vertex
+            # dot loop below only has to check one plain boolean.
+            feature_topology_unresolved = False
             if connected_roads_on and self.data is not None:
                 layer = feat.get("layer")
                 tile_id = feat.get("tile_id")
@@ -4955,6 +5010,8 @@ class App:
                         cand = tlist[f_idx]
                         if cand.get("found") and cand.get("confidence") == "high":
                             adj = cand
+                        else:
+                            feature_topology_unresolved = True
                     # "Show predicted divided (EXPERIMENTAL)" (this session):
                     # looked up the SAME way as `adj` above (by layer/tile_id/
                     # feature_index), but independently of adjacency
@@ -5069,11 +5126,14 @@ class App:
                 # docstring for why (this loop alone used to be tens of
                 # thousands of individual canvas.create_oval() items at a
                 # dense real bbox).
+                dot_fill = DOT_COLOR
+                if feature_topology_unresolved and self.show_unresolved_topology_var.get():
+                    dot_fill = UNRESOLVED_TOPOLOGY_COLOR
                 for i in range(0, len(coords), 2):
                     px, py = coords[i], coords[i + 1]
                     draw.ellipse(
                         [px - radius, py - radius, px + radius, py + radius],
-                        fill=DOT_COLOR)
+                        fill=dot_fill)
 
                 if name:
                     x0, y0 = coords[0], coords[1]
@@ -5884,6 +5944,15 @@ class App:
         """Checkbutton command for "Highlight junctions" (this session):
         a plain redraw, not a force-reload -- see show_junctions_var's own
         comment in __init__ for why no new data ever needs fetching."""
+        if self.data is None or self.center_lon is None:
+            return
+        self._redraw()
+
+    def _on_show_unresolved_topology_changed(self):
+        """Checkbutton command for "Highlight unresolved topology
+        (EXPERIMENTAL)" (a later session): a plain redraw, not a force-
+        reload -- see show_unresolved_topology_var's own comment in
+        __init__ for why no new data ever needs fetching."""
         if self.data is None or self.center_lon is None:
             return
         self._redraw()
