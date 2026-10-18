@@ -574,11 +574,42 @@ def scan_native_geo_hints(path):
     checked, so this group is a MIX of recoverable real records and
     scan noise, not cleanly either -- deliberately NOT included in this
     function's own returned coverage below, which stays restricted to
-    the already-individually-validated subset. A separate ~0/1-tagged
-    group (319/277 on `mg4`) is also unexplained -- plausibly a
-    DIFFERENT record kind (internal R-tree node MBRs spanning multiple
-    tiles, given the tag's missing high nibble vs the leaf-entry 0x88/
-    0x89 pattern) but not tested."""
+    the already-individually-validated subset.
+
+    UPDATE, a still-later session: the separate ~0/1-tagged group (319
+    tag=0 + 277 tag=1 on `mg4`, 611 total across the whole file) was
+    tested directly -- TWO hypotheses, BOTH REFUTED, now closed:
+      - **Internal R-tree node MBR, grouping tile-ID-adjacent leaves**:
+        checked each tag=0 (would-be longitude) record's coordinate
+        against the min/max longitude of EVERY tile within +/-0, 1, 2,
+        5, and 10 of its own referenced tile_id -- essentially zero hits
+        at every radius (0-1 matches out of 324 checked, each time).
+        Consistent with (not a new finding, but a concrete confirmation
+        applied here) this project's own already-established fact that
+        tile_id file order is NOT a spatial/strip order -- an R-tree
+        internal node groups children by real geographic proximity, so
+        "nearby tile_id" was never going to be the right neighborhood to
+        check in the first place.
+      - **A different, approximate bound for the SAME referenced tile**
+        (e.g. `lon_min`/`lat_min`, or a grid/administrative edge instead
+        of the content-proxy edge): checked every tag=0/1 record's
+        coordinate against its OWN referenced tile's real `lon_min`/
+        `lon_max` or `lat_min`/`lat_max` (whichever axis the tag
+        implies) -- essentially UNCORRELATED, not just "a bit off": median
+        offset -0.9 to -1.2 degrees, full range -19.2 to +46.5 degrees,
+        only 1-4 of 596 landing within 0.01 degree. A real geo-index
+        record for the SAME tile, even an imprecise one, would cluster
+        near zero the way the already-confirmed 0x88/0x89 "none"-bucket
+        near-misses do (see above) -- this doesn't.
+      **Conclusion**: no evidence this is a real geo-index record of any
+      kind tied to its own `(tile_id, tile_id+1)` pair -- most likely
+      coincidental byte patterns that happen to match the scan's
+      `[coord][tile_id][tile_id+1]` shape by chance (the tag byte simply
+      isn't 0x88/0x89 for these), i.e. exactly the scan-noise floor the
+      rest of this function's own candidates are filtered against.
+      Already excluded from this function's returned dict (only 0x88/
+      0x89-tagged records are returned) -- this update just closes the
+      open question honestly rather than leaving it as a live lead."""
     directory = read_directory(path)
     n_tiles = directory["num_tiles"]
     with _open(path) as f:
