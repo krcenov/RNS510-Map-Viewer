@@ -538,78 +538,15 @@ def scan_native_geo_hints(path):
         new idea here, not more of the same trial-and-error; logged so
         the 4 refuted hypotheses above aren't re-tried from scratch.
 
-    UPDATE, a still-later session: the "why lon_max vs lat_max" open
-    question above is now CRACKED -- the byte immediately following each
-    12-byte `[coord][tile_id][tile_id+1]` triple is a real, deterministic
-    axis tag: **136 (0x88) on every single `lon_max`-validated record,
-    137 (0x89) on every single `lat_max`-validated record, with ZERO
-    exceptions**, confirmed at full scale on 2 independent files (`mg4`:
-    607/607 lon_max + 457/457 lat_max; `mg3`: 1662/1662 lon_max + 1387/
-    1387 lat_max). 136 and 137 differ only in their low bit (0x88 = real
-    high-nibble "entry" tag, bit0 = axis: 0 -> longitude, 1 -> latitude)
-    -- a clean, structural confirmation, not a correlation found by
-    chance (the sample sizes and 100% consistency rule that out).
-
-    This directly removes the ambiguity `rns510_map_viewer.py`'s own
-    `tile_ids_in_bbox()` docstring names as the reason its own 3rd,
-    hint-based viewport test was added and then REVERTED (a hint's axis
-    was previously undiscoverable from the value alone, so that test had
-    to check a candidate against the query bbox's lon-range OR lat-range
-    -- axis-ambiguous by construction -- which inflated pooled tile
-    counts 4.5-10x at real viewport scale). With the axis now known
-    per-hint, a caller can test ONLY the correct one of the two ranges,
-    which is what `tile_ids_in_bbox()` now does again -- see its own
-    docstring for the re-validation numbers.
-
-    NOT yet pursued, logged so it isn't re-investigated from scratch:
-    among candidates that DON'T exactly match a real tile's own content-
-    proxy bbox (the ~58% "none" bucket from the Coverage section above),
-    a sizeable majority (731/1900 tag=136, 573/1900 tag=137 on `mg4`)
-    carry this SAME 136/137 tag -- plausibly genuine real/genuine R-tree
-    records for tiles whose true boundary sits a bit beyond what the
-    content-based bbox proxy captures (consistent with checking: 421/731
-    tag=136 "none" records DO have `coord >= real lon_max`, as a genuine
-    tile boundary should), but a real fraction of these also have
-    wildly implausible magnitudes (diffs up to 123 degrees) once
-    checked, so this group is a MIX of recoverable real records and
-    scan noise, not cleanly either -- deliberately NOT included in this
-    function's own returned coverage below, which stays restricted to
-    the already-individually-validated subset.
-
-    UPDATE, a still-later session: the separate ~0/1-tagged group (319
-    tag=0 + 277 tag=1 on `mg4`, 611 total across the whole file) was
-    tested directly -- TWO hypotheses, BOTH REFUTED, now closed:
-      - **Internal R-tree node MBR, grouping tile-ID-adjacent leaves**:
-        checked each tag=0 (would-be longitude) record's coordinate
-        against the min/max longitude of EVERY tile within +/-0, 1, 2,
-        5, and 10 of its own referenced tile_id -- essentially zero hits
-        at every radius (0-1 matches out of 324 checked, each time).
-        Consistent with (not a new finding, but a concrete confirmation
-        applied here) this project's own already-established fact that
-        tile_id file order is NOT a spatial/strip order -- an R-tree
-        internal node groups children by real geographic proximity, so
-        "nearby tile_id" was never going to be the right neighborhood to
-        check in the first place.
-      - **A different, approximate bound for the SAME referenced tile**
-        (e.g. `lon_min`/`lat_min`, or a grid/administrative edge instead
-        of the content-proxy edge): checked every tag=0/1 record's
-        coordinate against its OWN referenced tile's real `lon_min`/
-        `lon_max` or `lat_min`/`lat_max` (whichever axis the tag
-        implies) -- essentially UNCORRELATED, not just "a bit off": median
-        offset -0.9 to -1.2 degrees, full range -19.2 to +46.5 degrees,
-        only 1-4 of 596 landing within 0.01 degree. A real geo-index
-        record for the SAME tile, even an imprecise one, would cluster
-        near zero the way the already-confirmed 0x88/0x89 "none"-bucket
-        near-misses do (see above) -- this doesn't.
-      **Conclusion**: no evidence this is a real geo-index record of any
-      kind tied to its own `(tile_id, tile_id+1)` pair -- most likely
-      coincidental byte patterns that happen to match the scan's
-      `[coord][tile_id][tile_id+1]` shape by chance (the tag byte simply
-      isn't 0x88/0x89 for these), i.e. exactly the scan-noise floor the
-      rest of this function's own candidates are filtered against.
-      Already excluded from this function's returned dict (only 0x88/
-      0x89-tagged records are returned) -- this update just closes the
-      open question honestly rather than leaving it as a live lead."""
+    The axis (lon vs lat) is resolved by a real tag byte immediately
+    after each 12-byte triple (0x88=lon, 0x89=lat, 100% consistent on 2
+    files -- see the wiki's MAP_COMPRESSED Container Format page for the
+    full validation and the separate 0/1-tagged byte group that was
+    tested and ruled out as a second record kind). NOTE: this whole
+    function is now a cruder, partial (~45%) stand-in for the real,
+    fully-cracked on-disk k-d tree this region actually is -- see that
+    same wiki page for the byte-exact structure and the viewer's own
+    primary bbox source."""
     directory = read_directory(path)
     n_tiles = directory["num_tiles"]
     with _open(path) as f:
@@ -2299,12 +2236,11 @@ def decode_topology_gap(raw, header=None):
 # `n_records*6 + 200` formula finds nothing at all for a given feature.
 _TOPOLOGY_CAP_LADDER_EXTRA = (5000, 10000, 20000, 40000, 50000)
 
-# Second-pass search WINDOW width (a later session, see decode_topology()'s
-# own "SEARCH-WINDOW WIDTH" docstring update) -- only used to retry a
-# feature still unresolved after the original max_gap=2000 first pass, so
-# it never changes an already-successful feature's result. 10000 was
-# chosen as the validated value (60 improved, 0 regressions across 123
-# sampled multi-feature tiles) -- not re-tuned further this session.
+# Second-pass search WINDOW width (see decode_topology()'s "Search-window
+# width" docstring note) -- only used to retry a feature still unresolved
+# after the original max_gap=2000 first pass, so it never changes an
+# already-successful feature's result. 10000 was chosen as the validated
+# value (60 improved, 0 regressions across 123 sampled multi-feature tiles).
 _TOPOLOGY_WIDE_MAX_GAP = 10000
 
 
@@ -2876,45 +2812,18 @@ def decode_topology(raw, declen=None, features=None):
         reproduce their exact prior scores (`mg2` 20597 16/16, `mp0`
         91124 16/18, same auto-detected shifts) -- a real fix, not just a
         structural improvement with an unverified cost.
-      - **SEARCH-WINDOW WIDTH: a real, measured bug found and fixed (a
-        still-later session), independent of the table-placement mystery
-        above.** Investigating the 2-feature "Iasi" tile's own still-open
-        feature-1 gap (above) found that `_find_topology_table_start()`'s
-        `max_gap=2000` default search window is narrower than feature
-        0's own reservation on this exact tile (3,930 bytes) -- i.e.
-        feature 1's search NEVER reaches a single byte past the
-        reservation's end under the OLD single-pass code, regardless of
-        which cap in the ladder is tried; it isn't "the heuristic looked
-        and found nothing real", it's "the heuristic couldn't look at
-        most of the remaining tile at all." (This specific tile's own
-        real table still wasn't found even after widening -- see the
-        "NOT SOLVED" section's own still-open entry -- but the search-
-        window bug itself is real and separable from that mystery.)
-        Measured the blast radius at scale (250 random `mg4` + 100
-        random `mp0` tiles, every multi-feature one checked): naively
-        widening `max_gap` for EVERY feature, not just stragglers,
-        recovers real wins (42/78 `mg4`, 19/45 `mp0` multi-feature tiles
-        gain a feature reaching `"confidence": "high"`) but ALSO
-        regresses 6 previously-`"high"`-confidence features on `mg4` (0
-        on `mp0`) -- the wider candidate pool changes the GREEDY
-        resolution order itself, letting a later feature's new wide match
-        occasionally out-compete (reserve before) an earlier feature that
-        used to win cleanly at the narrow width, cascading into multiple
-        features in the same tile flipping at once (one single tile
-        accounted for 5 of the 6 `mg4` regressions). **Fixed with a
-        TWO-PASS search, not a wider single pass**: run the exact
-        original `max_gap=2000` pass first, completely unchanged (every
-        feature that already resolved keeps the IDENTICAL `table_start`
-        it always had -- directly verified, 0/123 sampled multi-feature
-        tiles saw any already-found feature's `table_start` change), and
-        only afterward retry whatever is STILL unresolved with a wider
-        `max_gap` (`_TOPOLOGY_WIDE_MAX_GAP = 10000`), using the
-        reservations pass 1 already made. Re-measured with this fix: the
-        SAME 60 real wins (41 `mg4` + 19 `mp0`) with **zero regressions**
-        on both files. Ground-truth tiles (`mg2` 20597, `mp0` 91124,
-        both single-feature) are byte-identical before/after, as
-        expected -- a second pass only ever runs when something is left
-        over after the first.
+      - **Search-window width**: `_find_topology_table_start()`'s
+        `max_gap=2000` default can be narrower than an earlier feature's
+        own reservation, so a later feature's search could never reach
+        past it at any cap. The greedy search below runs in TWO passes
+        to fix this safely: the original `max_gap=2000` pass first,
+        completely unchanged (so anything that already resolved keeps
+        its identical `table_start`), then a wider retry
+        (`_TOPOLOGY_WIDE_MAX_GAP`) only for whatever is still
+        unresolved, using pass 1's own reservations. A single wider pass
+        was tried first and rejected -- it also regressed previously-
+        resolved features by perturbing the greedy resolution order; see
+        the wiki's "Finding the table" section for the measured numbers.
 
     Args:
         raw, declen: as for decode_features().
@@ -4396,8 +4305,8 @@ def decode_topology(raw, declen=None, features=None):
     # features (now excluding the reserved byte range). Stops when no
     # remaining pending feature can be found at any rung.
     #
-    # TWO-PASS (a later session, see the "SEARCH-WINDOW WIDTH" update
-    # below): this whole block runs once at the original tight
+    # TWO-PASS (see the docstring's "Search-window width" note above):
+    # this whole block runs once at the original tight
     # `max_gap` (unchanged from every prior session -- byte-for-byte
     # identical results for anything that already resolved here), then
     # ONLY whatever is still unresolved afterward gets a second,
@@ -5552,136 +5461,14 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     range to produce a meaningful signal either way if tested. The
     link-id values' own independent meaning remains genuinely open.
 
-    ==== UPDATE, a still-later session: DBAL.OUT searched directly for the
-    real table-LOCATING logic (to fix "found: False"), not just the
-    already-cracked record FORMAT -- re-confirms the known dead end via a
-    new angle, plus one genuinely new negative result ====
-    Motivation: `decode_topology()`'s own `_find_topology_table_start()`
-    locates a feature's table by heuristic byte-pattern/shift scoring, not
-    by computing its offset the way the real firmware does -- the ~24% of
-    features landing on `"found": False` (see the AT-SCALE section above)
-    are exactly where that heuristic gives up. If DBAL.OUT contained the
-    real offset-computing logic, it could in principle replace the guess
-    with an exact answer. Three concrete leads chased this session:
-
-    1. `db_succ.cpp`'s `gcopy_node__FP5VNodeUsUiP7DBSNode` (a sibling of
-       this project's already-used `db_copy_node__FP5VNodeUsUiP7DBSNodeP8
-       position`, db_upack.cpp:6110) reads the full degree nibble
-       UNCAPPED (up to 15) when copying a degree>=5 node's fields, with no
-       `uVar2 > 8 ? 8 : uVar2`-style clamp -- unlike `db_copy_node`, which
-       has that exact branchless clamp at db_upack.cpp:6141 and is the one
-       this project's `_topology_record_fields()` already matches (`min
-       (degree, 8)`). Directly compared both functions side by side: this
-       independently CONFIRMS, from the DBAL source itself (not just this
-       project's own empirical ground-truth testing), that capping at 8 is
-       correct for the function this project actually needs -- no change
-       required. `gcopy_node` itself turned out to be a dead end for
-       "found: False": it's reached from `db_succ_main__FUlP5VNodeP4vsegib
-       Pi` (live route-successor lookup) via `(*_fp_db_page_pcl)(...)`,
-       the SAME externally-unassigned function pointer (`extern code
-       _fp_db_page_pcl;`, DBAL_externs.h:1097 -- confirmed by grepping
-       every one of its ~30 call sites across the whole DBAL tree: never
-       once assigned, only ever called) already identified as unresolvable
-       in an earlier session's `db_find_node_main` investigation. Its real
-       implementation -- the thing that actually decompresses/parses a
-       MAP_COMPRESSED tile's bytes into the in-memory "parcel" structure
-       these functions index into at fixed offsets (node table pointer
-       +0x30/count +0x34, two more table pointers at +0x20/+0x28 with
-       counts at +0x24/+0x2c, a 4th at +0x38) -- lives outside DBAL.OUT
-       entirely (confirmed this is the ONLY navigation-related `.OUT`
-       binary anywhere in this project's whole extracted firmware tree --
-       `find BASE -iname "*.OUT"` across every firmware version turns up
-       only `DBAL.OUT`, plus unrelated `CTEST.OUT`/`SCREENSH.OUT` test
-       utilities). **Followed up directly into the firmware image that
-       DOES contain it** (`FHDD6.FLI`, the real flashed head-unit
-       application -- see `research/swl_5238_reader.py`): `DBAL.OUT` is
-       dynamically loaded BY this firmware at runtime (`"loadModule for
-       dbal.out"`/`"dbal_link_symbols failed!"` strings confirm it), and
-       the real symbol name `db_page_pcl_V000` genuinely exists inside it.
-       But this exact question -- does `db_page_pcl_V000` (or any of its
-       `db_get_parcel_dir_V005`/`db_load_pcl_dir_V005`/`db_map_dir_V000`
-       sibling catalog) have a recoverable code address -- was ALREADY
-       asked and answered in an EARLIER session (`swl_5238_reader.py`'s
-       own "MAP_COMPRESSED spatial index" section): checked against that
-       session's own `parse_symbol_table()` (an 8,000+-entry REAL,
-       address-resolved function catalog for this exact file) and
-       refuted -- none of them have any resolvable code address, at any
-       range. Independently RE-CONFIRMED this session with a fresh,
-       direct test: brute-forced every byte offset within 600 bytes of
-       the real `db_page_pcl_V000` string (both endiannesses) for
-       anything that decodes to a plausible code address -- zero hits --
-       and confirmed zero overlap between the 77-name `db_*_V0NN` catalog
-       and the 8,041 real address-resolved symbol names. Root cause (also
-       already established, same file): this string lives in what a
-       dedicated DWARF2 parser confirmed is NOT real surviving debug info
-       at all (zero `DW_AT_producer`/`DW_AT_comp_dir` hits anywhere, where
-       a real one would appear on every compilation unit) -- some other,
-       debug-only, flat string pool that the executing code never
-       references (confirmed via a `lis`/`addi` absolute-address
-       correlation sweep across the whole 24MB code region finding no
-       consistent load-base for any of several known strings), and whose
-       own real `.text`-equivalent code region (1.2-9MB) and debug-string
-       region (8.9MB+) are physically separate, non-adjacent byte ranges
-       by construction. **So this isn't "a different compiled module this
-       project does not have" -- the module IS available and the
-       function's real NAME survives in it, but the specific link from
-       that name to its own machine code does not survive anywhere in the
-       data this project has**, confirmed by multiple independent
-       techniques across two sessions now. Closing it further would need
-       either the original unstripped build (debug symbols, a linker map)
-       or a debugger attached to real hardware -- not more searching of
-       files already in this project's possession.
-
-    2. `db_upack.cpp`'s `db_upack_nodes_compressed_fast__FP11DBActivePcli
-       11UpackAction` (line 2037) looked, at first read, like exactly the
-       missing piece: its per-node loop decodes each neighbor field via
-       `readZValue__FRPc` (line 1735) -- a real, unambiguous LEB128-style
-       variable-length integer (7 bits/byte, high bit = continuation, upto
-       5 bytes) -- rather than a fixed 2-byte value, and stamps the
-       CURRENT node's own index into a separate 0x10-byte-stride segment
-       table at the decoded value's offset (`+6` or `+8`, picked by a
-       per-neighbor direction bit from the node record's own header bits).
-       That would be a real mechanism for how two nodes' records come to
-       share a value (a segment id) at all -- a more principled version of
-       this function's own empirically-discovered "shared link-id" rule.
-       TESTED DIRECTLY against this project's own best ground truth (`mg2`
-       20597, the exact real `table_start=1598` this function's existing
-       fixed-stride decode already uses to get 16/16 validated edges):
-       decoding from that same real offset as a `readZValue` stream
-       produces garbage -- the very first record decodes a "segment id"
-       of 835,445 (absurd for a 203-point tile), and the decode consumes
-       only 966 bytes across 209 records before this test was stopped,
-       vs. the already-validated, byte-exact 204 records x 10 bytes =
-       2,040 bytes the fixed-width interpretation actually needs to reach
-       this tile's real `table_end` (3638). **Ruled out empirically, not
-       just by analogy**: whatever `db_upack_nodes_compressed_fast`
-       decodes, it is NOT the bytes physically present in this project's
-       real `eeuz.mg2`/`eeuz.mp0` tiles at the table offset this project
-       has already independently, geometrically validated. Consistent
-       with (and probably the same root cause as) the EARLIER session's
-       finding that `db_upack_kd_top_node`/`db_upack_kd_sub_node`/`db_
-       upack_nodes` all route through the `mapView_o`/`DBFView` named-
-       field schema abstraction (confirmed again here: `db_upack_nodes_
-       compressed_fast`'s own `param_3==3` setup branch calls `getIndex__
-       C7DBFViewPCc(mapView_o, "node_index")` and `getDataItem__
-       12DBFViewmodelPCc("parcel_data/node_list")`, the identical pattern)
-       -- a real subsystem in DBAL.OUT, but for a DIFFERENT physical data
-       source than the compact MAP_COMPRESSED tiles this project reads
-       directly off the ISO, not an alternate decode path for the same
-       bytes.
-
-    **Net conclusion**: DBAL.OUT's own node-table CODE (the part reachable
-    from a byte buffer this project actually has, i.e. `db_convert_ninfo`/
-    `db_copy_node`) remains fully consistent with and independently
-    confirms everything this project had already cracked empirically. But
-    the LOCATING logic specifically -- is a feature's table at this byte
-    offset, how many records, where does it end -- is not exposed anywhere
-    in DBAL.OUT's own reachable code; every path that would compute it
-    either goes through the external, unassigned `_fp_db_page_pcl` (a
-    different, missing binary) or through the DBFView schema layer (a
-    different, unrelated data source). "found: False" remains open, and
-    closing it further would need a binary this project does not possess,
-    not more reading of DBAL.OUT.
+    DBAL.OUT's own `gcopy_node` (db_succ.cpp) independently confirms, via
+    a branchless `min(degree, 8)` clamp absent there but present in
+    `db_copy_node` (db_upack.cpp:6141), that this module's own degree cap
+    below is correct. The table-LOCATING logic itself (as opposed to the
+    record format) is not exposed anywhere in DBAL.OUT's own reachable
+    code -- see the wiki's "Finding the table" section and
+    `Firmware-Fn-db-page-pcl` for the full investigation and why
+    "found: False" remains open.
 
     Args:
         raw, declen: as for decode_features()/decode_topology().
@@ -5845,102 +5632,30 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
 
 
 # Distance cutoff for resolve_cross_tile_adjacency()'s mutual-nearest-
-# neighbor match, below. NOT arbitrary -- see that function's own
-# docstring for the real distribution this was chosen from (a clean
-# <150m cluster vs. a long noise tail reaching 97,630m with no cutoff at
-# all): matches this project's own established real-edge-distance
-# convention (`max_edge_m=200.0` default above) with a small safety
-# margin on the tight side, since a cross-tile dead-end pair is, if
-# anything, LESS likely to have a long real gap than an intra-tile edge
-# (the two tiles' own `build_bbox_index()` content generally touches
-# within tens of meters -- see that function's own docstring).
+# neighbor match, below. Matches this module's own established real-
+# edge-distance convention (`max_edge_m=200.0` above) with a small safety
+# margin -- see the wiki's Tile Geometry and Topology page for the real
+# distance distribution this was chosen from (a clean <150m cluster vs.
+# a long noise tail with no cutoff at all).
 CROSS_TILE_MAX_EDGE_M = 150.0
 
 
 def resolve_cross_tile_adjacency(tile_data, max_edge_m=CROSS_TILE_MAX_EDGE_M,
                                   bbox_gap_max_deg=0.01):
-    """CRACKED (a later session) -- closes the "cross-tile adjacency
-    remains unsolved" gap this module's own `resolve_topology_adjacency()`
-    docstring names explicitly (its "CONCRETE CROSS-TILE EXAMPLE" and
-    "shared link-id VALUE across features... TESTED DIRECTLY and
-    REFUTED" sections). That earlier work tried to find an EXPLICIT
-    on-disk cross-tile reference (a shared field value spanning two
-    tiles' own topology tables) and found none -- this function instead
-    INFERS the same real-world fact from pure geometry, using data this
-    module can already, independently compute for every tile: each
-    tile's own real DEGREE-1 ("dead end") points (locally has exactly
-    one neighbor in that tile's OWN resolved adjacency graph) and its
-    real content bbox (`build_bbox_index()`).
+    """Infers real cross-tile road connections from pure geometry: a road
+    cut in half by a tile boundary leaves a degree-1 ("dead end") point in
+    both tiles, at near-identical coordinates. For every pair of tiles
+    whose content bboxes are close (`bbox_gap_max_deg`), matches each
+    degree-1 point in tile A to its nearest degree-1 point in tile B,
+    keeping the match only if it's MUTUAL (B's point also has A's as its
+    own nearest) and within `max_edge_m` -- mutuality is what separates a
+    real continuation from a merely-nearby unrelated dead end.
 
-    MECHANISM: a real road cut in half by a tile boundary leaves a
-    degree-1 dead end in BOTH tiles, at (near-)identical real-world
-    coordinates (this project's own `build_bbox_index()` docstring
-    already measured neighboring tiles' content touching within tens of
-    meters, median 8-24m). So: for every pair of tiles whose content
-    bboxes are close (`bbox_gap_max_deg`, default ~1km), for every
-    degree-1 point in tile A, find its nearest degree-1 point in tile B
-    by real-world distance; keep the match only if it is MUTUAL (that
-    same point in B also has the point in A as ITS OWN nearest degree-1
-    neighbor) AND within `max_edge_m`. Mutuality is the real discriminator
-    here, not just proximity -- it's what a pure "nearest one-directional"
-    match would miss: a degree-1 point near several OTHER dead ends could
-    pick a wrong one by raw distance alone, but a genuine road-continuation
-    pair is each other's closest match in BOTH directions, which a random
-    nearby-but-unrelated dead end essentially never is (see validation).
-
-    VALIDATED, same NEAR-vs-FAR controlled-comparison methodology this
-    module already uses elsewhere (e.g. the REFUTED cross-feature link-id
-    test above) -- on 2 independent layers, real geographic tile clusters
-    (not random tile_id sampling, since tile_id order is already known
-    non-spatial), single-feature high-confidence tiles only:
-      - `mg4` (Sofia-area cluster, 263 usable tiles): 184 real-neighbor
-        (NEAR, bbox gap < 500m) tile pairs, 60/184 (32.6%) produce at
-        least one match, 73 matches total, ALL under the 150m cutoff.
-        920 FAR (bbox gap > 5km) control pairs, same methodology:
-        **0 matches** -- not a low rate, an EXACT ZERO.
-      - `mg2` (same Sofia-area anchor, finer tiles, 43 usable tiles): 55
-        NEAR pairs, 34/55 (61.8%) produce a match, 66 matches total,
-        again all under 150m. 550 FAR control pairs: **0 matches**.
-      - **Independently rediscovers this module's own already-documented
-        human-verified example** (`mg4` tile 2384 point 132 <-> tile 2385
-        point 12, 72.3m, from `resolve_topology_adjacency()`'s "CONCRETE
-        CROSS-TILE EXAMPLE") without that example being special-cased
-        anywhere in this function -- it falls out of the same generic
-        mutual-nearest-neighbor rule as every other match, AND the same
-        tile pair also produces a 2nd, previously-undocumented match
-        (points 140<->2, 47.6m) not yet independently verified by a
-        human but structurally identical to the confirmed one.
-      - **The distance cutoff is load-bearing, not cosmetic**: re-running
-        with NO cutoff at all still requires mutuality but finds 237
-        matches on the `mg4` cluster alone, with a sharply bimodal
-        distance distribution (p25 100.7m, p50 692.1m, p90 24,905m, max
-        97,630m) -- mutuality alone still lets two tiles with no real
-        connection pair up whatever degree-1 points they happen to have,
-        just because each is the OTHER's least-bad option. `max_edge_m`
-        is what separates the real <150m cluster from that noise tail.
-
-    **UPDATE, immediately following: multi-feature tiles tested too,
-    same signal holds.** The write-up above validated single-feature
-    tiles only; `point_a`/`point_b` for a multi-feature tile's own
-    degree-1 pool needs a `(feature_index, point_index)` pair, not a
-    bare point index, since a tile-level pool combines every feature's
-    points -- a caller building `tile_data` for a multi-feature tile
-    should key `deg1` entries that way. Re-ran the SAME `mg4` Sofia
-    cluster with multi-feature tiles included (434 usable tiles, 182 of
-    them multi-feature, vs 263/0 single-feature-only above): 524 NEAR
-    pairs, 169 matches; 1,572 FAR control pairs (explicit distant pairs,
-    `bbox_gap_max_deg` forced open since they're far by construction):
-    **0 matches**, same exact-zero signal as every other control run.
-    Safe to use for every tile, not just single-feature ones.
-
-    **Honestly scoped**: the ~38-68% of real neighbor pairs that do NOT
-    produce a match were not individually audited (plausibly genuine --
-    not every tile boundary cuts through a road -- but not confirmed
-    tile-by-tile); and bidirectional many-to-many cases (a tile boundary
-    with multiple real crossings close together, like `mg2` 20598/20599's
-    5 matches) were accepted as-is, not cross-checked for any one
-    degree-1 point being claimed by more than one mutual pair (not
-    observed in this validation sample, but not proven impossible).
+    Validated with a NEAR-vs-FAR controlled comparison on 2 independent
+    layers (real hit rate 30-60%+ among genuine tile-boundary pairs vs.
+    an exact ZERO false positives across 2,000+ control pairs), including
+    multi-feature tiles -- see the wiki's Tile Geometry and Topology page
+    ("Known remaining gaps") for the full validation and known caveats.
 
     Args:
         tile_data: {tile_id: {"deg1": [(point_id, (lon, lat)), ...],
@@ -5952,13 +5667,13 @@ def resolve_cross_tile_adjacency(tile_data, max_edge_m=CROSS_TILE_MAX_EDGE_M,
             `point_id` is opaque to this function (never indexed or
             compared beyond equality) -- a bare point index for a
             single-feature tile, or a `(feature_index, point_index)`
-            pair for a multi-feature one (see the multi-feature UPDATE
-            below), whatever the caller finds useful to get back in the
-            results. Only tiles actually present here are considered --
-            this function does no tile decoding or lookup of its own.
-        max_edge_m: real-world distance cutoff for a match -- see the
-            validation above for why 150.0 (`CROSS_TILE_MAX_EDGE_M`) is
-            the validated default, not an arbitrary round number.
+            pair for a multi-feature one, whatever the caller finds
+            useful to get back in the results. Only tiles actually
+            present here are considered -- this function does no tile
+            decoding or lookup of its own.
+        max_edge_m: real-world distance cutoff for a match -- see
+            `CROSS_TILE_MAX_EDGE_M`'s own comment for why 150.0 is the
+            validated default.
         bbox_gap_max_deg: two tiles are only compared at all if their
             content bboxes are within this (default ~0.01 deg, ~1km at
             these latitudes) -- purely a performance cutoff (avoids an
