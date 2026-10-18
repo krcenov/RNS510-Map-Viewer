@@ -5412,6 +5412,100 @@ def resolve_topology_adjacency(raw, declen=None, features=None, topo=None,
     range to produce a meaningful signal either way if tested. The
     link-id values' own independent meaning remains genuinely open.
 
+    ==== UPDATE, a still-later session: DBAL.OUT searched directly for the
+    real table-LOCATING logic (to fix "found: False"), not just the
+    already-cracked record FORMAT -- re-confirms the known dead end via a
+    new angle, plus one genuinely new negative result ====
+    Motivation: `decode_topology()`'s own `_find_topology_table_start()`
+    locates a feature's table by heuristic byte-pattern/shift scoring, not
+    by computing its offset the way the real firmware does -- the ~24% of
+    features landing on `"found": False` (see the AT-SCALE section above)
+    are exactly where that heuristic gives up. If DBAL.OUT contained the
+    real offset-computing logic, it could in principle replace the guess
+    with an exact answer. Three concrete leads chased this session:
+
+    1. `db_succ.cpp`'s `gcopy_node__FP5VNodeUsUiP7DBSNode` (a sibling of
+       this project's already-used `db_copy_node__FP5VNodeUsUiP7DBSNodeP8
+       position`, db_upack.cpp:6110) reads the full degree nibble
+       UNCAPPED (up to 15) when copying a degree>=5 node's fields, with no
+       `uVar2 > 8 ? 8 : uVar2`-style clamp -- unlike `db_copy_node`, which
+       has that exact branchless clamp at db_upack.cpp:6141 and is the one
+       this project's `_topology_record_fields()` already matches (`min
+       (degree, 8)`). Directly compared both functions side by side: this
+       independently CONFIRMS, from the DBAL source itself (not just this
+       project's own empirical ground-truth testing), that capping at 8 is
+       correct for the function this project actually needs -- no change
+       required. `gcopy_node` itself turned out to be a dead end for
+       "found: False": it's reached from `db_succ_main__FUlP5VNodeP4vsegib
+       Pi` (live route-successor lookup) via `(*_fp_db_page_pcl)(...)`,
+       the SAME externally-unassigned function pointer (`extern code
+       _fp_db_page_pcl;`, DBAL_externs.h:1097 -- confirmed by grepping
+       every one of its ~30 call sites across the whole DBAL tree: never
+       once assigned, only ever called) already identified as unresolvable
+       in an earlier session's `db_find_node_main` investigation. Its real
+       implementation -- the thing that actually decompresses/parses a
+       MAP_COMPRESSED tile's bytes into the in-memory "parcel" structure
+       these functions index into at fixed offsets (node table pointer
+       +0x30/count +0x34, two more table pointers at +0x20/+0x28 with
+       counts at +0x24/+0x2c, a 4th at +0x38) -- lives outside DBAL.OUT
+       entirely. Confirmed this is the ONLY navigation-related `.OUT`
+       binary anywhere in this project's whole extracted firmware tree
+       (`find BASE -iname "*.OUT"` across every firmware version turns up
+       only `DBAL.OUT`, plus unrelated `CTEST.OUT`/`SCREENSH.OUT` test
+       utilities) -- so this isn't "look in a different DBAL function," it
+       would need a DIFFERENT compiled module this project does not have.
+
+    2. `db_upack.cpp`'s `db_upack_nodes_compressed_fast__FP11DBActivePcli
+       11UpackAction` (line 2037) looked, at first read, like exactly the
+       missing piece: its per-node loop decodes each neighbor field via
+       `readZValue__FRPc` (line 1735) -- a real, unambiguous LEB128-style
+       variable-length integer (7 bits/byte, high bit = continuation, upto
+       5 bytes) -- rather than a fixed 2-byte value, and stamps the
+       CURRENT node's own index into a separate 0x10-byte-stride segment
+       table at the decoded value's offset (`+6` or `+8`, picked by a
+       per-neighbor direction bit from the node record's own header bits).
+       That would be a real mechanism for how two nodes' records come to
+       share a value (a segment id) at all -- a more principled version of
+       this function's own empirically-discovered "shared link-id" rule.
+       TESTED DIRECTLY against this project's own best ground truth (`mg2`
+       20597, the exact real `table_start=1598` this function's existing
+       fixed-stride decode already uses to get 16/16 validated edges):
+       decoding from that same real offset as a `readZValue` stream
+       produces garbage -- the very first record decodes a "segment id"
+       of 835,445 (absurd for a 203-point tile), and the decode consumes
+       only 966 bytes across 209 records before this test was stopped,
+       vs. the already-validated, byte-exact 204 records x 10 bytes =
+       2,040 bytes the fixed-width interpretation actually needs to reach
+       this tile's real `table_end` (3638). **Ruled out empirically, not
+       just by analogy**: whatever `db_upack_nodes_compressed_fast`
+       decodes, it is NOT the bytes physically present in this project's
+       real `eeuz.mg2`/`eeuz.mp0` tiles at the table offset this project
+       has already independently, geometrically validated. Consistent
+       with (and probably the same root cause as) the EARLIER session's
+       finding that `db_upack_kd_top_node`/`db_upack_kd_sub_node`/`db_
+       upack_nodes` all route through the `mapView_o`/`DBFView` named-
+       field schema abstraction (confirmed again here: `db_upack_nodes_
+       compressed_fast`'s own `param_3==3` setup branch calls `getIndex__
+       C7DBFViewPCc(mapView_o, "node_index")` and `getDataItem__
+       12DBFViewmodelPCc("parcel_data/node_list")`, the identical pattern)
+       -- a real subsystem in DBAL.OUT, but for a DIFFERENT physical data
+       source than the compact MAP_COMPRESSED tiles this project reads
+       directly off the ISO, not an alternate decode path for the same
+       bytes.
+
+    **Net conclusion**: DBAL.OUT's own node-table CODE (the part reachable
+    from a byte buffer this project actually has, i.e. `db_convert_ninfo`/
+    `db_copy_node`) remains fully consistent with and independently
+    confirms everything this project had already cracked empirically. But
+    the LOCATING logic specifically -- is a feature's table at this byte
+    offset, how many records, where does it end -- is not exposed anywhere
+    in DBAL.OUT's own reachable code; every path that would compute it
+    either goes through the external, unassigned `_fp_db_page_pcl` (a
+    different, missing binary) or through the DBFView schema layer (a
+    different, unrelated data source). "found: False" remains open, and
+    closing it further would need a binary this project does not possess,
+    not more reading of DBAL.OUT.
+
     Args:
         raw, declen: as for decode_features()/decode_topology().
         features: optional, decode_features(raw, declen) if not given.
