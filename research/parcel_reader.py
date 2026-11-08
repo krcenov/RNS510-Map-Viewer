@@ -28,8 +28,9 @@ Verified DBAL.OUT functions (Hex-Rays/IDA addresses, image base 0x08000000)
   db_upack_segs              0x08061cc4
   db_upack_segment_data      0x08061774
   db_upack_nodes             0x08061148
-  db_upack_shape             0x08062608
-  db_upack_shape_compressed_fast 0x08062804
+  db_upack_shape             0x08062608   (uncompressed shape_size[] + i16)
+  db_upack_shape_compressed_fast 0x08062804 (bit-packed variant; NOT used by
+                                              this section on the reference disc)
   db_upack_parcel            0x0806652c
   db_seg_and_shape_main      0x08073... (see the project notes)
 
@@ -106,11 +107,15 @@ Shapes section
 `bounds[i+1] & ~1`, four bytes per point.  Deltas are cumulative from the
 segment's left node and use the same 1/100000 degree unit.
 
-Address lists (bonus)
----------------------
+Address lists (bonus, partial)
+-----------------------------
 The same header's sections 7/8/9 are `abs_addr`, `short_addr`, `long_addr`
 records carrying `(segment_index, name_info, road_id)`.  `road_id` indexes
 `eeu.rd` (67-byte records at offset 94), which is where street names live.
+
+`abs_addr` (7-byte records) is validated end-to-end.  `short_addr` (11) and
+`long_addr` (13) decode the first `count` records only: their sections can
+contain trailing data that is not decoded here.
 """
 from __future__ import annotations
 
@@ -225,8 +230,9 @@ def decode_segments(blob: bytes, offset: int, size: int,
 
     Returns `(segments, trailing)`.  On the most-detailed layer (`mp0`) the
     section is consumed exactly.  On generalized layers (`mg1`..`mg4`) with
-    no shapes, a separate signs block can follow the last segment; it is
-    returned as `trailing` rather than treated as a malformed record.
+    no shapes, a separate section can follow the last segment (not decoded
+    here; possibly signs/turn restrictions); it is returned as `trailing`
+    rather than treated as a malformed record.
     """
     end = offset + size
     pos = offset
@@ -383,7 +389,11 @@ def decode_abs_addr(blob: bytes, table: Sequence[tuple],
 
 def decode_short_addr(blob: bytes, table: Sequence[tuple],
                       limit: int | None = None) -> list[dict]:
-    """Section 8: 11-byte short addresses with a house-number range."""
+    """Section 8: first `count` 11-byte short addresses (partial).
+
+    The section can contain trailing data after these records; it is not
+    decoded here.
+    """
     off, count = table[TAB_SHORT_ADDR]
     if not count:
         return []
@@ -404,7 +414,7 @@ def decode_short_addr(blob: bytes, table: Sequence[tuple],
 
 def decode_long_addr(blob: bytes, table: Sequence[tuple],
                      limit: int | None = None) -> list[dict]:
-    """Section 9: 13-byte long addresses with a 24-bit house number."""
+    """Section 9: first `count` 13-byte long addresses (partial)."""
     off, count = table[TAB_LONG_ADDR]
     if not count:
         return []
