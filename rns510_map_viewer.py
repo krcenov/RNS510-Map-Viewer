@@ -3444,11 +3444,29 @@ class App:
         # signal. OFF by default anyway, same reasoning as show_seg_
         # predict_var/show_unresolved_topology_var: this is a genuinely
         # NEW, inferred edge (not something directly decoded off the
-        # disc), recomputed fresh every redraw from whatever tiles
-        # happen to be currently pooled (not cached across redraws --
-        # cheap enough not to need it, see _redraw()'s own timing), so
-        # toggling it needs no reload, just self._redraw().
+        # disc), recomputed from whatever tiles happen to be currently
+        # pooled, so toggling it needs no reload, just self._redraw().
+        #
+        # **UPDATE, a later session**: the "cheap enough not to need
+        # caching" claim above was WRONG once measured against the real
+        # parcel model -- real degree-1 nodes are far more common on
+        # `mp0` (15%+ of all nodes, see the wiki's Tile Geometry and
+        # Topology page) than the old heuristic model this was written
+        # against, so `resolve_cross_tile_adjacency()`'s all-pairs
+        # matching over a realistic pooled `mp0` viewport (measured: 201
+        # tiles, 6,670 real degree-1 points) took ~3 SECONDS, identically
+        # recomputed on every single redraw (every drag-end/zoom/resize/
+        # unrelated-checkbox-toggle) even when the pooled tile set hadn't
+        # changed at all. Fixed with `_cross_tile_cache_key`/`_cross_
+        # tile_cache_result` below: `topo_caches`/`_node_coord_caches`
+        # per tile are immutable once decoded (never evicted), so the
+        # match list is fully determined by WHICH (layer, tile_id) keys
+        # are in `tile_data` -- caching on that key set (plus `id(self.
+        # data)`, so a freshly opened ISO never reuses a stale result)
+        # is exact, not an approximation.
         self.show_cross_tile_var = tk.BooleanVar(value=False)
+        self._cross_tile_cache_key = None
+        self._cross_tile_cache_result = []
 
         # Last-opened-ISO path (this session), read once at startup from
         # VIEWER_CONFIG_PATH -- see that constant's own comment. None if
@@ -5156,7 +5174,19 @@ class App:
                 if deg1:
                     tile_data[(layer, tile_id)] = {"deg1": deg1, "bbox": bbox}
 
-            for match in mcr.resolve_cross_tile_adjacency(tile_data):
+            # See show_cross_tile_var's own comment: exact cache, not an
+            # approximation -- a tile's deg1/bbox content never changes
+            # once decoded, so the match list depends only on WHICH tile
+            # keys are present.
+            cache_key = (id(self.data), frozenset(tile_data.keys()))
+            if cache_key == self._cross_tile_cache_key:
+                matches = self._cross_tile_cache_result
+            else:
+                matches = mcr.resolve_cross_tile_adjacency(tile_data)
+                self._cross_tile_cache_key = cache_key
+                self._cross_tile_cache_result = matches
+
+            for match in matches:
                 layer_a, tile_a = match["tile_a"]
                 layer_b, tile_b = match["tile_b"]
                 pa = self.data._node_coord_caches[layer_a][tile_a][match["point_a"]]
