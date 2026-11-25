@@ -1023,34 +1023,29 @@ def find_nearest_poi(pois, click_lon, click_lat, center_lat, scale, max_px=POI_P
 
 def _iter_high_confidence_edges(features, topo_caches):
     """Yield (feat, a_idx, b_idx) for every edge App._redraw() would
-    actually draw as a real connected-roads canvas.create_line() (README §10
-    "v9 -> v10"/"v16 -> v17"): for each `feat` tagged with layer/tile_id/
-    feature_index whose cached resolve_topology_adjacency() result (looked
-    up the exact same way _redraw()'s own connected-roads block does, via
-    `topo_caches[layer][tile_id][feature_index]`) has `found=True` and
-    `confidence == "high"`, yield every one of its `edges` entries whose
-    endpoint indices are in range. This is the shared "what edges are
-    actually visible on screen right now" iterator used both by _redraw()
-    (implicitly, via the same lookup inlined there) and by
-    find_nearest_line_segment() below, so an edge pick can never identify an
-    edge that isn't actually drawn."""
+    actually draw as a real connected-roads canvas.create_line(): each
+    `feat` is now one real road SEGMENT (decode_tile()'s own parcel
+    model, see its docstring) whose own point chain is ALWAYS a genuine,
+    directly-connected real road run -- so every CONSECUTIVE pair of its
+    own points is a real edge, except for a rare "topology_unresolved"
+    fallback feature (the old model, used only when a tile's real
+    parcel fails to parse), which gets no lines at all, same as
+    _redraw()'s own connected-roads block. `topo_caches` is accepted
+    (not used) purely for call-site signature stability -- real
+    connectivity no longer needs a separate cache lookup to iterate,
+    only the feature's own "topology_unresolved" tag. This is the
+    shared "what edges are actually visible on screen right now"
+    iterator used both by _redraw() (implicitly, via the same
+    per-feature walk inlined there) and by find_nearest_line_segment()
+    below, so an edge pick can never identify an edge that isn't
+    actually drawn."""
+    del topo_caches  # unused -- see docstring
     for feat in features:
-        layer = feat.get("layer")
-        tile_id = feat.get("tile_id")
-        f_idx = feat.get("feature_index")
-        if layer is None or tile_id is None or f_idx is None:
-            continue
-        tlist = topo_caches.get(layer, {}).get(tile_id)
-        if tlist is None or not (0 <= f_idx < len(tlist)):
-            continue
-        cand = tlist[f_idx]
-        if not (cand.get("found") and cand.get("confidence") == "high"):
+        if feat.get("topology_unresolved"):
             continue
         pts = feat.get("points") or ()
-        for a, b in cand.get("edges", ()):
-            if a >= len(pts) or b >= len(pts):
-                continue
-            yield feat, a, b
+        for a in range(len(pts) - 1):
+            yield feat, a, a + 1
 
 
 def _point_segment_dist2(px, py, ax, ay, bx, by):
@@ -1484,15 +1479,28 @@ class MapData:
         # running app can ever change it now.
         self.trim_oscillation = False
         self.tile_caches = {layer: {} for layer in ALL_LAYERS}  # per-layer decode cache
-        # Per-layer resolve_topology_adjacency() cache (README §10 "v9 -> v10"):
-        # {layer: {tile_id: [per-feature adjacency-result dict, ...]}}, index-
-        # aligned with that tile's own KEPT feature list (i.e. decode_tile()'s
-        # "feature_index" tag) via _feature_keep_indices() -- NOT with
-        # decode_features()'s raw pre-drift-filter output. Populated lazily
-        # (only when connected-roads mode actually needs a tile -- see
-        # decode_tile()'s `want_adjacency` / get_tile_adjacency()) and never
-        # evicted once computed, same lifetime policy as tile_caches itself.
+        # Per-layer REAL node-connectivity cache (a later session --
+        # replaces the old resolve_topology_adjacency() search/shift-
+        # scoring entirely, see research/mp0-parcel-internals.md and the
+        # wiki's MAP_COMPRESSED Container Format page): {layer: {tile_id:
+        # {"node_degree": {node_id: int}, "unresolved": bool}}}.
+        # `node_degree` is the real, literal count of segment endpoints
+        # touching each node -- no confidence, no shift, no search --
+        # computed directly by decode_tile() every time (unconditionally,
+        # no `want_adjacency` gate needed any more: it's part of parsing,
+        # not a separate expensive resolve pass). `unresolved` is True
+        # only on the rare tile whose real parcel model fails to parse
+        # (see decode_tile()'s own "topology_unresolved" tag) -- not a
+        # low-confidence signal, a genuine per-tile parse-failure flag.
         self.topo_caches = {layer: {} for layer in ALL_LAYERS}
+        # Per-layer real node COORDINATE cache, index-aligned with
+        # topo_caches' own `node_degree` (same node ids): {layer:
+        # {tile_id: {node_id: (lon, lat)}}}. Needed by "Draw cross-tile
+        # connections" to get a degree-1 node's own real coordinate
+        # without re-deriving it from marker bits -- see
+        # map_compressed_reader.build_tile_features_from_parcel()'s own
+        # docstring for why this is already correctly resolved there.
+        self._node_coord_caches = {layer: {} for layer in ALL_LAYERS}
         # Per-layer "pre-filter decode" cache (README §10 "v17 -> v18",
         # adjacency-backfill performance fix): {layer: {tile_id: (raw,
         # declen, features, keep_idx)}} -- the intermediate state
@@ -2293,149 +2301,113 @@ class MapData:
                 boxes[(layer, tid)] = (min(lons), max(lons), min(lats), max(lats))
         return boxes
 
-    def decode_tile(self, layer, tile_id, want_adjacency=False, want_seg_predict=False):
-        """Decompress and decode_features() one tile by its geo-index/
-        directory tile_id within the given layer, applying two independent
-        defensive filters (see README §3.6/§10 for the full writeup of the
-        two real bugs these catch): `trim_oscillation=True` (the
-        "oscillating overrun" bug -- as of this session, decode_features()
-        detects and excises EVERY oscillation cluster anywhere in a block
-        and splits the block into separate surviving sub-features around
-        each one, rather than truncating everything after the first
-        cluster found; a single `tile_id` can therefore yield more feature
-        dicts than it used to) and MAX_FEATURE_DRIFT_DEG (the
-        "bruteforce"-anchor corruption bug). Returns a list of feature
-        dicts (map_compressed_reader.decode_features), each additionally
-        tagged (README §10 "v6 -> v7", for the click-to-identify feature)
-        with "layer", "tile_id", "tile_offset"/"tile_declen" (this tile's
-        own file offset/decompressed length, from the directory entry this
-        method already has on hand) and "feature_index" (this feature's
-        position within THIS tile's own returned/kept feature list -- not
-        a position in any later pooled/flattened list). These extra keys
-        are plain dict entries that ride along unchanged through
-        road_naming.name_features()'s `dict(feat)` copy and the flat
-        cross-layer pooling in ensure_area_loaded(), so a point picked from
-        the final rendered/pooled `App.features` list can still be traced
-        back to the exact tile/feature it came from.
+    def _road_name_lookup(self, road_id):
+        """`name_lookup` callback for `mcr.build_tile_features_from_parcel()`
+        -- resolves a segment's real address-list `road_id` directly into
+        its real `eeu.rd` name and `highway` bit, via the SAME whole-file
+        `self.rd_cache` the old nearest-coordinate road-naming path already
+        keeps resident (see `road_naming.RdCache`). `road_id` IS the literal
+        `eeu.rd` record index (parcel_reader's own §7) -- no spatial lookup,
+        no tolerance, no ambiguity: this is why the new parcel model can
+        name a segment exactly instead of guessing from geometry."""
+        if self.rd_cache is None or not (0 <= road_id < self.rd_cache.record_count):
+            return None, False
+        off = road_id * rdn.RD_RECORD_SIZE
+        name_bytes = self.rd_cache.body[off + rdn.RD_NAME_OFFSET:off + rdn.RD_NAME_OFFSET + rdn.RD_NAME_SIZE]
+        name = name_bytes.split(b"\x00", 1)[0].decode("latin-1") or None
+        is_highway = bool(self.rd_cache.highway[road_id])
+        return name, is_highway
 
-        `want_adjacency` (README §10 "v9 -> v10", connected-roads mode):
-        when True, ALSO runs decode_topology()+resolve_topology_adjacency()
-        against this SAME already-decoded `features` list (no re-read/
-        re-decode -- this is the efficient path, used whenever a tile is
-        being decoded for the FIRST time while connected-roads mode is on)
-        and caches the per-KEPT-feature result list in
-        `self.topo_caches[layer][tile_id]`, index-aligned with the returned
-        list's own "feature_index" tags via `_feature_keep_indices()`. A
-        tile that was already decoded (and cached) before connected-roads
-        mode needed it does NOT get adjacency computed here -- see
-        `get_tile_adjacency()` for that lazy fallback path."""
+    def decode_tile(self, layer, tile_id, want_adjacency=False, want_seg_predict=False):
+        """Decompress one tile and decode it with the REAL segment/node
+        parcel model (a later session -- `mcr.build_tile_features_from_
+        parcel()`, see `research/mp0-parcel-internals.md` and the wiki's
+        MAP_COMPRESSED Container Format page for the full writeup of why
+        this replaces `decode_features()`'s own polyline model). Each
+        returned "feature" is now one real road SEGMENT (left node +
+        shape points + right node), not an arbitrarily-chained run of
+        coordinate-block points -- real connectivity (which segments
+        touch which node) and real naming (`eeu.rd` via each segment's
+        own address-list `road_id`, no coordinate matching) come directly
+        out of the parse, with no search/confidence/shift involved.
+
+        Tagged exactly like the old model (README §10 "v6 -> v7", click-
+        to-identify): "layer", "tile_id", "tile_offset"/"tile_declen",
+        "feature_index" (this segment's position within THIS tile's own
+        returned list). Also tagged "left_node"/"right_node" (real node
+        ids, for junction/cross-tile lookups), "road_id", "is_highway",
+        and "topology_unresolved" (see below).
+
+        `want_adjacency`/`want_seg_predict` are KEPT as accepted (but
+        for `want_adjacency`, now ignored) parameters purely so existing
+        callers/tests don't hit a `TypeError` -- real connectivity is
+        computed unconditionally below now (it's part of parsing, not a
+        separate expensive resolve pass any more, so there is no
+        "lazy/later" case left to gate).
+
+        **Fallback, not a confidence gate**: on the rare tile whose real
+        parcel fails to parse (0/1,500+ real tiles sampled across all 5
+        layers this session, but never assumed impossible), this falls
+        back to the OLD `decode_features()` polyline model for just that
+        tile, with every returned feature tagged `"topology_unresolved":
+        True` -- see `App.show_unresolved_topology_var`'s own comment for
+        how that's surfaced, and `ensure_area_loaded()`'s naming pass for
+        why only THESE features still need the old nearest-coordinate
+        name matching.
+
+        `decode_features()` itself is still run UNCONDITIONALLY, in
+        parallel with the new model, purely to keep `_predecode_caches`
+        populated for the handful of OTHER, unrelated experimental
+        readers (`get_tile_seg_prediction()`/`get_tile_district_names()`/
+        `get_tile_pronunciations()`/the mp0 zone2/zone3a summaries) that
+        still read raw tile bytes through the old model's own block
+        structure -- migrating those is out of scope here; this keeps
+        them working unchanged."""
         offset, declen, complen = self.directories[layer]["entries"][tile_id]
         with mcr._open(self.layer_paths[layer]) as f:
             f.seek(offset)
             raw = zlib.decompress(f.read(complen))
-        features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
 
+        old_features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
         geo_index = self.geo_indexes.get(layer)
         anchor = geo_index.get(tile_id) if geo_index else None
-        keep_idx = _feature_keep_indices(features, anchor)
-        candidates = [features[i] for i in keep_idx]
+        keep_idx = _feature_keep_indices(old_features, anchor)
+        self._predecode_caches[layer][tile_id] = (raw, declen, old_features, keep_idx)
+
+        try:
+            features, node_degree, node_coord = mcr.build_tile_features_from_parcel(
+                raw, name_lookup=self._road_name_lookup)
+            unresolved = False
+        except Exception:
+            features = [dict(old_features[i]) for i in keep_idx]
+            node_degree, node_coord = {}, {}
+            unresolved = True
 
         kept = []
-        for feat in candidates:
+        for feat in features:
             feat["layer"] = layer
             feat["tile_id"] = tile_id
             feat["tile_offset"] = offset
             feat["tile_declen"] = declen
             feat["feature_index"] = len(kept)
+            feat["topology_unresolved"] = unresolved
             kept.append(feat)
 
-        # Cache the pre-filter decode state (raw bytes + decode_features()
-        # output + keep_idx) regardless of `want_adjacency` -- see
-        # `_predecode_caches`'s own comment in __init__ -- so a LATER
-        # get_tile_adjacency() fallback call for this exact tile_id never
-        # needs to redo the disk read/decompress/decode_features() work
-        # this method already did.
-        self._predecode_caches[layer][tile_id] = (raw, declen, features, keep_idx)
+        self.topo_caches[layer][tile_id] = {"node_degree": node_degree, "unresolved": unresolved}
+        self._node_coord_caches[layer][tile_id] = node_coord
 
-        if want_adjacency:
-            try:
-                topo = mcr.decode_topology(raw, declen, features)
-                adj_full = mcr.resolve_topology_adjacency(raw, declen, features, topo, max_edge_m=MAX_EDGE_M_BY_LAYER.get(layer, 200.0))
-                self.topo_caches[layer][tile_id] = [adj_full[i] for i in keep_idx]
-            except Exception:
-                self.topo_caches[layer][tile_id] = [dict(_NO_ADJACENCY) for _ in kept]
         if want_seg_predict and layer == "mg4":
+            kept_old = [old_features[i] for i in keep_idx]
             self.seg_predict_caches[layer][tile_id] = [
-                _predict_seg_divided(raw, declen, feat, features) for feat in kept
+                _predict_seg_divided(raw, declen, feat, old_features) for feat in kept_old
             ]
         return kept
 
-    def get_tile_adjacency(self, layer, tile_id):
-        """Lazily compute + cache resolve_topology_adjacency() for one
-        tile's KEPT features (README §10 "v9 -> v10"), index-aligned with
-        decode_tile()'s own "feature_index" tags via
-        `_feature_keep_indices()` -- so App._redraw()'s connected-roads
-        mode can look up `self.topo_caches[layer][tile_id][feature_index]`
-        directly, with no recomputation on every redraw once a tile has
-        been visited once (this method is itself a pure cache-or-compute,
-        never re-runs for a `tile_id` already in `self.topo_caches[layer]`).
-
-        This is the FALLBACK path for a tile that was already decoded (and
-        is therefore already sitting in `tile_caches`) BEFORE
-        connected-roads mode needed it -- e.g. the checkbox was off when
-        that tile was first loaded, or a coarser/earlier call decoded it.
-
-        **README §10 "v17 -> v18" performance fix**: this used to
-        unconditionally re-open the layer file, re-seek, re-decompress and
-        re-run decode_features() from scratch for every single call,
-        EVEN THOUGH decode_tile() already did all of that once for this
-        exact tile_id -- it just never kept that intermediate state around
-        for later reuse. That redundant full re-decode, multiplied across
-        potentially hundreds of already-visible tiles the moment "Draw
-        connected roads" got checked on over an already-panned-around area
-        (made much more likely once "v16 -> v17" removed the scale gate
-        that used to keep the touched-tile set tiny), was directly
-        responsible for a real, user-reported multi-minute stall. Fixed by
-        `_predecode_caches` (see its own comment in `__init__`):
-        decode_tile() now ALWAYS stashes its raw bytes + decode_features()
-        output + keep_idx there, regardless of `want_adjacency`, so this
-        method's fallback -- when the cache has an entry -- skips the
-        disk read/decompress/decode_features() entirely and does ONLY the
-        work that's genuinely new for this tile: `decode_topology()` +
-        `resolve_topology_adjacency()`. A tile this method is asked about
-        that was somehow never routed through decode_tile() at all (should
-        not normally happen -- see the `except Exception` fallback below)
-        still re-reads from disk as a defensive last resort. Either way,
-        the result is cached forever after in `topo_caches`, exactly like
-        before, and this is only ever called from inside
-        `ensure_area_loaded()`, i.e. inside a background `BackgroundTask`
-        thread, never on the Tk main thread during a redraw -- see
-        `ensure_area_loaded()`'s `want_adjacency` handling."""
-        cache = self.topo_caches[layer]
-        if tile_id in cache:
-            return cache[tile_id]
-        try:
-            pre = self._predecode_caches[layer].get(tile_id)
-            if pre is not None:
-                raw, declen, features, keep_idx = pre
-            else:
-                offset, declen, complen = self.directories[layer]["entries"][tile_id]
-                with mcr._open(self.layer_paths[layer]) as f:
-                    f.seek(offset)
-                    raw = zlib.decompress(f.read(complen))
-                features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
-                geo_index = self.geo_indexes.get(layer)
-                anchor = geo_index.get(tile_id) if geo_index else None
-                keep_idx = _feature_keep_indices(features, anchor)
-                self._predecode_caches[layer][tile_id] = (raw, declen, features, keep_idx)
-            topo = mcr.decode_topology(raw, declen, features)
-            adj_full = mcr.resolve_topology_adjacency(raw, declen, features, topo, max_edge_m=MAX_EDGE_M_BY_LAYER.get(layer, 200.0))
-            result = [adj_full[i] for i in keep_idx]
-        except Exception:
-            n_kept = len(self.tile_caches[layer].get(tile_id, ()))
-            result = [dict(_NO_ADJACENCY) for _ in range(n_kept)]
-        cache[tile_id] = result
-        return result
+    # get_tile_adjacency() (the old lazy "fill in topo_caches for a tile
+    # decoded before connected-roads mode needed it" fallback) is REMOVED
+    # -- decode_tile() now computes real connectivity unconditionally, as
+    # part of parsing, so topo_caches is always populated for any tile
+    # that's in tile_caches at all; there is no "gap" left to lazily fill.
 
     def get_tile_seg_prediction(self, layer, tile_id):
         """Lazily compute + cache `_predict_seg_divided()` for one `mg4`
@@ -2638,6 +2610,7 @@ class MapData:
         self.trim_oscillation = value
         self.tile_caches = {layer: {} for layer in ALL_LAYERS}
         self.topo_caches = {layer: {} for layer in ALL_LAYERS}
+        self._node_coord_caches = {layer: {} for layer in ALL_LAYERS}
         self._predecode_caches = {layer: {} for layer in ALL_LAYERS}
         self.name_caches = {layer: {} for layer in ALL_LAYERS}
         self.seg_predict_caches = {layer: {} for layer in ALL_LAYERS}
@@ -2885,14 +2858,10 @@ class MapData:
                         cache[tid] = []
                     new_count += 1
                 else:
-                    if want_adjacency and tid not in self.topo_caches[layer]:
-                        # Already decoded (e.g. by an earlier call before
-                        # connected-roads mode was on) but never got adjacency
-                        # computed -- fill the gap via the lazy fallback path.
-                        try:
-                            self.get_tile_adjacency(layer, tid)
-                        except Exception:
-                            pass
+                    # No `want_adjacency`-gated fallback needed here any
+                    # more -- decode_tile() (above, on first decode)
+                    # always populates topo_caches unconditionally now,
+                    # so an already-cached tid can never have a gap there.
                     if want_seg_predict and layer == "mg4" and tid not in self.seg_predict_caches[layer]:
                         # Same lazy-fallback pattern as want_adjacency above,
                         # for a tile decoded before the (experimental) "Show
@@ -2908,45 +2877,65 @@ class MapData:
         self.covered_layers = layers
         self.active_tile_ids = per_layer_tile_ids
 
-        # Name matching (README §10 "v18 -> v19" perf fix): CACHED per
-        # (layer, tile_id, tol_m) in `self.name_caches`, the same pattern
-        # already used for `topo_caches`/`_predecode_caches` -- previously
-        # this ran rdn.name_features() over the FULL pooled feature list on
-        # EVERY call (every pan/zoom/checkbox reload), including features
-        # from tiles that had already been named identically by an earlier,
-        # overlapping call. A wide viewport accumulates hundreds of
-        # thousands of already-cached, already-named points; re-running
-        # match_feature() (a real per-vertex spatial-index lookup) over all
-        # of them on every single incremental reload was pure, avoidable,
-        # repeated work -- the actual "still laggy after every pan" cost
-        # once the v17->v18 rasterization fix made RENDERING itself fast.
-        # Now only a NEWLY-decoded tile (or a tile whose want_adjacency
-        # fallback just ran, which doesn't affect naming) ever pays
-        # match_feature() again; a tile revisited by a later overlapping
-        # reload reuses its cached named_ranges list, aligned by
-        # feature_index exactly like topo_caches.
+        # Name matching: a later session's real parcel model (decode_tile(),
+        # see its own docstring) already names almost every feature
+        # directly and exactly, via its own segment's real `eeu.rd`
+        # `road_id` -- no spatial matching, no tolerance, no ambiguity.
+        # `rdn.match_feature()`'s nearest-coordinate guessing below is still
+        # needed in exactly 2 cases: (1) a "topology_unresolved" fallback
+        # feature (the old polyline model, used only when a tile's real
+        # parcel fails to parse -- see decode_tile()'s own "Fallback, not
+        # a confidence gate" section), on ANY layer; (2) ANY feature on a
+        # layer other than `mp0` -- confirmed directly against the real
+        # disc (parcel_reader's own address-list sections): `mg1`-`mg4`
+        # carry NO address records AT ALL (0 found across random samples
+        # on every generalized layer), so a segment's `road_id` there is
+        # always `None`, not a real "this road has no name" negative the
+        # way it is on `mp0` (which DOES have real, dense address data --
+        # `road_id is None` there is trusted as-is, NOT re-guessed, since
+        # doing so would reintroduce the exact nearest-coordinate
+        # inaccuracy the new model was adopted to remove). Still CACHED
+        # per (layer, tile_id, tol_m) in `self.name_caches` (README §10
+        # "v18 -> v19") for whichever tiles actually need it; `mp0`'s own
+        # fully-resolved, fully-addressed common case still pays
+        # match_feature() ZERO times.
         named = []
-        if any_tiles_with_features:
+        for layer in layers:
+            cache = self.tile_caches[layer]
+            for tid in per_layer_tile_ids[layer]:
+                feats = cache.get(tid)
+                if not feats:
+                    continue
+                named.extend(dict(feat) for feat in feats)
+
+        unresolved_by_tile = {}
+        for feat in named:
+            if feat.get("topology_unresolved") or feat.get("layer") != "mp0":
+                unresolved_by_tile.setdefault((feat["layer"], feat["tile_id"]), []).append(feat)
+        if unresolved_by_tile:
             if progress:
                 progress("Matching decoded features against real road names...")
             rd_index = self.rd_index_for_bbox(*ebox)
-            for layer in layers:
-                cache = self.tile_caches[layer]
+            for (layer, tid), feats in unresolved_by_tile.items():
                 ncache = self.name_caches[layer]
-                for tid in per_layer_tile_ids[layer]:
-                    feats = cache.get(tid)
-                    if not feats:
-                        continue
-                    key = (tid, name_tol_m)
-                    ranges_list = ncache.get(key)
-                    if ranges_list is None:
-                        ranges_list = [rdn.match_feature(feat["points"], rd_index, tol_m=name_tol_m)
-                                        for feat in feats]
-                        ncache[key] = ranges_list
-                    for feat, named_ranges in zip(feats, ranges_list):
-                        new_feat = dict(feat)
-                        new_feat["named_ranges"] = named_ranges
-                        named.append(new_feat)
+                key = (tid, name_tol_m)
+                ranges_list = ncache.get(key)
+                if ranges_list is None:
+                    ranges_list = [rdn.match_feature(feat["points"], rd_index, tol_m=name_tol_m)
+                                    for feat in feats]
+                    ncache[key] = ranges_list
+                for feat, named_ranges in zip(feats, ranges_list):
+                    feat["named_ranges"] = named_ranges
+                    if not feat.get("is_highway"):
+                        # `is_highway` came from the new model's own
+                        # road_id lookup, which is never available here
+                        # (see above) -- fall back to the OLD name-based
+                        # proxy (real eeu.rd `highway` bit, just reached
+                        # via name match instead of an exact road_id) so
+                        # highway coloring still works on these layers.
+                        name = _name_at_point(named_ranges, 0)
+                        highway_names = self.highway_names
+                        feat["is_highway"] = bool(name and highway_names and name in highway_names)
 
         return {
             "bbox": ebox,
@@ -5009,78 +4998,38 @@ class App:
                 continue
             ranges = feat.get("named_ranges") or [(0, len(pts) - 1, None)]
 
-            # Connected-roads mode (README §10 "v9 -> v10"): look up this
-            # feature's own cached resolve_topology_adjacency() result (by
-            # layer/tile_id/feature_index, the same tags click-to-identify
-            # already relies on -- v6 -> v7) and, ONLY if its confidence is
-            # "high", draw its real edges as actual canvas.create_line()
-            # segments IN ADDITION TO the usual per-vertex dots below
-            # (README §10 "v16 -> v17": previously the dots for a
-            # high-confidence feature were skipped entirely once its lines
-            # were drawn -- the user explicitly asked for both together, so
-            # every raw point stays visible for debugging even where a line
-            # was also successfully derived). A feature with no cached
-            # result yet (tile not decoded with want_adjacency, or
-            # resolution failed/low-confidence) just doesn't get any lines
-            # -- this is a per-FEATURE decision, never a guessed/low-
-            # confidence line. `adj` is looked up once per feature, not
-            # once per named sub-range, since a feature's adjacency graph
-            # spans its whole point list, not just one named run. `adj` is
-            # also reused below by _on_point_pick()'s edge-click fallback
-            # (via find_nearest_line_segment()/_iter_high_confidence_edges(),
-            # which apply this EXACT same found+confidence=="high" gate) so
-            # an edge can only ever be picked if it's actually drawn here.
-            adj = None
+            # Connected-roads mode: a feature IS now one real road SEGMENT
+            # (decode_tile()'s own parcel model -- left node + real shape
+            # points + right node), so its own point CHAIN is always a
+            # genuine, directly-connected real road run -- no separate
+            # resolve/confidence step needed any more (that whole
+            # mechanism existed only because the OLD polyline model's own
+            # point sequence could legitimately jump between unrelated
+            # roads with no marker of where). The one exception is a
+            # "topology_unresolved" fallback feature (decode_tile()'s own
+            # rare old-model fallback, see its docstring) -- that one
+            # DOESN'T get a connecting line, for the exact same reason the
+            # old model never trusted its own point chain either.
             seg_pred = None
-            # "Highlight unresolved topology (EXPERIMENTAL)" (a later
-            # session): True iff this feature's own cached resolve_
-            # topology_adjacency() result EXISTS (connected-roads mode
-            # actually tried) but did NOT reach "confidence": "high" --
-            # see UNRESOLVED_TOPOLOGY_COLOR's own comment for why both
-            # "found": False and "confidence": "low" are treated the
-            # same here. Computed regardless of show_unresolved_topology_
-            # var itself (cheap, just a dict lookup) so the per-vertex
-            # dot loop below only has to check one plain boolean.
-            feature_topology_unresolved = False
-            if connected_roads_on and self.data is not None:
-                layer = feat.get("layer")
-                tile_id = feat.get("tile_id")
-                f_idx = feat.get("feature_index")
-                if layer is not None and tile_id is not None and f_idx is not None:
-                    tlist = self.data.topo_caches.get(layer, {}).get(tile_id)
-                    if tlist is not None and 0 <= f_idx < len(tlist):
-                        cand = tlist[f_idx]
-                        if cand.get("found") and cand.get("confidence") == "high":
-                            adj = cand
-                        else:
-                            feature_topology_unresolved = True
-                    # "Show predicted divided (EXPERIMENTAL)" (this session):
-                    # looked up the SAME way as `adj` above (by layer/tile_id/
-                    # feature_index), but independently of adjacency
-                    # confidence -- a prediction is either present (this tile
-                    # was decoded with want_seg_predict=True) or it isn't;
-                    # there's no separate "confidence" gate on it beyond the
-                    # "unknown" prediction value _predict_seg_divided() itself
-                    # already returns for a low-confidence/failed parse.
-                    if seg_predict_on and layer == "mg4":
-                        plist = self.data.seg_predict_caches.get(layer, {}).get(tile_id)
-                        if plist is not None and 0 <= f_idx < len(plist):
-                            seg_pred = plist[f_idx]
+            feature_topology_unresolved = feat.get("topology_unresolved", False)
+            if connected_roads_on and self.data is not None and not feature_topology_unresolved:
+                # "Show predicted divided (EXPERIMENTAL)" (unchanged):
+                # looked up by layer/tile_id/feature_index, independently
+                # of the line-drawing logic itself.
+                if seg_predict_on and feat.get("layer") == "mg4":
+                    plist = self.data.seg_predict_caches.get("mg4", {}).get(feat.get("tile_id"))
+                    f_idx = feat.get("feature_index")
+                    if plist is not None and f_idx is not None and 0 <= f_idx < len(plist):
+                        seg_pred = plist[f_idx]
 
-            if adj is not None:
-                # Real, derived connectivity -- iterate the graph's own
-                # unique edges (not a naive consecutive-index walk: a
-                # junction point can have 3+ real neighbors, so this is a
-                # general graph, not necessarily a simple path).
+                # EXPERIMENTAL override: color every edge of this segment
+                # by its own predicted divided status instead of the usual
+                # named/unnamed scheme -- see SEG_PREDICT_*_COLOR's own
+                # comment for why these are deliberately loud, unmissable
+                # colors. `line_width` stays the normal named-run width
+                # (1.6) so the overlay reads as "the same roads,
+                # recolored", not a visually distinct new layer.
                 if seg_pred is not None:
-                    # EXPERIMENTAL override (this session): color every edge
-                    # of this feature by its own predicted divided status
-                    # instead of the usual named/unnamed scheme -- see
-                    # SEG_PREDICT_*_COLOR's own comment for why these are
-                    # deliberately loud, unmissable colors, unlike anything
-                    # else already on screen. `line_width` stays the normal
-                    # named-run width (1.6) so the overlay reads as "the same
-                    # roads, recolored", not a visually distinct new layer.
                     pred = seg_pred.get("prediction")
                     if pred == "divided":
                         seg_line_color = SEG_PREDICT_DIVIDED_COLOR
@@ -5090,21 +5039,25 @@ class App:
                         seg_line_color = SEG_PREDICT_UNKNOWN_COLOR
                 else:
                     seg_line_color = None
-                for a, b in adj["edges"]:
-                    if a >= len(pts) or b >= len(pts):
-                        continue  # defensive -- should not happen, never trust blindly
+
+                # Consecutive points of THIS segment's own chain -- always
+                # a real, directly-connected run (see above), so a simple
+                # walk, not a graph (a real segment never branches
+                # mid-chain; branching happens only AT a shared node,
+                # i.e. where two DIFFERENT segments/features meet).
+                for a in range(len(pts) - 1):
                     ax, ay = self._to_canvas(*pts[a])
-                    bx, by = self._to_canvas(*pts[b])
+                    bx, by = self._to_canvas(*pts[a + 1])
                     if seg_line_color is not None:
                         line_color, line_width = seg_line_color, 1.6
                     else:
                         edge_name = _name_at_point(feat.get("named_ranges"), a) or \
-                            _name_at_point(feat.get("named_ranges"), b)
-                        highway_names = self.data.highway_names if self.data else None
-                        if edge_name and highway_names and edge_name in highway_names:
-                            # Real, cracked eeu.rd `highway` bit (not the
-                            # n_vertices-based proxy ROAD_COLOR_MAJOR below
-                            # still uses) -- see HIGHWAY_COLOR's own comment.
+                            _name_at_point(feat.get("named_ranges"), a + 1)
+                        if feat.get("is_highway"):
+                            # Real, cracked eeu.rd `highway` bit, read
+                            # directly off this segment's own road_id (no
+                            # name-based lookup needed any more -- see
+                            # HIGHWAY_COLOR's own comment).
                             line_color, line_width = HIGHWAY_COLOR, 2.2
                         elif edge_name:
                             line_color, line_width = ROAD_COLOR_MAJOR, 1.6
@@ -5187,24 +5140,24 @@ class App:
                         mx, my = self._to_canvas(mlon, mlat)
                         road_label_candidates.append((pix_len, name, mx, my))
 
-            # "Highlight junctions" (this session, see show_junctions_var's
-            # own comment in __init__): drawn AFTER the normal per-vertex
-            # dots above (so a junction marker always paints on top, never
-            # hidden under a plain red dot), using the SAME `adj["edges"]`
-            # connected-roads mode already resolved for this feature -- no
-            # new data, just a different interpretation of data already in
-            # hand. Degree is counted fresh per feature from `edges`
-            # (not decode_topology()'s own `graph_degree`, which is keyed
-            # by raw table-record position, not by the real point index
-            # this rendering loop needs -- resolve_topology_adjacency()'s
-            # `edges` are already point-index pairs, post-shift-resolution).
-            if adj is not None and self.show_junctions_var.get():
-                degree = {}
-                for a, b in adj["edges"]:
-                    degree[a] = degree.get(a, 0) + 1
-                    degree[b] = degree.get(b, 0) + 1
-                for pt_idx, deg in degree.items():
-                    if deg < 3 or pt_idx >= len(pts):
+            # "Highlight junctions" (see show_junctions_var's own comment
+            # in __init__): drawn AFTER the normal per-vertex dots above
+            # (so a junction marker always paints on top, never hidden
+            # under a plain red dot). Degree is now the REAL, literal
+            # count of segments touching this feature's own left/right
+            # NODE (decode_tile()'s `node_degree`, tile-level, shared
+            # across every segment/feature that touches that same real
+            # node) -- not a per-feature graph walk any more. Only the
+            # segment's own TWO endpoints (pts[0]/pts[-1], i.e. its real
+            # left_node/right_node) can be junctions; intermediate shape
+            # points are real geometry, not real nodes, so they have no
+            # degree of their own to check.
+            if connected_roads_on and self.show_junctions_var.get() and self.data is not None:
+                layer, tile_id = feat.get("layer"), feat.get("tile_id")
+                node_degree = self.data.topo_caches.get(layer, {}).get(tile_id, {}).get("node_degree", {})
+                for node_id, pt_idx in ((feat.get("left_node"), 0), (feat.get("right_node"), len(pts) - 1)):
+                    deg = node_degree.get(node_id, 0)
+                    if deg < 3:
                         continue
                     color = MAJOR_JUNCTION_COLOR if deg >= 5 else JUNCTION_COLOR
                     radius = 3.2 if deg >= 5 else 2.4
@@ -5213,61 +5166,45 @@ class App:
                         [px - radius, py - radius, px + radius, py + radius],
                         fill=color)
 
-        # "Draw cross-tile connections (EXPERIMENTAL)" (a later session,
-        # see show_cross_tile_var's own comment in __init__): computed
-        # ONCE here, after the per-feature loop above, because it needs
-        # every currently-pooled tile's degree-1 points gathered TOGETHER
-        # (mcr.resolve_cross_tile_adjacency() compares across tiles), not
-        # one feature at a time like everything else in that loop.
+        # "Draw cross-tile connections (EXPERIMENTAL)" (see show_cross_
+        # tile_var's own comment in __init__): computed ONCE here, after
+        # the per-feature loop above, because it needs every currently-
+        # pooled tile's degree-1 NODES gathered TOGETHER (mcr.resolve_
+        # cross_tile_adjacency() compares across tiles). With the real
+        # parcel model, `node_degree`/node coordinates are already
+        # TILE-level (decode_tile()'s own topo_caches/_node_coord_caches
+        # -- real, literal counts, not a per-feature graph to re-walk),
+        # so this no longer needs to touch individual features at all
+        # beyond discovering WHICH (layer, tile_id) pairs are currently
+        # visible. `point_id` passed to resolve_cross_tile_adjacency() is
+        # just the bare real node_id now (no (feature_index, point_index)
+        # pair needed -- nodes were never per-feature to begin with).
         if self.show_cross_tile_var.get() and connected_roads_on and self.data is not None:
-            # Group self.features by (layer, tile_id) -> {feature_index: feat}
-            # so a multi-feature tile's degree-1 pool can be built from ALL
-            # its features, keyed (feature_index, point_index) -- matches
-            # resolve_cross_tile_adjacency()'s own documented opaque-point-id
-            # convention for multi-feature tiles.
-            features_by_tile = {}
+            visible_tiles = set()
             for feat in self.features:
-                layer = feat.get("layer")
-                tile_id = feat.get("tile_id")
-                f_idx = feat.get("feature_index")
-                if layer is None or tile_id is None or f_idx is None:
-                    continue
-                features_by_tile.setdefault((layer, tile_id), {})[f_idx] = feat
+                layer, tile_id = feat.get("layer"), feat.get("tile_id")
+                if layer is not None and tile_id is not None:
+                    visible_tiles.add((layer, tile_id))
 
             tile_data = {}
-            for (layer, tile_id), by_feature in features_by_tile.items():
+            for layer, tile_id in visible_tiles:
                 bbox = self.data.bbox_indexes.get(layer, {}).get(tile_id)
                 if bbox is None:
                     continue  # no real content bbox yet -- can't safely compare
-                tlist = self.data.topo_caches.get(layer, {}).get(tile_id)
-                if not tlist:
+                topo = self.data.topo_caches.get(layer, {}).get(tile_id)
+                if not topo or topo.get("unresolved"):
                     continue
-                deg1 = []
-                for f_idx, feat in by_feature.items():
-                    if not (0 <= f_idx < len(tlist)):
-                        continue
-                    cand = tlist[f_idx]
-                    if not (cand.get("found") and cand.get("confidence") == "high"):
-                        continue
-                    pts = feat["points"]
-                    degree = {}
-                    for u, v in cand["edges"]:
-                        degree[u] = degree.get(u, 0) + 1
-                        degree[v] = degree.get(v, 0) + 1
-                    for pt_idx, deg in degree.items():
-                        if deg == 1 and pt_idx < len(pts):
-                            deg1.append(((f_idx, pt_idx), pts[pt_idx]))
+                node_coord = self.data._node_coord_caches.get(layer, {}).get(tile_id, {})
+                deg1 = [(nid, node_coord[nid]) for nid, deg in topo["node_degree"].items()
+                        if deg == 1 and nid in node_coord]
                 if deg1:
-                    # tile_data is keyed by (layer, tile_id) here, not a
-                    # bare tile_id -- safe, since resolve_cross_tile_
-                    # adjacency() treats its dict keys as opaque too.
                     tile_data[(layer, tile_id)] = {"deg1": deg1, "bbox": bbox}
 
             for match in mcr.resolve_cross_tile_adjacency(tile_data):
-                feat_a = features_by_tile[match["tile_a"]][match["point_a"][0]]
-                feat_b = features_by_tile[match["tile_b"]][match["point_b"][0]]
-                pa = feat_a["points"][match["point_a"][1]]
-                pb = feat_b["points"][match["point_b"][1]]
+                layer_a, tile_a = match["tile_a"]
+                layer_b, tile_b = match["tile_b"]
+                pa = self.data._node_coord_caches[layer_a][tile_a][match["point_a"]]
+                pb = self.data._node_coord_caches[layer_b][tile_b][match["point_b"]]
                 ax, ay = self._to_canvas(*pa)
                 bx, by = self._to_canvas(*pb)
                 draw.line([(ax, ay), (bx, by)], fill=CROSS_TILE_LINE_COLOR, width=2)

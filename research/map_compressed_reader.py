@@ -172,6 +172,8 @@ import re
 import struct
 import zlib
 
+import parcel_reader as _pr
+
 
 HEADER_MAGIC = b"(*$SIEMENS&^)\x00\x00\x00"
 
@@ -6067,4 +6069,87 @@ def extract_pronunciations(raw, abc_path=None):
                 "pronunciation": pron, "pronunciation_lang": pron_lang,
                 "offset": m.start(),
             })
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Parcel-model adapter (real segment/node geometry, see research/parcel_
+# reader.py) -- replaces decode_features()/decode_topology()/resolve_
+# topology_adjacency()'s own polyline/searched-table model for anything
+# connectivity-sensitive. See research/mp0-parcel-internals.md and the
+# wiki's MAP_COMPRESSED Container Format page for why.
+# ---------------------------------------------------------------------------
+def build_tile_features_from_parcel(blob, name_lookup=None):
+    """Adapt parcel_reader.parse_parcel()'s real segment/node model into
+    this module's own pre-existing "feature" shape (one dict per real
+    segment, with "points"/"named_ranges") so existing feature-based
+    consumers (rendering, click-to-identify, road search) need no
+    structural changes -- each segment's own real polyline (left node +
+    shape points + right node) stands in for the old, less reliable
+    per-tile polyline chain.
+
+    Args:
+        blob: one tile's already-decompressed bytes (e.g. from
+            decompress_tile()/zlib.decompress() directly -- same input
+            parcel_reader.parse_parcel() itself takes).
+        name_lookup: optional callable `road_id -> (name_or_None,
+            is_highway_bool)`, used to resolve a segment's real name via
+            its address-list `road_id` (parcel_reader's own section 7).
+            The caller supplies this (`road_naming.RdCache`-backed in
+            rns510_map_viewer.py) -- this module stays dependency-free of
+            eeu.rd's own reader. Every segment's name is left `None` if
+            not given or if the segment has no address-list entry.
+
+    Returns (features, node_degree, node_coord):
+        features: [{"points": [(lon,lat), ...], "named_ranges":
+            [(0, n-1, name)], "left_node": int, "right_node": int,
+            "road_id": int or None, "is_highway": bool,
+            "feature_index": int}, ...]. Caller still tags
+            "layer"/"tile_id"/"tile_offset"/"tile_declen" itself, same as
+            decode_tile() already did for the old decode_features() shape.
+        node_degree: {node_id: int} -- how many segment endpoints touch
+            each real node (its own, literal in/out road count -- no
+            search, shift-scoring or confidence involved).
+        node_coord: {node_id: (lon, lat)} -- one real resolved coordinate
+            per node seen (taken from whichever segment referenced it
+            first; already resolves the positions/exc_positions marker
+            distinction the same way build_polylines() itself does, so
+            this is correct even for a node whose own true coordinate
+            lives in exc_positions, not positions)."""
+    parsed = _pr.parse_parcel(blob)
+    polylines = _pr.build_polylines(parsed)
+
+    seg_to_road_id = {}
+    for key in ("abs", "short", "long"):
+        for rec in parsed["addresses"][key]:
+            seg_to_road_id[rec["seg"]] = rec["road_id"]
+
+    features = []
+    node_degree = {}
+    node_coord = {}
+    for poly in polylines:
+        pts = poly["points_deg"]
+        if len(pts) < 2:
+            continue
+        ln, rn = poly["left_node"], poly["right_node"]
+        node_degree[ln] = node_degree.get(ln, 0) + 1
+        node_degree[rn] = node_degree.get(rn, 0) + 1
+        node_coord.setdefault(ln, pts[0])
+        node_coord.setdefault(rn, pts[-1])
+
+        name, is_highway = None, False
+        road_id = seg_to_road_id.get(poly["seg"])
+        if road_id is not None and name_lookup is not None:
+            name, is_highway = name_lookup(road_id)
+
+        features.append({
+            "points": pts,
+            "named_ranges": [(0, len(pts) - 1, name)],
+            "left_node": ln,
+            "right_node": rn,
+            "road_id": road_id,
+            "is_highway": is_highway,
+            "feature_index": len(features),
+        })
+    return features, node_degree, node_coord
     return results
