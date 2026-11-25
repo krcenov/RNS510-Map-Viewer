@@ -1461,21 +1461,24 @@ class MapData:
         self._node_coord_caches = {layer: {} for layer in ALL_LAYERS}
         # Per-layer "pre-filter decode" cache (README §10 "v17 -> v18",
         # adjacency-backfill performance fix): {layer: {tile_id: (raw,
-        # declen, features, keep_idx)}} -- the intermediate state
-        # decode_tile() ALWAYS computes anyway (raw decompressed bytes +
-        # decode_features() output + this tile's _feature_keep_indices()
-        # result) is kept here too, regardless of `want_adjacency`, purely
-        # so get_tile_adjacency()'s fallback path (see its own docstring)
-        # never has to re-open the layer file / re-seek / re-decompress /
-        # re-run decode_features() from scratch for a tile that's already
-        # been read once -- that redundant re-read was the real, measured
-        # cost that made turning on "Draw connected roads" over an already
-        # panned-around area take minutes (see get_tile_adjacency()'s
-        # docstring for the full writeup). Never evicted, same lifetime
-        # policy as tile_caches/topo_caches -- this roughly doubles this
-        # class's per-tile memory footprint (raw decompressed bytes are now
-        # kept alongside the already-kept decoded feature dicts), a
-        # deliberate, disclosed memory-for-speed tradeoff.
+        # declen, features, keep_idx)}} -- the OLD model's decoded state,
+        # for the handful of unrelated experimental readers that still
+        # need it (`get_tile_seg_prediction()`/`get_tile_district_names()`/
+        # `get_tile_pronunciations()`/the mp0 zone2/zone3a summaries).
+        # **UPDATE, a later session**: `decode_tile()` no longer populates
+        # this unconditionally for every tile -- it was pure double-work on
+        # the normal pan/zoom path (the real parcel model does the actual
+        # rendering/naming/connectivity now, so running the OLD
+        # `decode_features()` too, on every single tile, just to keep this
+        # warm, cost roughly double the real per-tile decode time for no
+        # benefit in the common case). Each of the readers above already
+        # has its own defensive fallback that recomputes from raw bytes on
+        # a cache miss here, so they still work -- they just pay one extra
+        # decompress+decode the first time they're actually used on a
+        # given tile, instead of always hitting a warm cache. Only
+        # `decode_tile()`'s own `want_seg_predict` branch (mg4 only) still
+        # populates this eagerly, since it needs the OLD model's output
+        # right there anyway.
         self._predecode_caches = {layer: {} for layer in ALL_LAYERS}
         # Per-layer road-name-match cache (README §10 "v18 -> v19" perf
         # fix): {layer: {(tile_id, tol_m): [named_ranges per kept feature,
@@ -2303,42 +2306,35 @@ class MapData:
         separate expensive resolve pass any more, so there is no
         "lazy/later" case left to gate).
 
-        **Fallback, not a confidence gate**: on the rare tile whose real
-        parcel fails to parse (0/1,500+ real tiles sampled across all 5
-        layers this session, but never assumed impossible), this falls
-        back to the OLD `decode_features()` polyline model for just that
-        tile, with every returned feature tagged `"topology_unresolved":
-        True` -- see `App.show_unresolved_topology_var`'s own comment for
-        how that's surfaced, and `ensure_area_loaded()`'s naming pass for
-        why only THESE features still need the old nearest-coordinate
-        name matching.
+        **No fallback**: on the rare tile whose real parcel fails to
+        parse (0/1,500+ real tiles sampled across all 5 layers this
+        session, but never assumed impossible), this tile simply
+        contributes zero features -- `topo_caches[layer][tile_id]
+        ["unresolved"]` is still set `True` so callers can tell the
+        difference from "no roads here" (see
+        `App.show_unresolved_topology_var`'s own comment), but there is
+        no more old-`decode_features()` polyline render fallback to fall
+        back to.
 
-        `decode_features()` itself is still run UNCONDITIONALLY, in
-        parallel with the new model, purely to keep `_predecode_caches`
-        populated for the handful of OTHER, unrelated experimental
-        readers (`get_tile_seg_prediction()`/`get_tile_district_names()`/
-        `get_tile_pronunciations()`/the mp0 zone2/zone3a summaries) that
-        still read raw tile bytes through the old model's own block
-        structure -- migrating those is out of scope here; this keeps
-        them working unchanged."""
+        `decode_features()` (the OLD model) is NOT run here any more.
+        It's only computed lazily, on demand, inside the few unrelated
+        experimental readers that still need it directly
+        (`get_tile_seg_prediction()`/`get_tile_district_names()`/
+        `get_tile_pronunciations()`/the mp0 zone2/zone3a summaries, each
+        with its own from-raw-bytes fallback) or in the `want_seg_predict`
+        branch below -- never unconditionally for every tile on the
+        normal pan/zoom path."""
         offset, declen, complen = self.directories[layer]["entries"][tile_id]
         with mcr._open(self.layer_paths[layer]) as f:
             f.seek(offset)
             raw = zlib.decompress(f.read(complen))
-
-        old_features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
-        geo_index = self.geo_indexes.get(layer)
-        anchor = geo_index.get(tile_id) if geo_index else None
-        keep_idx = _feature_keep_indices(old_features, anchor)
-        self._predecode_caches[layer][tile_id] = (raw, declen, old_features, keep_idx)
 
         try:
             features, node_degree, node_coord = mcr.build_tile_features_from_parcel(
                 raw, name_lookup=self._road_name_lookup)
             unresolved = False
         except Exception:
-            features = [dict(old_features[i]) for i in keep_idx]
-            node_degree, node_coord = {}, {}
+            features, node_degree, node_coord = [], {}, {}
             unresolved = True
 
         kept = []
@@ -2355,6 +2351,11 @@ class MapData:
         self._node_coord_caches[layer][tile_id] = node_coord
 
         if want_seg_predict and layer == "mg4":
+            old_features = mcr.decode_features(raw, declen, trim_oscillation=self.trim_oscillation)
+            geo_index = self.geo_indexes.get(layer)
+            anchor = geo_index.get(tile_id) if geo_index else None
+            keep_idx = _feature_keep_indices(old_features, anchor)
+            self._predecode_caches[layer][tile_id] = (raw, declen, old_features, keep_idx)
             kept_old = [old_features[i] for i in keep_idx]
             self.seg_predict_caches[layer][tile_id] = [
                 _predict_seg_divided(raw, declen, feat, old_features) for feat in kept_old
@@ -2839,12 +2840,9 @@ class MapData:
         # see its own docstring) already names almost every feature
         # directly and exactly, via its own segment's real `eeu.rd`
         # `road_id` -- no spatial matching, no tolerance, no ambiguity.
-        # `rdn.match_feature()`'s nearest-coordinate guessing below is still
-        # needed in exactly 2 cases: (1) a "topology_unresolved" fallback
-        # feature (the old polyline model, used only when a tile's real
-        # parcel fails to parse -- see decode_tile()'s own "Fallback, not
-        # a confidence gate" section), on ANY layer; (2) ANY feature on a
-        # layer other than `mp0` -- confirmed directly against the real
+        # `rdn.match_feature()`'s nearest-coordinate guessing below is only
+        # needed for ANY feature on a layer other than `mp0` -- confirmed
+        # directly against the real
         # disc (parcel_reader's own address-list sections): `mg1`-`mg4`
         # carry NO address records AT ALL (0 found across random samples
         # on every generalized layer), so a segment's `road_id` there is
