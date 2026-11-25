@@ -461,36 +461,6 @@ HEAVY_LAYER = "mp0"
 
 ALL_LAYERS = FAST_LAYERS + [HEAVY_LAYER]
 
-# Real bug found and fixed (later session, user-reported "missing
-# points"/"these must be connected" investigation): `resolve_topology_
-# adjacency()`'s own `max_edge_m` default (200.0) was calibrated ONLY
-# against `mg2`/`mp0` ground truth (dense local-street layers, every
-# real human-verified edge under 110m) and applied UNIFORMLY to every
-# layer by both viewer call sites -- never validated against `mg4`
-# (the COARSEST layer, real highways), where long real edges between
-# shape points are completely normal. Confirmed directly: one single
-# real `mg4` feature (tile offset 6,546,198, feature 0) had **28 real,
-# legitimate edges (200m-1,810m) silently dropped** by the default
-# 200m cap -- including the exact edge (points 72<->74, 1,518m) a user
-# reported as "missing" ("these 2 must be connected", correctly, per
-# the real topology data once the cap is relaxed). Per-layer override,
-# same "generous safety margin over the longest known real edge"
-# principle the original 200m used (there: ~2x the longest of 104.2m;
-# here: ~2.8x the longest of 1,810m observed so far) -- `mg1`/`mg2`/
-# `mp0` keep the already-validated 200m default (not touched); `mg4`/
-# `mg3` (the 2 coarsest layers, real highways/main roads, never
-# ground-truth-validated at this specific threshold) get a much wider
-# cap. Not a formal derivation -- like the original 200m, empirically
-# justified, revisit if a real false-positive long edge turns up on
-# either of these 2 layers specifically.
-MAX_EDGE_M_BY_LAYER = {
-    "mg4": 5000.0,
-    "mg3": 5000.0,
-    "mg2": 200.0,
-    "mg1": 200.0,
-    "mp0": 200.0,
-}
-
 # Cumulative scale thresholds -- (scale_upper_bound_exclusive, n_fast_layers).
 # `scale` is pixels/degree, the same value App.scale already tracks for zoom.
 # Reuses the exact boundary VALUES this project already measured and
@@ -1309,18 +1279,6 @@ def _predict_seg_divided(raw, declen, feature, features):
     zero_rate = zero_either / n8 * 100.0
     prediction = "divided" if zero_rate < 3.0 else "non-divided"
     return {"n8": n8, "zero_rate": zero_rate, "prediction": prediction}
-
-
-# No-adjacency placeholder (README §10 "v9 -> v10"): used wherever a tile's
-# topology couldn't be resolved (locate failure, decode exception, etc.) so
-# every entry in a topo_caches[layer][tile_id] list always has the same
-# shape as a real resolve_topology_adjacency() result -- callers only ever
-# need to check "confidence", never a separate "did this even run" flag.
-_NO_ADJACENCY = {
-    "found": False, "shift": None, "median_edge_m": None,
-    "confidence": "none", "edges": [], "adjacency": {},
-    "edges_dropped_implausible": 0,
-}
 
 
 class MapData:
