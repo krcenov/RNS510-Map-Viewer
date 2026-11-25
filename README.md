@@ -70,8 +70,14 @@ page for the real-world procedure.
 - `rns510_iso.py` — ISO9660/UDF read/write helper shared by both tools.
 - `research/` — reusable, documented format-reader modules (one per file format), plus
   `swl_5238_reader.py`, the firmware/SWL-disc research log.
+- `research/parcel_reader.py` — the **inside** of an `mp0`/`mg1`–`mg4` tile: the
+  326-byte parcel header, positions, variable-length segments, nodes
+  (connectivity), shapes and address lists. See
+  `research/mp0-parcel-internals.md`; this corrects the "coordinate region is a
+  polyline / search for a topology table" model in the tile reader.
 - `test_map_viewer.py` / `test_core.py` — non-GUI functional tests, run against the real
-  discs.
+  discs. `test_parcel_reader.py` is self-contained (embedded real tile) and also
+  accepts `--map` for a real disc.
 
 **Dependencies**: `pycdlib` (ISO9660/UDF), `Pillow` (rendering), `numpy` (POI decoding).
 Everything else is Python stdlib (`tkinter`, `sqlite3`, `zlib`).
