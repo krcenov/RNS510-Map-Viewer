@@ -289,6 +289,31 @@ def decode_coordinates_np(coords):
     return lon, lat
 
 
+def _load_poi_partitions_from_conn(conn):
+    """The real query behind `load_poi_partitions()`, against an ALREADY-
+    OPEN connection -- factored out (a later session, perf fix) so
+    `load_poi_cache()` can reuse its own single connection instead of
+    calling `load_poi_partitions(db_path)`, which used to reconnect from
+    scratch (see that function's own comment for why that's expensive
+    for an `IsoFileRef` source)."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.PoiPartition_ID, p.MapZoomLevel, p.MapPriority, s.Value
+        FROM PoiPartition_BaseAttributes p
+        LEFT JOIN PoiPartition_Category_Relation r ON r.PoiPartition_ID = p.PoiPartition_ID
+        LEFT JOIN Category_BaseAttributes c ON c.Category_ID = r.Category_ID
+        LEFT JOIN String_BaseAttributes s ON s.String_ID = c.Name_String_ID
+    """)
+    partitions = {}
+    for partition_id, zoom_level, priority, category_name in cur.fetchall():
+        partitions[partition_id] = {
+            "category_name": category_name,
+            "zoom_level_m": zoom_level,
+            "map_priority": priority,
+        }
+    return partitions
+
+
 def load_poi_partitions(db_path):
     """Load `PoiPartition_BaseAttributes`'s real per-partition metadata,
     joined to its own category name (via `PoiPartition_Category_Relation`
@@ -304,25 +329,17 @@ def load_poi_partitions(db_path):
     intent `PoiPartition_ID`'s own row-order correlation with visibility
     already hinted at (see this module's docstring). Returns
     {partition_id: {"category_name": str or None, "zoom_level_m": int,
-    "map_priority": int}}."""
+    "map_priority": int}}.
+
+    Standalone callers still pay a fresh `_connect()` here -- for an
+    `IsoFileRef` source that means a full re-read + re-deserialize of
+    the whole POI database (measured: ~20s on the real 1.1GB disc file),
+    same as any other standalone call against this source. See
+    `load_poi_cache()`'s own docstring for why IT avoids paying this
+    twice."""
     conn = _connect(db_path)
     try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT p.PoiPartition_ID, p.MapZoomLevel, p.MapPriority, s.Value
-            FROM PoiPartition_BaseAttributes p
-            LEFT JOIN PoiPartition_Category_Relation r ON r.PoiPartition_ID = p.PoiPartition_ID
-            LEFT JOIN Category_BaseAttributes c ON c.Category_ID = r.Category_ID
-            LEFT JOIN String_BaseAttributes s ON s.String_ID = c.Name_String_ID
-        """)
-        partitions = {}
-        for partition_id, zoom_level, priority, category_name in cur.fetchall():
-            partitions[partition_id] = {
-                "category_name": category_name,
-                "zoom_level_m": zoom_level,
-                "map_priority": priority,
-            }
-        return partitions
+        return _load_poi_partitions_from_conn(conn)
     finally:
         conn.close()
 
@@ -342,12 +359,24 @@ def load_poi_cache(db_path):
     masking -- see load_poi_partitions()), "name": list[str],
     "name_upper": list[str or None] (precomputed uppercase, for
     case-insensitive substring search -- see search_pois()), "partitions":
-    {..., see load_poi_partitions()}}."""
+    {..., see load_poi_partitions()}}.
+
+    **UPDATE, a later session, perf fix**: this used to call
+    `load_poi_partitions(db_path)` below, which reconnected from scratch
+    -- for an `IsoFileRef` source (the real map viewer's normal case),
+    `_connect()` reads the WHOLE ~1.1GB POI database out of the ISO and
+    `sqlite3.Connection.deserialize()`s it again, measured at ~20s each
+    time, on top of the ~20s this function's own `_connect()` already
+    pays. That's ~40s of the real ~95s total load spent reconnecting to
+    the exact same bytes twice for no reason. Fixed by reusing this
+    function's own already-open `conn` for the partitions query too (see
+    `_load_poi_partitions_from_conn()`) -- one connect, not two."""
     conn = _connect(db_path)
     try:
         cur = conn.cursor()
         cur.execute("SELECT Poi_ID, Coordinate, PoiPartition_ID, Name FROM Poi_BaseAttributes")
         rows = cur.fetchall()
+        partitions = _load_poi_partitions_from_conn(conn)
     finally:
         conn.close()
     poi_id = np.array([r[0] for r in rows], dtype=np.int64)
@@ -356,15 +385,24 @@ def load_poi_cache(db_path):
     name = [r[3] for r in rows]
     name_upper = [n.upper() if n else None for n in name]
     lon, lat = decode_coordinates_np(coord)
-    partitions = load_poi_partitions(db_path)
     # Precompute each POI's own partition zoom threshold, aligned 1:1 with
     # the POI arrays above -- avoids a per-partition dict lookup on every
     # viewport query later. Missing/unknown partition -> 0 (never shown by
     # a zoom-gated query, the safe default for data this session didn't
     # otherwise characterize).
-    zoom_by_partition = {pid: (meta["zoom_level_m"] or 0) for pid, meta in partitions.items()}
-    zoom_level_m = np.array(
-        [zoom_by_partition.get(int(pid), 0) for pid in partition_id], dtype=np.int64)
+    #
+    # Perf (a later session): vectorized via a small lookup table indexed
+    # by partition_id + 1 (so the "no partition" sentinel -1 lands at
+    # index 0), instead of a 4.7-MILLION-iteration Python `dict.get()`
+    # loop -- same result, real cost measured in the single-digit
+    # seconds on this disc's real partition count (tiny) vs. POI count
+    # (huge), so a vectorized numpy gather is the right shape for it.
+    max_pid = int(partition_id.max()) if len(partition_id) else -1
+    zoom_table = np.zeros(max_pid + 2, dtype=np.int64)
+    for pid, meta in partitions.items():
+        if 0 <= pid <= max_pid:
+            zoom_table[pid + 1] = meta["zoom_level_m"] or 0
+    zoom_level_m = zoom_table[np.where(partition_id >= 0, partition_id + 1, 0)]
     return {
         "poi_id": poi_id,
         "lon": lon,
