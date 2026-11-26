@@ -2897,12 +2897,21 @@ class MapData:
                 if progress:
                     progress("Matching decoded features against real road names...")
                 rd_index = self.rd_index_for_bbox(*ebox)
+                # Shared across every tile resolved in THIS batch (a later
+                # session, perf fix) -- real segments share real junction
+                # NODE coordinates with their neighbors (bit-identical, not
+                # just nearby), so the exact same (lon, lat) point recurs
+                # across many different features/tiles; see match_feature()'s
+                # own docstring for the measured 3.2x duplication rate this
+                # cuts out. Exact, not an approximation.
+                point_cache = {}
                 for (layer, tid), feats in unresolved_by_tile.items():
                     ncache = self.name_caches[layer]
                     key = (tid, name_tol_m)
                     ranges_list = ncache.get(key)
                     if ranges_list is None:
-                        ranges_list = [rdn.match_feature(feat["points"], rd_index, tol_m=name_tol_m)
+                        ranges_list = [rdn.match_feature(feat["points"], rd_index, tol_m=name_tol_m,
+                                                           point_cache=point_cache)
                                         for feat in feats]
                         ncache[key] = ranges_list
                     for feat, named_ranges in zip(feats, ranges_list):
