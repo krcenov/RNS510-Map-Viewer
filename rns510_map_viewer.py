@@ -4998,6 +4998,15 @@ class App:
             pts = feat["points"]
             if len(pts) < 2:
                 continue
+            # Perf: every point gets converted to canvas pixels at least
+            # twice below (once in the connected-roads line loop, once
+            # again in the always-on dot loop, a 3rd time for junction
+            # markers) -- `_to_canvas()` is the hottest per-vertex call in
+            # this whole function (its own comment: "potentially hundreds
+            # of thousands of times per redraw"), so converting each point
+            # exactly ONCE here and reusing it below is a real, measured
+            # win, not a style preference.
+            canvas_pts = [self._to_canvas(lon, lat) for lon, lat in pts]
             ranges = feat.get("named_ranges") or [(0, len(pts) - 1, None)]
 
             # Connected-roads mode: a feature IS now one real road SEGMENT
@@ -5047,9 +5056,25 @@ class App:
                 # walk, not a graph (a real segment never branches
                 # mid-chain; branching happens only AT a shared node,
                 # i.e. where two DIFFERENT segments/features meet).
+                #
+                # Perf: almost every real segment has exactly ONE named
+                # range end-to-end (one road_id -> one name), so
+                # line_color/line_width are the SAME for every edge of the
+                # whole feature in the overwhelming common case. Instead of
+                # one draw.line() call per edge (PIL's own per-call `ink`
+                # color-resolution overhead, measured as a real cost at
+                # this point/edge count), batch consecutive edges sharing
+                # the same (color, width) into a single multi-point
+                # polyline call -- verified pixel-IDENTICAL output to the
+                # old per-edge-call approach (PIL draws a multi-point
+                # line() as the same sequence of segments internally),
+                # never an approximation, just fewer, bigger calls. Still
+                # falls back to one call per run if a feature's color
+                # genuinely changes partway through (multiple named
+                # ranges, or the seg_predict overlay).
+                run_start = 0
+                run_color = run_width = None
                 for a in range(len(pts) - 1):
-                    ax, ay = self._to_canvas(*pts[a])
-                    bx, by = self._to_canvas(*pts[a + 1])
                     if seg_line_color is not None:
                         line_color, line_width = seg_line_color, 1.6
                     else:
@@ -5065,19 +5090,28 @@ class App:
                             line_color, line_width = ROAD_COLOR_MAJOR, 1.6
                         else:
                             line_color, line_width = ROAD_COLOR_UNNAMED, 1.0
-                    # Rasterized into `img` (README §10 "v17 -> v18"), not a
-                    # real canvas item -- see _redraw()'s own docstring.
-                    # PIL's line width is an int pixel count (no fractional
-                    # anti-aliased width like Tk's) -- round, floor at 1px.
-                    draw.line([(ax, ay), (bx, by)], fill=line_color, width=max(1, round(line_width)))
+
+                    if run_color is None:
+                        run_color, run_width = line_color, line_width
+                    elif (line_color, line_width) != (run_color, run_width):
+                        # Rasterized into `img` (README §10 "v17 -> v18"),
+                        # not a real canvas item -- see _redraw()'s own
+                        # docstring. PIL's line width is an int pixel count
+                        # (no fractional anti-aliased width like Tk's) --
+                        # round, floor at 1px.
+                        draw.line(canvas_pts[run_start:a + 1], fill=run_color,
+                                  width=max(1, round(run_width)))
+                        run_start, run_color, run_width = a, line_color, line_width
+                if run_color is not None:
+                    draw.line(canvas_pts[run_start:len(pts)], fill=run_color,
+                              width=max(1, round(run_width)))
 
             for start, end, name in ranges:
-                seg = pts[start:end + 1]
-                if len(seg) < 2:
+                seg_canvas = canvas_pts[start:end + 1]
+                if len(seg_canvas) < 2:
                     continue
                 coords = []
-                for lon, lat in seg:
-                    cx, cy = self._to_canvas(lon, lat)
+                for cx, cy in seg_canvas:
                     coords.extend((cx, cy))
                 n_vertices = end - start + 1
                 if n_vertices >= 60:
@@ -5138,8 +5172,7 @@ class App:
                     pix_len = math.hypot(x1 - x0, y1 - y0)
                     if pix_len >= MIN_LABEL_PIXEL_LEN:
                         mid = (start + end) // 2
-                        mlon, mlat = pts[mid]
-                        mx, my = self._to_canvas(mlon, mlat)
+                        mx, my = canvas_pts[mid]
                         road_label_candidates.append((pix_len, name, mx, my))
 
             # "Highlight junctions" (see show_junctions_var's own comment
@@ -5163,7 +5196,7 @@ class App:
                         continue
                     color = MAJOR_JUNCTION_COLOR if deg >= 5 else JUNCTION_COLOR
                     radius = 3.2 if deg >= 5 else 2.4
-                    px, py = self._to_canvas(*pts[pt_idx])
+                    px, py = canvas_pts[pt_idx]
                     draw.ellipse(
                         [px - radius, py - radius, px + radius, py + radius],
                         fill=color)
