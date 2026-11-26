@@ -4040,19 +4040,53 @@ class App:
             font=("Segoe UI", 9), highlightthickness=0)
         self.show_sirius_cb.pack(side="left", padx=(10, 0))
 
-        # ---- hardware bezel + screen (photo #1) ----
+        # ---- hardware bezel + screen (a later session's restyle, matching
+        # 4 real reference photos of the physical unit more closely than
+        # the original "v1" bezel this replaces) ----
+        # 3 rows now, not 2: a thin top strip (transport "<"/">" buttons,
+        # a CD slot, eject/brightness buttons -- all real, visible hardware
+        # on the reference photos but not modeled at all before this),
+        # the tall main row (button columns + screen, unchanged), and a
+        # bottom row with the two knobs flanking the screen at its OUTER
+        # edges (under the button columns) -- NOT centered together under
+        # the screen the way the "v1" bezel had them, which doesn't match
+        # any of the 4 reference photos.
         bezel = tk.Frame(self.root, bg=BEZEL_COLOR)
         bezel.pack(fill="both", expand=True)
         bezel.grid_columnconfigure(1, weight=1)
-        bezel.grid_rowconfigure(0, weight=1)
+        bezel.grid_rowconfigure(1, weight=1)
 
+        # ---- top strip (row 0): "<"/">" transport buttons, a CD slot,
+        # eject + brightness buttons -- all decorative (same "report what
+        # it is, do nothing silently" pattern _make_bezel_button() already
+        # uses), real visible hardware on the reference photos this
+        # restyle is matching that the original bezel never modeled.
+        top_left = tk.Frame(bezel, bg=BEZEL_COLOR)
+        top_left.grid(row=0, column=0, sticky="w", padx=(10, 6), pady=(8, 2))
+        self._make_small_bezel_button(top_left, "◄").pack(side="left", padx=(0, 2))
+        self._make_small_bezel_button(top_left, "►").pack(side="left")
+
+        top_mid = tk.Frame(bezel, bg=BEZEL_COLOR)
+        top_mid.grid(row=0, column=1, pady=(8, 2))
+        tk.Frame(top_mid, bg=SCREEN_BORDER_COLOR, width=200, height=8,
+                 highlightbackground="#0a0a0a", highlightthickness=1).pack()
+
+        top_right = tk.Frame(bezel, bg=BEZEL_COLOR)
+        top_right.grid(row=0, column=2, sticky="e", padx=(6, 10), pady=(8, 2))
+        self._make_small_bezel_button(top_right, "⏏").pack(side="left", padx=(0, 2))
+        self._make_small_bezel_button(top_right, "☀").pack(side="left")
+
+        # ---- main row (row 1): button columns + screen, same widgets as
+        # before, just re-gridded onto row 1 (no longer rowspan=2 -- the
+        # knobs below are now their own row, each under its own column,
+        # not spanned-under by these columns any more).
         left_col = tk.Frame(bezel, bg=BEZEL_COLOR)
-        left_col.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(10, 6), pady=10)
+        left_col.grid(row=1, column=0, sticky="ns", padx=(10, 6), pady=4)
         for label in ("RADIO", "MEDIA", "PHONE", "TONE"):
             self._make_bezel_button(left_col, label).pack(pady=4)
 
         right_col = tk.Frame(bezel, bg=BEZEL_COLOR)
-        right_col.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(6, 10), pady=10)
+        right_col.grid(row=1, column=2, sticky="ns", padx=(6, 10), pady=4)
         for label, action in (
             ("MAP", self.on_bezel_map),
             ("NAV", self.on_bezel_nav),
@@ -4068,7 +4102,7 @@ class App:
         # head unit has exactly one screen, and different UI states replace
         # each other WITHIN it, never as a second floating OS window.
         screen_frame = tk.Frame(bezel, bg=SCREEN_BORDER_COLOR, bd=0)
-        screen_frame.grid(row=0, column=1, sticky="nsew", pady=(10, 0))
+        screen_frame.grid(row=1, column=1, sticky="nsew", pady=4)
         self.screen_frame = screen_frame
 
         # canvas_frame is placed (not packed) so it can be LETTERBOXED to
@@ -4177,19 +4211,28 @@ class App:
         self.scale_bar_canvas = tk.Canvas(scale_box, width=80, height=7, bg=STATUS_BAR_BG, highlightthickness=0)
         self.scale_bar_canvas.pack()
 
-        # ---- two round "rotary knob" hardware controls (photo #1) ----
-        # The LEFT knob is a later session's user's explicit request: it's
-        # the real unit's own power button position, so it's wired to
-        # on_power_button() instead of staying purely decorative -- see
-        # _make_knob()'s own docstring. The RIGHT one is unchanged/still
-        # decorative (no sensible real mapping for a rotary volume knob in
-        # a read-only map-data viewer).
-        knob_row = tk.Frame(bezel, bg=BEZEL_COLOR)
-        knob_row.grid(row=1, column=1, sticky="ew", pady=(0, 8))
-        self._make_knob(knob_row, command=self.on_power_button).pack(side="left", padx=(20, 0))
-        tk.Label(knob_row, text="RNS 510", bg=BEZEL_COLOR, fg="#5a5d63",
-                 font=("Segoe UI", 8, "bold")).pack(side="left", expand=True)
-        self._make_knob(knob_row).pack(side="right", padx=(0, 20))
+        # ---- bottom row (row 2): two round "rotary knob" hardware
+        # controls, flanking the screen at its OUTER edges (each under its
+        # own button column), matching the 4 reference photos -- NOT
+        # centered together under the screen the way the "v1" bezel had
+        # them. The LEFT knob is a later session's user's explicit
+        # request: it's the real unit's own power button position, so
+        # it's wired to on_power_button() instead of staying purely
+        # decorative -- see _make_knob()'s own docstring. The RIGHT one is
+        # unchanged/still decorative (no sensible real mapping for a
+        # rotary volume knob in a read-only map-data viewer).
+        left_knob_frame = tk.Frame(bezel, bg=BEZEL_COLOR)
+        left_knob_frame.grid(row=2, column=0, pady=(2, 10))
+        self._make_knob(left_knob_frame, command=self.on_power_button).pack()
+
+        mid_label_frame = tk.Frame(bezel, bg=BEZEL_COLOR)
+        mid_label_frame.grid(row=2, column=1, pady=(2, 10))
+        tk.Label(mid_label_frame, text="RNS 510", bg=BEZEL_COLOR, fg="#5a5d63",
+                 font=("Segoe UI", 8, "bold")).pack()
+
+        right_knob_frame = tk.Frame(bezel, bg=BEZEL_COLOR)
+        right_knob_frame.grid(row=2, column=2, pady=(2, 10))
+        self._make_knob(right_knob_frame).pack()
 
         self.progress = ttk.Progressbar(self.root, mode="indeterminate")
         self.progress.pack(fill="x", side="bottom")
@@ -4302,6 +4345,22 @@ class App:
                           activeforeground=BEZEL_BUTTON_FG, relief="raised", bd=1,
                           font=("Segoe UI", 8, "bold"), highlightthickness=0, cursor="hand2")
 
+    def _make_small_bezel_button(self, parent, symbol, command=None):
+        """One small top-strip hardware button ("<"/">"/eject/brightness --
+        a later session's bezel restyle, matching 4 real reference photos
+        that all show these above the main button columns, never modeled
+        before). Same decorative-unless-given-a-command pattern as
+        _make_bezel_button(), just sized/labeled for a single glyph
+        instead of a word."""
+        if command is None:
+            def command():
+                self._set_status("(decorative hardware button -- not wired to a function in this "
+                                  "read-only map-data viewer).")
+        return tk.Button(parent, text=symbol, command=command, width=3,
+                          bg=BEZEL_BUTTON_BG, fg=BEZEL_BUTTON_FG, activebackground=BEZEL_BUTTON_ACTIVE_BG,
+                          activeforeground=BEZEL_BUTTON_FG, relief="raised", bd=1,
+                          font=("Segoe UI", 9, "bold"), highlightthickness=0, cursor="hand2")
+
     def _make_knob(self, parent, size=46, command=None):
         """Round volume/rotary-knob shape (photo #1's two below-screen
         knobs) -- a styled Canvas. Decorative (no working rotary
@@ -4321,6 +4380,18 @@ class App:
             c.bind("<Button-1>", lambda e: self._set_status(
                 "(decorative rotary knob -- not wired to a function in this read-only map-data viewer)"))
         else:
+            # Power icon (circle-with-a-notch + vertical line, the
+            # universal power symbol) -- matches the real unit's own
+            # engraved marking on this specific knob in the reference
+            # photos, and visually distinguishes it from the plain
+            # decorative knob next to it. Placed in the lower half of the
+            # face so it doesn't collide with the glossy highlight/pointer
+            # line above, which every knob (power or not) still gets.
+            r = size * 0.15
+            cx, cy = size * 0.5, size * 0.62
+            c.create_arc(cx - r, cy - r, cx + r, cy + r, start=55, extent=250,
+                         style="arc", outline=KNOB_HIGHLIGHT_COLOR, width=2)
+            c.create_line(cx, cy - r - 2, cx, cy - r * 0.15, fill=KNOB_HIGHLIGHT_COLOR, width=2)
             c.configure(cursor="hand2")
             c.bind("<Button-1>", lambda e: command())
         return c
