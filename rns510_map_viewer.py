@@ -372,6 +372,20 @@ APP_TITLE = "RNS510 Map Viewer (read-only)"
 # grows, so no need for anything heavier than json.load/json.dump.
 VIEWER_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "viewer_config.json")
 
+# Power-on boot screen (App.on_power_button()) -- a REAL image, not a
+# designed placeholder: a genuine VW-branded UI screen recovered from the
+# actual RNS510 firmware (research/firmware_java_reader.py's
+# find_embedded_images(), run against FHDD6.FLI's real embedded GIFs).
+# Not the literal stock power-on splash (no disc available to this
+# project ships a standalone LOGO.FLI -- that file is a user-created
+# payload for FLASHING a custom logo via a dedicated SWL disc, confirmed
+# by checking 23+ real discs plus every zlib-compressed region inside
+# FHDD6.FLI/SWL.FLI for the documented LOGO.FLI header/dimensions and
+# finding none -- see the wiki/commit history for the full investigation),
+# but a real, genuinely-extracted firmware asset, by explicit user choice
+# over a designed-from-scratch placeholder.
+BOOT_SCREEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "boot_screen.png")
+
 
 def _load_last_iso_path():
     """Returns the last-opened ISO path from VIEWER_CONFIG_PATH, or None if
@@ -552,6 +566,15 @@ ZOOM_LEVELS_M = (
 # still used elsewhere, e.g. by tests that frame a specific ground-truth
 # area -- just no longer what a live jump uses for its OWN display scale).
 DEFAULT_ZOOM_SPAN_M = 5_000.0
+
+# Power-on destination (App.on_power_button()/_open_iso_path()): "show the
+# map in the centre of Sofia" once a fresh ISO finishes loading, the real
+# unit's own equivalent of a default post-boot view. Same coordinate
+# test_map_viewer.py's own SOFIA_LON/SOFIA_LAT already uses as its
+# validated real-Sofia-area ground truth, reused here rather than a new,
+# independently-chosen value.
+SOFIA_LON = 23.40102
+SOFIA_LAT = 42.65533
 
 # Standard great-circle-adjacent approximation, meters per degree of
 # LATITUDE (longitude's own meters/degree shrinks by cos(lat), already
@@ -3390,12 +3413,46 @@ class MapGLFrame(OpenGLFrame):
         super().__init__(*args, **kw)
         self._render_data = None
         self._bg_color_gl = (1.0, 1.0, 1.0)
+        # Power-on boot screen (App.on_power_button()) -- a full-screen GL
+        # texture shown INSTEAD OF the normal map rendering while it's set,
+        # suspending it entirely (see redraw()'s own early-return below).
+        self._splash_tex_id = None
 
     def set_bg_color(self, rgb01):
         self._bg_color_gl = rgb01
 
     def set_render_data(self, data):
         self._render_data = data
+        # A real redraw with actual content means the map is up -- dismiss
+        # any boot splash still showing. Deliberately NOT done for `data is
+        # None` (App._redraw()'s own "no ISO loaded yet" early-return also
+        # calls this with None, and that must NOT clear a splash that's
+        # mid-boot, or a stray <Configure> event during loading would blank
+        # the screen back to nothing until the real load finishes).
+        if data is not None and self._splash_tex_id is not None:
+            GL.glDeleteTextures([self._splash_tex_id])
+            self._splash_tex_id = None
+
+    def show_splash(self, pil_image):
+        """Display `pil_image` full-screen (stretched to fill, same as the
+        label-texture overlay) instead of the normal map rendering, until
+        set_render_data() is next called with real data -- used for
+        App.on_power_button()'s boot screen, shown immediately on power-on
+        and dismissed automatically once the post-load jump-to-Sofia
+        produces its first real redraw."""
+        # Explicit tkMakeCurrent() -- this is called directly from a button
+        # click (App.on_power_button()), not through pyopengltk's own
+        # _display() (which calls tkMakeCurrent() itself) -- same real bug
+        # already caught once this session for the label texture (see
+        # App._redraw_finish()'s own comment): glGenTextures()/
+        # glTexImage2D() need a current GL context, never guaranteed
+        # otherwise.
+        self.tkMakeCurrent()
+        old = self._splash_tex_id
+        self._splash_tex_id = gl_texture_from_rgba_image(pil_image.convert("RGBA"))
+        self.repaint()
+        if old is not None:
+            GL.glDeleteTextures([old])
 
     def initgl(self):
         GL.glClearColor(*self._bg_color_gl, 1.0)
@@ -3422,6 +3479,26 @@ class MapGLFrame(OpenGLFrame):
             # edge case, not normal use.
             return
         GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+
+        if self._splash_tex_id is not None:
+            # Boot screen (App.on_power_button()) -- entirely replaces the
+            # normal map rendering below, not an overlay on top of it.
+            w = getattr(self, "width", 1) or 1
+            h = getattr(self, "height", 1) or 1
+            GL.glMatrixMode(GL.GL_MODELVIEW)
+            GL.glLoadIdentity()
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self._splash_tex_id)
+            GL.glColor4f(1, 1, 1, 1)
+            GL.glBegin(GL.GL_QUADS)
+            GL.glTexCoord2f(0, 0); GL.glVertex2f(0, 0)
+            GL.glTexCoord2f(1, 0); GL.glVertex2f(w, 0)
+            GL.glTexCoord2f(1, 1); GL.glVertex2f(w, h)
+            GL.glTexCoord2f(0, 1); GL.glVertex2f(0, h)
+            GL.glEnd()
+            GL.glDisable(GL.GL_TEXTURE_2D)
+            return
+
         data = self._render_data
         if not data:
             return
@@ -3827,23 +3904,42 @@ class App:
         search_panel = tk.Frame(self.root, bg=SEARCH_PANEL_BG)
         search_panel.pack(fill="x", side="top")
 
+        # ISO path field (a later session, user's explicit request): "Open
+        # Map ISO"/"Load last ISO" no longer load anything themselves --
+        # they only WRITE the chosen path into this field (on_open_iso()/
+        # on_load_last_iso()). The power button (the left hardware knob,
+        # see _make_knob()/on_power_button()) is the one and only thing
+        # that actually reads this field and starts loading, mirroring the
+        # real unit's own "press power, see the boot screen, then the map
+        # comes up" sequence instead of a menu action loading instantly.
+        # A plain tk.Entry, not read-only -- the user can also type/paste a
+        # path directly, same "it's just a text field" framing.
         iso_row = tk.Frame(search_panel, bg=SEARCH_PANEL_BG)
         iso_row.pack(fill="x", padx=10, pady=(6, 0))
-        initial_iso_text = "(no ISO loaded)"
-        if self.last_iso_path:
-            initial_iso_text = "(no ISO loaded -- last used: %s)" % self.last_iso_path
-        self.iso_label = tk.Label(iso_row, text=initial_iso_text, anchor="w",
-                                   bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG_DIM, font=("Segoe UI", 8))
-        self.iso_label.pack(side="left", fill="x", expand=True)
-        # "Load last ISO" button (this session): one click reopens
-        # self.last_iso_path (see its own comment in __init__) without the
-        # file-picker dialog on_open_iso() normally requires. Disabled
-        # (not hidden -- its own label is the explanation) whenever there's
-        # nothing remembered yet; _refresh_last_iso_button() keeps that in
-        # sync whenever last_iso_path changes.
+        self.iso_path_var = tk.StringVar(value=self.last_iso_path or "")
+        self.iso_path_entry = tk.Entry(
+            iso_row, textvariable=self.iso_path_var, bg="#0f2130", fg=SEARCH_PANEL_FG,
+            insertbackground=SEARCH_PANEL_FG, relief="flat", highlightthickness=1,
+            highlightbackground="#3a5a72", font=("Consolas", 9))
+        self.iso_path_entry.pack(side="left", fill="x", expand=True)
+        # "Load last ISO" button (this session): one click writes
+        # self.last_iso_path (see its own comment in __init__) into the
+        # field above, without the file-picker dialog on_open_iso()
+        # normally requires -- loading itself still needs the power
+        # button. Disabled (not hidden -- its own label is the
+        # explanation) whenever there's nothing remembered yet;
+        # _refresh_last_iso_button() keeps that in sync whenever
+        # last_iso_path changes.
         self.load_last_iso_btn = self._make_pill_button(iso_row, "Load last ISO", self.on_load_last_iso)
         self.load_last_iso_btn.pack(side="right")
         self._refresh_last_iso_button()
+
+        iso_status_row = tk.Frame(search_panel, bg=SEARCH_PANEL_BG)
+        iso_status_row.pack(fill="x", padx=10, pady=(2, 0))
+        self.iso_label = tk.Label(
+            iso_status_row, text="Enter/pick an ISO path above, then press the power button (left knob) to load it.",
+            anchor="w", bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG_DIM, font=("Segoe UI", 8))
+        self.iso_label.pack(side="left", fill="x", expand=True)
 
         # Breadcrumb-style address display, in the spirit of photo #2's
         # "BALGARIA / SOFIA / ZHK LYULIN..." country->city->street build-up
@@ -4253,9 +4349,15 @@ class App:
         self.scale_bar_canvas.pack()
 
         # ---- two round "rotary knob" hardware controls (photo #1) ----
+        # The LEFT knob is a later session's user's explicit request: it's
+        # the real unit's own power button position, so it's wired to
+        # on_power_button() instead of staying purely decorative -- see
+        # _make_knob()'s own docstring. The RIGHT one is unchanged/still
+        # decorative (no sensible real mapping for a rotary volume knob in
+        # a read-only map-data viewer).
         knob_row = tk.Frame(bezel, bg=BEZEL_COLOR)
         knob_row.grid(row=1, column=1, sticky="ew", pady=(0, 8))
-        self._make_knob(knob_row).pack(side="left", padx=(20, 0))
+        self._make_knob(knob_row, command=self.on_power_button).pack(side="left", padx=(20, 0))
         tk.Label(knob_row, text="RNS 510", bg=BEZEL_COLOR, fg="#5a5d63",
                  font=("Segoe UI", 8, "bold")).pack(side="left", expand=True)
         self._make_knob(knob_row).pack(side="right", padx=(0, 20))
@@ -4371,18 +4473,27 @@ class App:
                           activeforeground=BEZEL_BUTTON_FG, relief="raised", bd=1,
                           font=("Segoe UI", 8, "bold"), highlightthickness=0, cursor="hand2")
 
-    def _make_knob(self, parent, size=46):
-        """Decorative round volume/rotary-knob shape (photo #1's two
-        below-screen knobs) -- a styled Canvas, no working rotary
-        behavior, per the task's explicit "don't over-engineer fake
-        functionality" guidance."""
+    def _make_knob(self, parent, size=46, command=None):
+        """Round volume/rotary-knob shape (photo #1's two below-screen
+        knobs) -- a styled Canvas. Decorative (no working rotary
+        behavior, per the task's original "don't over-engineer fake
+        functionality" guidance) UNLESS `command` is given, in which case
+        a click runs it instead -- used for the LEFT knob only (a later
+        session, user's explicit request: "make the left volume knob...
+        act as a power button"), matching the real unit's own power
+        button position. The RIGHT knob is still called with no
+        `command`, staying purely decorative."""
         c = tk.Canvas(parent, width=size, height=size, bg=BEZEL_COLOR, highlightthickness=0)
         pad = 3
         c.create_oval(pad, pad, size - pad, size - pad, fill=KNOB_FACE_COLOR, outline=KNOB_RIM_COLOR, width=3)
         c.create_oval(size * 0.30, size * 0.20, size * 0.52, size * 0.34, fill=KNOB_HIGHLIGHT_COLOR, outline="")
         c.create_line(size / 2, size / 2, size / 2, pad + 5, fill=KNOB_HIGHLIGHT_COLOR, width=2)
-        c.bind("<Button-1>", lambda e: self._set_status(
-            "(decorative rotary knob -- not wired to a function in this read-only map-data viewer)"))
+        if command is None:
+            c.bind("<Button-1>", lambda e: self._set_status(
+                "(decorative rotary knob -- not wired to a function in this read-only map-data viewer)"))
+        else:
+            c.configure(cursor="hand2")
+            c.bind("<Button-1>", lambda e: command())
         return c
 
     def _tick_clock(self):
@@ -4553,7 +4664,53 @@ class App:
 
     # ------------------------------------------------------------- actions
 
+    def on_power_button(self):
+        """The left hardware knob (see _make_knob()/_build_widgets()'s own
+        comment), a later session's user's explicit request: "make the
+        left volume knob be clickable and act as a power button. clicking
+        the power button must show on the canvas the boot screen image
+        and then start loading the files and the map, as soon as
+        everything needed loads, show the map in the centre of sofia."
+
+        Reads whatever path is currently in self.iso_path_var (written
+        there by on_open_iso()/on_load_last_iso()/direct typing -- neither
+        of those loads anything themselves any more), puts the boot
+        screen up on the canvas via MapGLFrame.show_splash() (see its own
+        docstring -- replaces the normal map rendering entirely, not an
+        overlay on top of it), then starts the real load
+        (_open_iso_path()), which jumps to Sofia once it succeeds. The
+        splash is dismissed automatically the moment that jump's own
+        first real redraw happens (MapGLFrame.set_render_data()'s own
+        comment) -- this method never needs to clear it itself, including
+        on failure (an error dialog over a frozen boot screen is an
+        honest reflection of "it didn't come up", not a bug to hide)."""
+        if self.busy:
+            return
+        path = self.iso_path_var.get().strip()
+        if not path:
+            messagebox.showinfo(
+                "Power", "No ISO path set yet.\nUse File > Open Map ISO... or Load Last ISO "
+                         "(or type/paste a path directly) to set one, then press power again.")
+            return
+        if not os.path.isfile(path):
+            messagebox.showerror("Power", "ISO not found:\n%s" % path)
+            return
+        try:
+            boot_img = Image.open(BOOT_SCREEN_PATH)
+            boot_img.load()
+        except Exception as e:
+            self._set_status("Power: boot screen image unavailable (%s) -- loading anyway." % e)
+        else:
+            self.canvas.show_splash(boot_img)
+        self._open_iso_path(path)
+
     def on_open_iso(self):
+        """File > Open Map ISO... -- a later session, user's explicit
+        request: this no longer loads anything itself, it only WRITES the
+        picked path into self.iso_path_var (the text field next to it).
+        Press the power button (on_power_button(), the left hardware
+        knob) to actually load it -- see that method's own docstring for
+        why."""
         if self.busy:
             return
         path = filedialog.askopenfilename(
@@ -4562,16 +4719,13 @@ class App:
         )
         if not path:
             return
-        self._open_iso_path(path)
+        self.iso_path_var.set(path)
+        self._set_status("ISO path set. Press the power button (left knob) to load it.")
 
     def on_load_last_iso(self):
-        """File > Load Last ISO, and the "Load last ISO" pill button next
-        to iso_label (this session) -- reopens self.last_iso_path directly,
-        skipping on_open_iso()'s filedialog.askopenfilename() prompt.
-        Shares _open_iso_path() with on_open_iso() so the actual load
-        (background task, done() callback, stale-points clearing,
-        persisting the path again) is identical either way; only HOW the
-        path is obtained differs."""
+        """"Load last ISO" pill button / File > Load Last ISO -- same
+        change as on_open_iso(): just writes self.last_iso_path into the
+        text field, doesn't load anything itself any more."""
         if self.busy:
             return
         if not self.last_iso_path:
@@ -4581,13 +4735,21 @@ class App:
         if not os.path.isfile(self.last_iso_path):
             messagebox.showerror("Load Last ISO", "The remembered ISO is no longer there:\n%s" % self.last_iso_path)
             return
-        self._open_iso_path(self.last_iso_path)
+        self.iso_path_var.set(self.last_iso_path)
+        self._set_status("ISO path set to the last-used one. Press the power button (left knob) to load it.")
 
     def _open_iso_path(self, path):
-        """Shared by on_open_iso() (user just picked `path` via the file
-        dialog) and on_load_last_iso() (`path` is the remembered
-        self.last_iso_path) -- everything past "we have a path" is
-        identical either way."""
+        """The actual load -- ONLY ever called by on_power_button() now (a
+        later session, user's explicit request: on_open_iso()/
+        on_load_last_iso() just populate the text field, see their own
+        docstrings). Once this succeeds, jumps straight to Sofia so a
+        power-on always ends with a real map on screen, matching the real
+        unit's own "press power, see the boot screen, then the map comes
+        up" sequence -- on_power_button() is the one that puts the boot
+        screen up in the first place; this method doesn't know about it
+        (MapGLFrame.set_render_data() dismisses it automatically the
+        moment this chain's first real _redraw() happens, see that
+        method's own comment)."""
         if self.data is not None:
             self.data.close()
         self.data = MapData(path)
@@ -4620,11 +4782,19 @@ class App:
             n_resolved = sum(len(self.data.geo_indexes[l]) for l in FAST_LAYERS)
             self.iso_label.config(text="Loaded: %s  [%d/%d overview-to-neighborhood tiles ready, %d cities]" % (
                 result, n_resolved, n_tiles, self.data.cty_cache.record_count))
-            self._set_status("Ready. Search a place/road (or enter lat/lon), then Go.")
+            self._set_status("Ready -- jumping to Sofia...")
             self._set_controls_enabled(True)
             self._start_heavy_layer_load()
             self._start_poi_load()
             self._start_bbox_index_load()
+            # "As soon as everything needed loads, show the map in the
+            # centre of Sofia" (user's explicit request): "everything
+            # needed" is the fast layers + road/city caches above --
+            # mp0/POIs/the bbox index (just kicked off) are genuinely
+            # progressive background enhancements by this whole app's
+            # existing design (the user can already search/pan/zoom while
+            # those finish), not something a first view needs to wait on.
+            self._jump_to(SOFIA_LON, SOFIA_LAT)
 
         BackgroundTask(self.root, do_load, self._set_status, done).start()
 
