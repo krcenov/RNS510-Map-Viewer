@@ -1494,6 +1494,24 @@ class MapData:
         # spatial lookup) over the WHOLE pooled feature set on every single
         # pan/zoom reload, only tiles genuinely new to `self` pay that cost.
         self.name_caches = {layer: {} for layer in ALL_LAYERS}
+        # Whole-result cache for `ensure_area_loaded()`'s own "named"
+        # feature-list assembly (a later session, perf fix): {name_tol_m,
+        # frozenset of every (layer, tile_id) currently pooled} -> the
+        # exact `named` list already built for that tile set. Without
+        # this, EVERY call (every pan/zoom/resize, not just ones that
+        # decode a new tile) rebuilt the WHOLE pooled feature list from
+        # scratch -- `dict(feat)` for every single pooled feature, plus
+        # re-scanning all of them for `unresolved_by_tile` -- even though
+        # `match_feature()` itself was already properly cached per-tile
+        # above. Measured: ~150-300ms on every redraw over an 80K-feature
+        # viewport, just for that bookkeeping, paid again even when zero
+        # new tiles were decoded. Safe to cache whole: a tile's own
+        # entries in `tile_caches`/`name_caches` are immutable once
+        # decoded (never evicted), so the assembled list is fully
+        # determined by WHICH tiles are pooled, at which `name_tol_m`.
+        # Reset alongside the caches above on `set_trim_oscillation()`.
+        self._named_features_cache_key = None
+        self._named_features_cache_result = []
         # Per-layer seg_list divided/non-divided PREDICTION cache (this
         # session, experimental): {layer: {tile_id: [per-feature dict or
         # None, ...]}}, index-aligned with decode_tile()'s own
@@ -2572,6 +2590,8 @@ class MapData:
         self._node_coord_caches = {layer: {} for layer in ALL_LAYERS}
         self._predecode_caches = {layer: {} for layer in ALL_LAYERS}
         self.name_caches = {layer: {} for layer in ALL_LAYERS}
+        self._named_features_cache_key = None
+        self._named_features_cache_result = []
         self.seg_predict_caches = {layer: {} for layer in ALL_LAYERS}
 
     # --------------------------------------------------------- road names
@@ -2855,43 +2875,51 @@ class MapData:
         # "v18 -> v19") for whichever tiles actually need it; `mp0`'s own
         # fully-resolved, fully-addressed common case still pays
         # match_feature() ZERO times.
-        named = []
-        for layer in layers:
-            cache = self.tile_caches[layer]
-            for tid in per_layer_tile_ids[layer]:
-                feats = cache.get(tid)
-                if not feats:
-                    continue
-                named.extend(dict(feat) for feat in feats)
+        tile_set = frozenset((layer, tid) for layer in layers for tid in per_layer_tile_ids[layer])
+        cache_key = (name_tol_m, tile_set)
+        if cache_key == self._named_features_cache_key:
+            named = self._named_features_cache_result
+        else:
+            named = []
+            for layer in layers:
+                cache = self.tile_caches[layer]
+                for tid in per_layer_tile_ids[layer]:
+                    feats = cache.get(tid)
+                    if not feats:
+                        continue
+                    named.extend(dict(feat) for feat in feats)
 
-        unresolved_by_tile = {}
-        for feat in named:
-            if feat.get("topology_unresolved") or feat.get("layer") != "mp0":
-                unresolved_by_tile.setdefault((feat["layer"], feat["tile_id"]), []).append(feat)
-        if unresolved_by_tile:
-            if progress:
-                progress("Matching decoded features against real road names...")
-            rd_index = self.rd_index_for_bbox(*ebox)
-            for (layer, tid), feats in unresolved_by_tile.items():
-                ncache = self.name_caches[layer]
-                key = (tid, name_tol_m)
-                ranges_list = ncache.get(key)
-                if ranges_list is None:
-                    ranges_list = [rdn.match_feature(feat["points"], rd_index, tol_m=name_tol_m)
-                                    for feat in feats]
-                    ncache[key] = ranges_list
-                for feat, named_ranges in zip(feats, ranges_list):
-                    feat["named_ranges"] = named_ranges
-                    if not feat.get("is_highway"):
-                        # `is_highway` came from the new model's own
-                        # road_id lookup, which is never available here
-                        # (see above) -- fall back to the OLD name-based
-                        # proxy (real eeu.rd `highway` bit, just reached
-                        # via name match instead of an exact road_id) so
-                        # highway coloring still works on these layers.
-                        name = _name_at_point(named_ranges, 0)
-                        highway_names = self.highway_names
-                        feat["is_highway"] = bool(name and highway_names and name in highway_names)
+            unresolved_by_tile = {}
+            for feat in named:
+                if feat.get("topology_unresolved") or feat.get("layer") != "mp0":
+                    unresolved_by_tile.setdefault((feat["layer"], feat["tile_id"]), []).append(feat)
+            if unresolved_by_tile:
+                if progress:
+                    progress("Matching decoded features against real road names...")
+                rd_index = self.rd_index_for_bbox(*ebox)
+                for (layer, tid), feats in unresolved_by_tile.items():
+                    ncache = self.name_caches[layer]
+                    key = (tid, name_tol_m)
+                    ranges_list = ncache.get(key)
+                    if ranges_list is None:
+                        ranges_list = [rdn.match_feature(feat["points"], rd_index, tol_m=name_tol_m)
+                                        for feat in feats]
+                        ncache[key] = ranges_list
+                    for feat, named_ranges in zip(feats, ranges_list):
+                        feat["named_ranges"] = named_ranges
+                        if not feat.get("is_highway"):
+                            # `is_highway` came from the new model's own
+                            # road_id lookup, which is never available here
+                            # (see above) -- fall back to the OLD name-based
+                            # proxy (real eeu.rd `highway` bit, just reached
+                            # via name match instead of an exact road_id) so
+                            # highway coloring still works on these layers.
+                            name = _name_at_point(named_ranges, 0)
+                            highway_names = self.highway_names
+                            feat["is_highway"] = bool(name and highway_names and name in highway_names)
+
+            self._named_features_cache_key = cache_key
+            self._named_features_cache_result = named
 
         return {
             "bbox": ebox,
