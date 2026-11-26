@@ -372,19 +372,13 @@ APP_TITLE = "RNS510 Map Viewer (read-only)"
 # grows, so no need for anything heavier than json.load/json.dump.
 VIEWER_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "viewer_config.json")
 
-# Power-on boot screen (App.on_power_button()) -- a REAL image, not a
-# designed placeholder: a genuine VW-branded UI screen recovered from the
-# actual RNS510 firmware (research/firmware_java_reader.py's
-# find_embedded_images(), run against FHDD6.FLI's real embedded GIFs).
-# Not the literal stock power-on splash (no disc available to this
-# project ships a standalone LOGO.FLI -- that file is a user-created
-# payload for FLASHING a custom logo via a dedicated SWL disc, confirmed
-# by checking 23+ real discs plus every zlib-compressed region inside
-# FHDD6.FLI/SWL.FLI for the documented LOGO.FLI header/dimensions and
-# finding none -- see the wiki/commit history for the full investigation),
-# but a real, genuinely-extracted firmware asset, by explicit user choice
-# over a designed-from-scratch placeholder.
-BOOT_SCREEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "boot_screen.png")
+# Power-on boot screen (App.on_power_button()) -- the real stock VW
+# "Welcome to Volkswagen" splash (800x480, user-supplied), replacing an
+# earlier placeholder sourced from a genuine but not-quite-right firmware
+# screen (a "Software update" wizard screen recovered from FHDD6.FLI --
+# see the wiki/commit history for that investigation, which confirmed no
+# disc available to this project ships a standalone LOGO.FLI file).
+BOOT_SCREEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "boot_screen.jpg")
 
 
 def _load_last_iso_path():
@@ -757,42 +751,6 @@ HIGHWAY_COLOR = "#2e7d32"
 # different from a simple fork at a glance.
 JUNCTION_COLOR = "#0277bd"        # medium blue -- degree 3-4
 MAJOR_JUNCTION_COLOR = "#6a1b9a"  # deep purple -- degree 5+ (today's fix)
-# "Highlight unresolved topology (EXPERIMENTAL)" dot color (a later
-# session): neutral gray, deliberately UNLIKE every other color already on
-# screen (red dots, blue/purple junctions, green/gold/gray road lines) --
-# reads as "data unavailable here", not as a road-classification choice.
-# Covers BOTH `resolve_topology_adjacency()` outcomes a user can't tell
-# apart just by looking at a plain red dot: `"found": False` (no topology
-# table could be located for this feature at all -- see that function's
-# own docstring) and `"confidence": "low"` (a table was found, but its
-# best shift's geometry was too implausible to trust). Not degree-specific
-# like JUNCTION_COLOR above -- this marks EVERY point of an unresolved
-# feature, since there is no real adjacency graph to compute a degree
-# from in either case.
-UNRESOLVED_TOPOLOGY_COLOR = "#757575"
-# "Draw cross-tile connections (EXPERIMENTAL)" line color (a later
-# session): bright orange, chosen to stand out clearly from every
-# existing line color (green HIGHWAY_COLOR, gold/gray ROAD_COLOR_*, the
-# SEG_PREDICT_* overlay colors below) since a cross-tile connection is a
-# genuinely different KIND of claim than a normal drawn road segment --
-# it's an INFERRED edge (mcr.resolve_cross_tile_adjacency()'s mutual-
-# nearest-neighbor match across tiles), not a directly-decoded one, and
-# should read as "the viewer figured this out", not "this is on disc".
-CROSS_TILE_LINE_COLOR = "#ff6f00"
-# "Show predicted divided (EXPERIMENTAL)" overlay colors (this session):
-# deliberately bright/saturated and unlike any other color already in use
-# on this screen, so a predicted-divided vs. predicted-non-divided road is
-# immediately, unambiguously distinguishable at a glance -- the whole point
-# of this overlay is to let a human visually spot a WRONG prediction, which
-# a subtle color difference would defeat.
-SEG_PREDICT_DIVIDED_COLOR = "#ff6f00"      # bright orange -- predicted divided
-SEG_PREDICT_NONDIVIDED_COLOR = "#1565c0"   # strong blue -- predicted non-divided
-SEG_PREDICT_UNKNOWN_COLOR = "#9e9e9e"      # neutral gray -- no prediction (parse
-# failed, too few 8-byte records, or not an mg4 tile) -- deliberately NOT one of
-# the 2 prediction colors, so "no opinion" is never mistaken for a real guess.
-TILE_BOUNDARY_COLOR = "#9c8f6b"  # muted tan -- visible against the light
-# background without competing with road/label colors; a debugging aid, not
-# a primary map feature.
 ROAD_LABEL_COLOR = "#3a2f18"
 CITY_DOT_COLOR = "#20304a"       # dark navy square markers (photo #4 style, adapted to light bg)
 CITY_LABEL_COLOR = "#141c28"
@@ -2370,10 +2328,8 @@ class MapData:
         session, but never assumed impossible), this tile simply
         contributes zero features -- `topo_caches[layer][tile_id]
         ["unresolved"]` is still set `True` so callers can tell the
-        difference from "no roads here" (see
-        `App.show_unresolved_topology_var`'s own comment), but there is
-        no more old-`decode_features()` polyline render fallback to fall
-        back to.
+        difference from "no roads here", but there is no more old-
+        `decode_features()` polyline render fallback to fall back to.
 
         `decode_features()` (the OLD model) is NOT run here any more.
         It's only computed lazily, on demand, inside the few unrelated
@@ -3764,68 +3720,14 @@ class App:
         # of the usual DOT_COLOR red, so a real junction (and especially a
         # genuine 5+-way one, see JUNCTION_COLOR's own comment) is visible
         # at a glance rather than only inferrable from where lines happen to
-        # converge. CHECKED by default, matching connected_roads_var above,
-        # since it's purely additive (only ever recolors a dot that would
-        # already be drawn) and only activates on the exact same
+        # converge. UNCHECKED by default (a later session, user's explicit
+        # request) -- purely additive either way (only ever recolors a dot
+        # that would already be drawn) and only activates on the exact same
         # found+confidence=="high" features connected-roads mode already
         # gates on -- never a guessed/low-confidence marker. Has no effect
         # at all when connected_roads_var is off (no resolved adjacency
         # graph to compute degree from in the first place). See _redraw().
-        self.show_junctions_var = tk.BooleanVar(value=True)
-
-        # "Highlight unresolved topology (EXPERIMENTAL)" checkbox (a later
-        # session, prompted directly by a user right-clicking a real point
-        # that rendered as a plain dot with no explanation -- see
-        # UNRESOLVED_TOPOLOGY_COLOR's own comment for exactly what this
-        # covers). OFF by default, same reasoning as show_seg_predict_var
-        # below: this is a diagnostic/debugging aid, not a normal viewing
-        # mode, and (per the AT-SCALE numbers in resolve_topology_
-        # adjacency()'s own docstring) could recolor a meaningful fraction
-        # of points in a dense `mp0` area, which would be visual clutter
-        # for anyone not specifically investigating a missing connection.
-        # Like show_junctions_var, needs no reload when toggled -- it only
-        # recolors dots using adjacency data connected-roads mode already
-        # fetched (or the cached "found": False result of trying to), so
-        # its command is a plain self._redraw(). Has no effect when
-        # connected_roads_var is off (no cached result to check at all).
-        self.show_unresolved_topology_var = tk.BooleanVar(value=False)
-
-        # "Draw cross-tile connections (EXPERIMENTAL)" checkbox (a later
-        # session): draws real edges found by `mcr.resolve_cross_tile_
-        # adjacency()` -- a road cut in half by a tile boundary, stitched
-        # back together by matching each half's own degree-1 ("dead end")
-        # point to its MUTUAL nearest degree-1 point in a geographically
-        # neighboring tile. Validated (see that function's own docstring)
-        # on 2 independent layers with a real NEAR-vs-FAR controlled
-        # comparison: a real hit rate of 30-60%+ among genuine tile-
-        # boundary pairs vs. an exact ZERO false positives across over
-        # 2,000 combined control pairs -- a strong, not a speculative,
-        # signal. OFF by default anyway, same reasoning as show_seg_
-        # predict_var/show_unresolved_topology_var: this is a genuinely
-        # NEW, inferred edge (not something directly decoded off the
-        # disc), recomputed from whatever tiles happen to be currently
-        # pooled, so toggling it needs no reload, just self._redraw().
-        #
-        # **UPDATE, a later session**: the "cheap enough not to need
-        # caching" claim above was WRONG once measured against the real
-        # parcel model -- real degree-1 nodes are far more common on
-        # `mp0` (15%+ of all nodes, see the wiki's Tile Geometry and
-        # Topology page) than the old heuristic model this was written
-        # against, so `resolve_cross_tile_adjacency()`'s all-pairs
-        # matching over a realistic pooled `mp0` viewport (measured: 201
-        # tiles, 6,670 real degree-1 points) took ~3 SECONDS, identically
-        # recomputed on every single redraw (every drag-end/zoom/resize/
-        # unrelated-checkbox-toggle) even when the pooled tile set hadn't
-        # changed at all. Fixed with `_cross_tile_cache_key`/`_cross_
-        # tile_cache_result` below: `topo_caches`/`_node_coord_caches`
-        # per tile are immutable once decoded (never evicted), so the
-        # match list is fully determined by WHICH (layer, tile_id) keys
-        # are in `tile_data` -- caching on that key set (plus `id(self.
-        # data)`, so a freshly opened ISO never reuses a stale result)
-        # is exact, not an approximation.
-        self.show_cross_tile_var = tk.BooleanVar(value=False)
-        self._cross_tile_cache_key = None
-        self._cross_tile_cache_result = []
+        self.show_junctions_var = tk.BooleanVar(value=False)
 
         # Last-opened-ISO path (this session), read once at startup from
         # VIEWER_CONFIG_PATH -- see that constant's own comment. None if
@@ -4100,79 +4002,6 @@ class App:
             activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
             font=("Segoe UI", 9), highlightthickness=0)
         self.show_junctions_cb.pack(side="left", padx=(10, 0))
-
-        # ---- "Highlight unresolved topology (EXPERIMENTAL)" checkbox (a
-        # later session) ---- see show_unresolved_topology_var's own
-        # comment in __init__ for what this does and why it's OFF by
-        # default. Same no-reload-needed reasoning as "Highlight
-        # junctions" above.
-        self._status_divider(layers_row)
-        self.show_unresolved_topology_cb = tk.Checkbutton(
-            layers_row, text="Highlight unresolved topology (EXPERIMENTAL)",
-            variable=self.show_unresolved_topology_var,
-            onvalue=True, offvalue=False, command=self._on_show_unresolved_topology_changed,
-            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
-            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
-            font=("Segoe UI", 9), highlightthickness=0)
-        self.show_unresolved_topology_cb.pack(side="left", padx=(10, 0))
-
-        # ---- "Draw cross-tile connections (EXPERIMENTAL)" checkbox (a
-        # later session) ---- see show_cross_tile_var's own comment in
-        # __init__ for the mechanism and validation. Same no-reload-
-        # needed reasoning as the other EXPERIMENTAL checkboxes here.
-        self._status_divider(layers_row)
-        self.show_cross_tile_cb = tk.Checkbutton(
-            layers_row, text="Draw cross-tile connections (EXPERIMENTAL)",
-            variable=self.show_cross_tile_var,
-            onvalue=True, offvalue=False, command=self._on_show_cross_tile_changed,
-            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
-            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
-            font=("Segoe UI", 9), highlightthickness=0)
-        self.show_cross_tile_cb.pack(side="left", padx=(10, 0))
-
-        # ---- "Show predicted divided (EXPERIMENTAL)" checkbox (this
-        # session) ---- mg4-only overlay coloring each connected-roads edge
-        # by MapData._predict_seg_divided()'s real-but-unconfirmed
-        # divided/non-divided signal (see that function's own docstring
-        # and MapData.seg_predict_caches's comment in __init__ for exactly
-        # what is and isn't validated). Explicitly labeled EXPERIMENTAL in
-        # the UI text itself -- this is a real signal from real ground
-        # truth, not a confirmed crack, and is meant to be LOOKED AT and
-        # challenged (a human with real local knowledge can directly spot
-        # a wrong-colored road on the map), not trusted blindly. OFF by
-        # default (unlike "Draw connected roads"): this is a debugging/
-        # investigation aid, not a normal viewing mode.
-        self.show_seg_predict_var = tk.BooleanVar(value=False)
-        self._status_divider(layers_row)
-        self.show_seg_predict_cb = tk.Checkbutton(
-            layers_row, text="Show predicted divided (EXPERIMENTAL, mg4 only)",
-            variable=self.show_seg_predict_var,
-            onvalue=True, offvalue=False, command=self._on_show_seg_predict_changed,
-            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
-            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
-            font=("Segoe UI", 9), highlightthickness=0)
-        self.show_seg_predict_cb.pack(side="left", padx=(10, 0))
-
-        # ---- "Show tile boundaries" checkbox (later session) ---- prompted
-        # directly by the real cross-tile adjacency gap found this session
-        # (a user-reported road that connects across 2 DIFFERENT tiles --
-        # resolve_topology_adjacency() has no mechanism at all for that).
-        # Draws each currently-pooled tile's own bounding box (computed from
-        # its already-decoded points, see MapData.active_tile_bboxes()) as a
-        # thin outline rectangle -- makes it easy to visually spot a
-        # dead-end point sitting right on a tile edge, a strong hint it's a
-        # candidate cross-tile connection worth reporting. OFF by default,
-        # same reasoning as the other debugging/investigation-aid overlays.
-        self.show_tile_boundaries_var = tk.BooleanVar(value=False)
-        self._status_divider(layers_row)
-        self.show_tile_boundaries_cb = tk.Checkbutton(
-            layers_row, text="Show tile boundaries",
-            variable=self.show_tile_boundaries_var,
-            onvalue=True, offvalue=False, command=self._on_show_tile_boundaries_changed,
-            bg=SEARCH_PANEL_BG, fg=SEARCH_PANEL_FG, activebackground=SEARCH_PANEL_BG,
-            activeforeground=SEARCH_PANEL_FG, selectcolor="#0f2130",
-            font=("Segoe UI", 9), highlightthickness=0)
-        self.show_tile_boundaries_cb.pack(side="left", padx=(10, 0))
 
         # ---- "Show POIs" checkbox (README §10 "v19 -> v20") ----
         # Real POIs (gas stations, hotels, restaurants, airports, ...)
@@ -5126,7 +4955,13 @@ class App:
         # thread, for the same reason.
         allowed_layers = self._get_allowed_layers()
         want_adjacency = self.connected_roads_var.get()
-        want_seg_predict = self.show_seg_predict_var.get()
+        # "Show predicted divided" checkbox was removed (a later session,
+        # user's explicit request) -- always False now, kept as a real
+        # parameter (not deleted outright) since MapData.ensure_area_
+        # loaded()/decode_tile() still accept it for the few standalone
+        # debug readers that use it directly (get_tile_seg_prediction()),
+        # independent of this UI.
+        want_seg_predict = False
 
         def do_load_area(progress):
             return self.data.ensure_area_loaded(
@@ -5477,13 +5312,12 @@ class App:
             return True
 
         connected_roads_on = self.connected_roads_var.get()
-        seg_predict_on = self.show_seg_predict_var.get()
 
         # Everything from here on used to run as one single synchronous
-        # pass (the big per-feature loop, then cross-tile/POI/labels) --
-        # see _redraw_process_chunk()'s own docstring for why that's now
-        # split into chunks instead. `state` is this one redraw's working
-        # data, threaded through every chunk tick and into _redraw_finish().
+        # pass (the big per-feature loop, then POI/labels) -- see
+        # _redraw_process_chunk()'s own docstring for why that's now split
+        # into chunks instead. `state` is this one redraw's working data,
+        # threaded through every chunk tick and into _redraw_finish().
         # "lines"/"dots": {(r,g,b,width_or_size): [x,y,x,y,...]}, all in
         # NO-PAN projected space (see MapGLFrame's own docstring).
         self._redraw_state = {
@@ -5494,27 +5328,10 @@ class App:
             "placed": placed,
             "far_enough": far_enough,
             "connected_roads_on": connected_roads_on,
-            "seg_predict_on": seg_predict_on,
             "road_label_candidates": [],
             "features": self.features,
             "idx": 0,
         }
-        state = self._redraw_state
-
-        # "Show tile boundaries" overlay -- same bucketed-lines mechanism
-        # as every other line below, just built here (cheap, bounded
-        # count) instead of in the per-feature loop.
-        if self.show_tile_boundaries_var.get() and self.data is not None:
-            key = _hex_to_rgb01(TILE_BOUNDARY_COLOR) + (1,)
-            buf = state["lines"].setdefault(key, [])
-            for (layer, tile_id), (lon_min, lon_max, lat_min, lat_max) in \
-                    self.data.active_tile_bboxes().items():
-                x0, y0 = self._to_canvas_nopan_vec(np.array([lon_min]), np.array([lat_max]))
-                x1, y1 = self._to_canvas_nopan_vec(np.array([lon_max]), np.array([lat_min]))
-                x0, y0, x1, y1 = x0[0], y0[0], x1[0], y1[0]
-                buf.extend((x0, y0, x1, y0, x1, y0, x1, y1,
-                            x1, y1, x0, y1, x0, y1, x0, y0))
-
         self._redraw_process_chunk(gen)
 
     _REDRAW_CHUNK_SIZE = 4000
@@ -5536,7 +5353,6 @@ class App:
         lines = state["lines"]
         dots = state["dots"]
         connected_roads_on = state["connected_roads_on"]
-        seg_predict_on = state["seg_predict_on"]
         road_label_candidates = state["road_label_candidates"]
         idx = state["idx"]
         end = min(idx + self._REDRAW_CHUNK_SIZE, len(feats))
@@ -5577,36 +5393,8 @@ class App:
             # rare old-model fallback, see its docstring) -- that one
             # DOESN'T get a connecting line, for the exact same reason the
             # old model never trusted its own point chain either.
-            seg_pred = None
             feature_topology_unresolved = feat.get("topology_unresolved", False)
             if connected_roads_on and self.data is not None and not feature_topology_unresolved:
-                # "Show predicted divided (EXPERIMENTAL)" (unchanged):
-                # looked up by layer/tile_id/feature_index, independently
-                # of the line-drawing logic itself.
-                if seg_predict_on and feat.get("layer") == "mg4":
-                    plist = self.data.seg_predict_caches.get("mg4", {}).get(feat.get("tile_id"))
-                    f_idx = feat.get("feature_index")
-                    if plist is not None and f_idx is not None and 0 <= f_idx < len(plist):
-                        seg_pred = plist[f_idx]
-
-                # EXPERIMENTAL override: color every edge of this segment
-                # by its own predicted divided status instead of the usual
-                # named/unnamed scheme -- see SEG_PREDICT_*_COLOR's own
-                # comment for why these are deliberately loud, unmissable
-                # colors. `line_width` stays the normal named-run width
-                # (1.6) so the overlay reads as "the same roads,
-                # recolored", not a visually distinct new layer.
-                if seg_pred is not None:
-                    pred = seg_pred.get("prediction")
-                    if pred == "divided":
-                        seg_line_color = SEG_PREDICT_DIVIDED_COLOR
-                    elif pred == "non-divided":
-                        seg_line_color = SEG_PREDICT_NONDIVIDED_COLOR
-                    else:
-                        seg_line_color = SEG_PREDICT_UNKNOWN_COLOR
-                else:
-                    seg_line_color = None
-
                 # Consecutive points of THIS segment's own chain -- always
                 # a real, directly-connected run (see above), so a simple
                 # walk, not a graph (a real segment never branches
@@ -5623,21 +5411,18 @@ class App:
                 run_start = 0
                 run_color = run_width = None
                 for a in range(n - 1):
-                    if seg_line_color is not None:
-                        line_color, line_width = seg_line_color, 1.6
+                    edge_name = _name_at_point(feat.get("named_ranges"), a) or \
+                        _name_at_point(feat.get("named_ranges"), a + 1)
+                    if feat.get("is_highway"):
+                        # Real, cracked eeu.rd `highway` bit, read directly
+                        # off this segment's own road_id (no name-based
+                        # lookup needed any more -- see HIGHWAY_COLOR's own
+                        # comment).
+                        line_color, line_width = HIGHWAY_COLOR, 2.2
+                    elif edge_name:
+                        line_color, line_width = ROAD_COLOR_MAJOR, 1.6
                     else:
-                        edge_name = _name_at_point(feat.get("named_ranges"), a) or \
-                            _name_at_point(feat.get("named_ranges"), a + 1)
-                        if feat.get("is_highway"):
-                            # Real, cracked eeu.rd `highway` bit, read
-                            # directly off this segment's own road_id (no
-                            # name-based lookup needed any more -- see
-                            # HIGHWAY_COLOR's own comment).
-                            line_color, line_width = HIGHWAY_COLOR, 2.2
-                        elif edge_name:
-                            line_color, line_width = ROAD_COLOR_MAJOR, 1.6
-                        else:
-                            line_color, line_width = ROAD_COLOR_UNNAMED, 1.0
+                        line_color, line_width = ROAD_COLOR_UNNAMED, 1.0
 
                     if run_color is None:
                         run_color, run_width = line_color, line_width
@@ -5684,12 +5469,9 @@ class App:
                 # a feature whose connectivity line was also drawn above --
                 # lets the click-to-identify workflow inspect every raw
                 # decoded point, resolved or not.
-                dot_fill = DOT_COLOR
-                if feature_topology_unresolved and self.show_unresolved_topology_var.get():
-                    dot_fill = UNRESOLVED_TOPOLOGY_COLOR
                 # GL point size is a diameter, not a radius -- 2x the old
                 # PIL ellipse radius for the same visual dot size.
-                key = _hex_to_rgb01(dot_fill) + (radius * 2,)
+                key = _hex_to_rgb01(DOT_COLOR) + (radius * 2,)
                 buf = dots.setdefault(key, [])
                 for k in range(start, rng_end + 1):
                     buf.extend((cx[k], cy[k]))
@@ -5764,63 +5546,6 @@ class App:
         far_enough = state["far_enough"]
         connected_roads_on = state["connected_roads_on"]
         road_label_candidates = state["road_label_candidates"]
-
-        # "Draw cross-tile connections (EXPERIMENTAL)" (see show_cross_
-        # tile_var's own comment in __init__): computed ONCE here, after
-        # the per-feature loop above, because it needs every currently-
-        # pooled tile's degree-1 NODES gathered TOGETHER (mcr.resolve_
-        # cross_tile_adjacency() compares across tiles). With the real
-        # parcel model, `node_degree`/node coordinates are already
-        # TILE-level (decode_tile()'s own topo_caches/_node_coord_caches
-        # -- real, literal counts, not a per-feature graph to re-walk),
-        # so this no longer needs to touch individual features at all
-        # beyond discovering WHICH (layer, tile_id) pairs are currently
-        # visible. `point_id` passed to resolve_cross_tile_adjacency() is
-        # just the bare real node_id now (no (feature_index, point_index)
-        # pair needed -- nodes were never per-feature to begin with).
-        if self.show_cross_tile_var.get() and connected_roads_on and self.data is not None:
-            visible_tiles = set()
-            for feat in state["features"]:
-                layer, tile_id = feat.get("layer"), feat.get("tile_id")
-                if layer is not None and tile_id is not None:
-                    visible_tiles.add((layer, tile_id))
-
-            tile_data = {}
-            for layer, tile_id in visible_tiles:
-                bbox = self.data.bbox_indexes.get(layer, {}).get(tile_id)
-                if bbox is None:
-                    continue  # no real content bbox yet -- can't safely compare
-                topo = self.data.topo_caches.get(layer, {}).get(tile_id)
-                if not topo or topo.get("unresolved"):
-                    continue
-                node_coord = self.data._node_coord_caches.get(layer, {}).get(tile_id, {})
-                deg1 = [(nid, node_coord[nid]) for nid, deg in topo["node_degree"].items()
-                        if deg == 1 and nid in node_coord]
-                if deg1:
-                    tile_data[(layer, tile_id)] = {"deg1": deg1, "bbox": bbox}
-
-            # See show_cross_tile_var's own comment: exact cache, not an
-            # approximation -- a tile's deg1/bbox content never changes
-            # once decoded, so the match list depends only on WHICH tile
-            # keys are present.
-            cache_key = (id(self.data), frozenset(tile_data.keys()))
-            if cache_key == self._cross_tile_cache_key:
-                matches = self._cross_tile_cache_result
-            else:
-                matches = mcr.resolve_cross_tile_adjacency(tile_data)
-                self._cross_tile_cache_key = cache_key
-                self._cross_tile_cache_result = matches
-
-            key = _hex_to_rgb01(CROSS_TILE_LINE_COLOR) + (2,)
-            buf = lines.setdefault(key, [])
-            for match in matches:
-                layer_a, tile_a = match["tile_a"]
-                layer_b, tile_b = match["tile_b"]
-                pa = self.data._node_coord_caches[layer_a][tile_a][match["point_a"]]
-                pb = self.data._node_coord_caches[layer_b][tile_b][match["point_b"]]
-                ax, ay = self._to_canvas_nopan(*pa)
-                bx, by = self._to_canvas_nopan(*pb)
-                buf.extend((ax, ay, bx, by))
 
         # Real POIs (README §10 "v19 -> v20"/"v20 -> v21", EDB/POI/POI.DB3)
         # -- rasterized into the SAME `img` bitmap as the road dots above,
@@ -6661,48 +6386,6 @@ class App:
             return
         self._redraw()
 
-    def _on_show_unresolved_topology_changed(self):
-        """Checkbutton command for "Highlight unresolved topology
-        (EXPERIMENTAL)" (a later session): a plain redraw, not a force-
-        reload -- see show_unresolved_topology_var's own comment in
-        __init__ for why no new data ever needs fetching."""
-        if self.data is None or self.center_lon is None:
-            return
-        self._redraw()
-
-    def _on_show_cross_tile_changed(self):
-        """Checkbutton command for "Draw cross-tile connections
-        (EXPERIMENTAL)" (a later session): a plain redraw -- see
-        show_cross_tile_var's own comment in __init__ for why this is
-        recomputed fresh each redraw rather than needing a reload."""
-        if self.data is None or self.center_lon is None:
-            return
-        self._redraw()
-
-    def _on_show_seg_predict_changed(self):
-        """Checkbutton command for "Show predicted divided (EXPERIMENTAL,
-        mg4 only)" (this session) -- exactly the same force-reload pattern
-        as `_on_connected_roads_changed()` above, for the same reason:
-        turning this on needs `MapData.ensure_area_loaded()`'s
-        `want_seg_predict` gate to actually run so any currently-pooled
-        `mg4` tile without a cached prediction gets one computed in the
-        background before the next redraw -- a plain redraw would just
-        fall back to the normal named/unnamed road coloring for every
-        tile whose prediction hasn't been resolved yet."""
-        if self.data is None or self.center_lon is None:
-            return  # nothing loaded yet -- the checkbox state is remembered for when it is
-        self._maybe_reload_viewport(force=True)
-
-    def _on_show_tile_boundaries_changed(self):
-        """Checkbutton command for "Show tile boundaries" (later session).
-        Unlike the other overlay checkboxes above, this needs NO reload --
-        `MapData.active_tile_bboxes()` computes purely from data already in
-        `tile_caches` for the currently-pooled tiles, so a plain redraw is
-        enough to show/hide the boundary rectangles."""
-        if self.data is None or self.center_lon is None:
-            return  # nothing loaded yet -- the checkbox state is remembered for when it is
-        self._redraw()
-
     # ------------------------------------------------- dynamic pan/zoom loading
 
     def _schedule_viewport_check(self, delay_ms=350):
@@ -6797,7 +6480,9 @@ class App:
         self.progress.start(12)
 
         want_adjacency = self.connected_roads_var.get()
-        want_seg_predict = self.show_seg_predict_var.get()
+        # "Show predicted divided" checkbox removed -- see _jump_to()'s
+        # own comment on this same constant.
+        want_seg_predict = False
 
         def do_load(progress):
             lon_min, lon_max, lat_min, lat_max = vb
