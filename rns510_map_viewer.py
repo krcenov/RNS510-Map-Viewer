@@ -3431,21 +3431,23 @@ class MapGLFrame(OpenGLFrame):
 
         GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
         for (r, g, b, width), verts in data.get("lines", {}).items():
-            if not verts:
+            # `verts` is a pre-converted float32 numpy array (see
+            # App._redraw_finish()) -- `len()`, not truthiness (`if not
+            # verts`), since a multi-element array's truth value is
+            # ambiguous to numpy and raises ValueError.
+            if len(verts) == 0:
                 continue
             GL.glColor3f(r, g, b)
             GL.glLineWidth(max(1, width))
-            arr = np.asarray(verts, dtype=np.float32)
-            GL.glVertexPointer(2, GL.GL_FLOAT, 0, arr)
-            GL.glDrawArrays(GL.GL_LINES, 0, len(arr) // 2)
+            GL.glVertexPointer(2, GL.GL_FLOAT, 0, verts)
+            GL.glDrawArrays(GL.GL_LINES, 0, len(verts) // 2)
         for (r, g, b, size), verts in data.get("dots", {}).items():
-            if not verts:
+            if len(verts) == 0:
                 continue
             GL.glColor3f(r, g, b)
             GL.glPointSize(max(1.0, size))
-            arr = np.asarray(verts, dtype=np.float32)
-            GL.glVertexPointer(2, GL.GL_FLOAT, 0, arr)
-            GL.glDrawArrays(GL.GL_POINTS, 0, len(arr) // 2)
+            GL.glVertexPointer(2, GL.GL_FLOAT, 0, verts)
+            GL.glDrawArrays(GL.GL_POINTS, 0, len(verts) // 2)
         GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
 
         for tex_id, x, y, w, h in data.get("icons", ()):
@@ -5835,6 +5837,36 @@ class App:
             label_entries.append((px + ring_r + 2, py - ring_r - 4, label, PICK_MARK_COLOR,
                                    self._gl_font(9, bold=True), "lm"))
 
+        # Real bug caught after this migration first shipped (user-reported
+        # "very laggy" dragging + "missing street names"):
+        #
+        # (1) Laggy dragging -- every bucket's vertex list was being
+        # converted list -> numpy array INSIDE MapGLFrame.redraw() itself,
+        # i.e. on EVERY single draw call, including every drag-tick's
+        # cheap set_pan()-triggered repaint() -- defeating the entire
+        # point of decoupling pan from the vertex data (see that class's
+        # own docstring): panning was supposed to cost one matrix update,
+        # but was still paying the FULL list-to-array conversion cost
+        # (profiled: real, non-trivial time at this point count) on every
+        # single mouse-move tick. Fixed by converting ONCE here, right
+        # before handing the data to the GL frame -- redraw()'s own
+        # np.asarray() call on an already-float32 array is then a free
+        # no-op view, not a real conversion.
+        #
+        # (2) Missing labels -- gl_texture_from_rgba_image()/
+        # glDeleteTextures() below make raw GL calls (glGenTextures/
+        # glTexImage2D/glDeleteTextures) with NO GUARANTEE the GL context
+        # is current at this point -- this method runs via root.after()
+        # scheduling (chunked redraw), never through MapGLFrame's own
+        # _display() (which calls tkMakeCurrent() itself). Calling
+        # tkMakeCurrent() explicitly here is the fix; it happened to work
+        # often enough in isolated testing (this same thread's last-bound
+        # context was frequently still valid) to not get caught there,
+        # but is not something to rely on.
+        self.canvas.tkMakeCurrent()
+        lines_arr = {key: np.asarray(verts, dtype=np.float32) for key, verts in lines.items()}
+        dots_arr = {key: np.asarray(verts, dtype=np.float32) for key, verts in dots.items()}
+
         # One GL texture for every label collected above, replacing
         # whichever texture the LAST redraw uploaded -- OpenGL textures
         # aren't reference-counted/GC'd the way a Tkinter PhotoImage is,
@@ -5848,7 +5880,7 @@ class App:
         self._label_tex_id = new_tex
 
         self.canvas.set_render_data({
-            "lines": lines, "dots": dots, "icons": (),
+            "lines": lines_arr, "dots": dots_arr, "icons": (),
             "label_tex": new_tex, "pan_x": self.pan_x, "pan_y": self.pan_y,
         })
         self.canvas.repaint()
