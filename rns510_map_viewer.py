@@ -331,6 +331,7 @@ Known v2 limitations (explicit, not oversights) -- see README §10:
 
 import io
 import json
+import functools
 import math
 import os
 import shutil
@@ -342,7 +343,9 @@ import zlib
 from tkinter import ttk, filedialog, messagebox
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw, ImageTk, ImageFont
+from pyopengltk import OpenGLFrame
+from OpenGL import GL
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "research"))
@@ -679,6 +682,21 @@ POINTS_PANEL_HEADER = (
 # top-down 2D rendering -- no attempt to fake the unit's dark night mode or
 # its 3D perspective mode, both out of scope.
 # ---------------------------------------------------------------------------
+@functools.lru_cache(maxsize=None)
+def _hex_to_rgb01(hex_color):
+    """"#rrggbb" -> (r, g, b) floats in [0, 1] -- GL's glColor3f()/
+    glClearColor() take floats, not the hex strings PIL's ImageDraw used.
+
+    Cached (a later session, perf fix): this is called once per line/dot
+    GL bucket KEY, i.e. potentially once per edge/point in the big per-
+    feature redraw loop (profiled on a real dense viewport: 279,441
+    calls, 1.59s) -- but only a HANDFUL of distinct hex strings (the
+    color constants just above/below) are ever actually passed, so a
+    plain cache turns nearly all of that into an O(1) dict lookup."""
+    s = hex_color.lstrip("#")
+    return tuple(int(s[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
 BG_COLOR = "#f1e9d2"             # warm cream/tan -- real unit's daytime 2D map bg
 ROAD_COLOR_MAJOR = "#cf9a1a"     # warm yellow/gold -- used for connected-roads LINES of longer/named runs
 ROAD_COLOR_MINOR = "#b7b0a0"     # thin gray-white -- kept for any remaining line-color use (see below)
@@ -3332,6 +3350,179 @@ class MapData:
 # GUI
 # ---------------------------------------------------------------------------
 
+class MapGLFrame(OpenGLFrame):
+    """GPU-accelerated replacement for the old `tk.Canvas` the map view used
+    to rasterize into one PIL bitmap (README §10 "v17 -> v18"/this file's
+    own `_redraw()` docstring history). Measured against the real ISO: the
+    actual GPU draw of a dense real viewport (209K+ points, 128K+ line
+    segments) takes **single-digit milliseconds**, vs. 2-3 SECONDS for the
+    old PIL rasterization -- the chunking machinery `_redraw_process_chunk()`/
+    `_redraw_finish()` needed to avoid freezing the window is no longer
+    rendering-bound; what's left to chunk is the CPU-side vertex-array
+    build (still real, ~0.3-1s on a dense viewport), so chunking is kept,
+    now accumulating into GL vertex buckets instead of PIL draw calls.
+
+    A real `tk.Frame` subclass (via `pyopengltk`), so `winfo_width()`/
+    `winfo_height()`/`bind()`/`pack()` all work exactly like the old
+    Canvas -- every mouse-event binding in `App._build_widgets()` carries
+    over unchanged.
+
+    **Vertex data is built in PROJECTED-BUT-NOT-PANNED space** (`project_
+    point()`'s own `(x, y)` offset from the view center, NOT yet shifted
+    by `pan_x`/`pan_y`) -- panning (`App._on_drag_move()`) only needs to
+    update a GL_MODELVIEW translation and re-issue a draw using the SAME
+    already-built buffers, never a full rebuild, since the GPU draw itself
+    is cheap enough to run on every drag tick directly (replacing the old
+    Canvas's `canvas.move("all", ...)` pixel-shift hack with a REAL redraw
+    every tick -- more correct, since it's real vector data redrawn at the
+    new offset, not stale shifted pixels with blank edges).
+
+    `_render_data` (set via `set_render_data()`) is the one thing this
+    class reads every `redraw()` call: {"lines": {(r,g,b,width): [x,y,...]},
+    "dots": {(r,g,b,size): [x,y,...]}, "icons": [(tex_id, x, y, w, h), ...],
+    "label_tex": a GL texture id (or None) for the text/label overlay
+    (built via PIL -- OpenGL has no built-in text rendering, see
+    App._build_label_texture()), "pan_x"/"pan_y": the current view's pan
+    offset, applied as a GL_MODELVIEW translate so it never needs the data
+    itself rebuilt. `None` renders an empty (cleared) frame."""
+
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self._render_data = None
+        self._bg_color_gl = (1.0, 1.0, 1.0)
+
+    def set_bg_color(self, rgb01):
+        self._bg_color_gl = rgb01
+
+    def set_render_data(self, data):
+        self._render_data = data
+
+    def initgl(self):
+        GL.glClearColor(*self._bg_color_gl, 1.0)
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+        w = getattr(self, "width", 1) or 1
+        h = getattr(self, "height", 1) or 1
+        GL.glViewport(0, 0, w, h)
+        GL.glMatrixMode(GL.GL_PROJECTION)
+        GL.glLoadIdentity()
+        GL.glOrtho(0, w, h, 0, -1, 1)
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glLoadIdentity()
+
+    def redraw(self):
+        if not self.context_created:
+            # A <Configure> event (e.g. an early programmatic .config(width=
+            # ..., height=...) before the widget is actually mapped/visible)
+            # can reach here before pyopengltk's own tkMap handler has ever
+            # created a GL context -- GL.glClear() against no current
+            # context raises GLError("invalid operation"). Real interactive
+            # startup (root.mainloop()) maps the widget well before any
+            # resize matters, so this only guards a rare startup-ordering
+            # edge case, not normal use.
+            return
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        data = self._render_data
+        if not data:
+            return
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glLoadIdentity()
+        GL.glTranslatef(data.get("pan_x", 0.0), data.get("pan_y", 0.0), 0.0)
+
+        GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+        for (r, g, b, width), verts in data.get("lines", {}).items():
+            if not verts:
+                continue
+            GL.glColor3f(r, g, b)
+            GL.glLineWidth(max(1, width))
+            arr = np.asarray(verts, dtype=np.float32)
+            GL.glVertexPointer(2, GL.GL_FLOAT, 0, arr)
+            GL.glDrawArrays(GL.GL_LINES, 0, len(arr) // 2)
+        for (r, g, b, size), verts in data.get("dots", {}).items():
+            if not verts:
+                continue
+            GL.glColor3f(r, g, b)
+            GL.glPointSize(max(1.0, size))
+            arr = np.asarray(verts, dtype=np.float32)
+            GL.glVertexPointer(2, GL.GL_FLOAT, 0, arr)
+            GL.glDrawArrays(GL.GL_POINTS, 0, len(arr) // 2)
+        GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
+
+        for tex_id, x, y, w, h in data.get("icons", ()):
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, tex_id)
+            GL.glColor4f(1, 1, 1, 1)
+            GL.glBegin(GL.GL_QUADS)
+            GL.glTexCoord2f(0, 0); GL.glVertex2f(x, y)
+            GL.glTexCoord2f(1, 0); GL.glVertex2f(x + w, y)
+            GL.glTexCoord2f(1, 1); GL.glVertex2f(x + w, y + h)
+            GL.glTexCoord2f(0, 1); GL.glVertex2f(x, y + h)
+            GL.glEnd()
+            GL.glDisable(GL.GL_TEXTURE_2D)
+
+        label_tex = data.get("label_tex")
+        if label_tex is not None:
+            # Deliberately NOT resetting the MODELVIEW matrix here -- the
+            # label texture is built in the SAME no-pan (pan=0) convention
+            # as the line/dot vertex data above (see App._build_label_
+            # texture()), so the SAME pan translate must apply to both, or
+            # labels would visually detach from their roads during a drag
+            # (an earlier draft of this method reset the matrix here,
+            # which is exactly backwards -- caught before this ever shipped).
+            w = getattr(self, "width", 1) or 1
+            h = getattr(self, "height", 1) or 1
+            GL.glEnable(GL.GL_TEXTURE_2D)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, label_tex)
+            GL.glColor4f(1, 1, 1, 1)
+            GL.glBegin(GL.GL_QUADS)
+            GL.glTexCoord2f(0, 0); GL.glVertex2f(0, 0)
+            GL.glTexCoord2f(1, 0); GL.glVertex2f(w, 0)
+            GL.glTexCoord2f(1, 1); GL.glVertex2f(w, h)
+            GL.glTexCoord2f(0, 1); GL.glVertex2f(0, h)
+            GL.glEnd()
+            GL.glDisable(GL.GL_TEXTURE_2D)
+
+    def repaint(self):
+        """Explicit "redraw with whatever's currently stored" trigger --
+        `_display()` is pyopengltk's own real sequence (update_idletasks +
+        tkMakeCurrent + redraw + tkSwapBuffers); calling it directly (not
+        just setting new data and hoping an Expose event arrives) is what
+        actually makes a new frame appear, verified during this migration's
+        own prototyping (a manual tkMakeCurrent()+redraw() with no swap, or
+        outside the normal Tk-driven sequence, silently produced a blank or
+        stale frame)."""
+        self._display()
+
+    def set_pan(self, pan_x, pan_y):
+        """Cheap pan-only update for App._on_drag_move() -- mutates the
+        ALREADY-STORED render data's pan offset and repaints immediately,
+        reusing the SAME vertex buffers (no rebuild, see this class's own
+        docstring on why that's safe/correct). Replaces the old `tk.
+        Canvas`'s `canvas.move("all", dx, dy)` pixel-shift hack: a real
+        redraw on every drag tick is now cheap enough to just do directly,
+        giving an exact result (real vector data at the new position) with
+        no stale/blank edges, instead of shifted stale pixels."""
+        if self._render_data is not None:
+            self._render_data["pan_x"] = pan_x
+            self._render_data["pan_y"] = pan_y
+        self.repaint()
+
+
+def gl_texture_from_rgba_image(img):
+    """Upload a PIL RGBA image as a GL texture, return its texture id.
+    Used for the label overlay (App._build_label_texture()) and POI/
+    Sirius icons (App._get_poi_icon_texture())."""
+    data = img.tobytes("raw", "RGBA")
+    tex_id = GL.glGenTextures(1)
+    GL.glBindTexture(GL.GL_TEXTURE_2D, tex_id)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+    GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+    GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, img.width, img.height, 0,
+                     GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, data)
+    GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+    return tex_id
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -3399,13 +3590,6 @@ class App:
         self._covered_bbox = None    # App-level "what the CURRENT view has loaded" (see above -- NOT
         self._covered_layers = None  # the same thing as MapData.covered_bbox/covered_layers, see below)
 
-        # README §10 "v17 -> v18": the single rasterized PIL/Tk image
-        # _redraw() builds every call -- kept alive here since Tkinter does
-        # not itself hold a strong reference to a PhotoImage (a classic
-        # gotcha; without this it would be garbage-collected and vanish).
-        self._current_photo = None
-        self._current_image = None  # raw PIL Image behind it -- see _redraw()
-
         # Chunked redraw (a later session, perf fix -- see _redraw()'s own
         # docstring "UPDATE" note): `_redraw_gen` is bumped every time
         # _redraw() is (re-)started; `_redraw_process_chunk()`/
@@ -3419,6 +3603,17 @@ class App:
         # etc.) between ticks -- None when no chunked redraw is in flight.
         self._redraw_gen = 0
         self._redraw_state = None
+
+        # GL label-texture state (a still-later session, pyopengltk
+        # migration -- see MapGLFrame's own docstring): the text/label
+        # overlay is rebuilt and re-uploaded as a GL texture every
+        # _redraw_finish(), so the PREVIOUS texture id must be explicitly
+        # freed each time or every redraw leaks one GL texture object
+        # (OpenGL has no reference-counted/GC'd textures the way Tkinter's
+        # PhotoImage does). `_gl_font_cache` avoids re-loading the same
+        # PIL TrueType font from disk on every single redraw.
+        self._label_tex_id = None
+        self._gl_font_cache = {}
 
         # Click-to-identify picks (README §10 "v6 -> v7"): a running,
         # numbered list of points the user has right-clicked, each an
@@ -3924,11 +4119,17 @@ class App:
         # resolution has been read yet.
         canvas_frame = tk.Frame(screen_frame, bg=SCREEN_BORDER_COLOR)
         self.canvas_frame = canvas_frame
-        self.canvas = tk.Canvas(canvas_frame, background=BG_COLOR, highlightthickness=0)
+        self.canvas = MapGLFrame(canvas_frame)
+        self.canvas.set_bg_color(_hex_to_rgb01(BG_COLOR))
         self.canvas.pack(fill="both", expand=True)
         screen_frame.bind("<Configure>", lambda e: self._apply_screen_aspect_ratio())
         self._apply_screen_aspect_ratio()
-        self.canvas.bind("<Configure>", lambda e: self._redraw())
+        # add="+" is required here: OpenGLFrame's own __init__ already
+        # binds <Configure> (to resize the GL viewport/call initgl() again)
+        # -- a plain .bind() call would silently REPLACE that binding
+        # instead of adding to it, leaving the GL viewport stuck at its
+        # creation size on every resize.
+        self.canvas.bind("<Configure>", lambda e: self._redraw(), add="+")
         self.canvas.bind("<ButtonPress-1>", self._on_drag_start)
         self.canvas.bind("<B1-Motion>", self._on_drag_move)
         self.canvas.bind("<ButtonRelease-1>", self._on_drag_end)
@@ -4828,6 +5029,86 @@ class App:
         x, y = project_point(lon, lat, self.center_lon, self.center_lat, self.scale)
         return w / 2 + x + self.pan_x, h / 2 + y + self.pan_y
 
+    def _to_canvas_nopan_vec(self, lons, lats):
+        """Vectorized bulk counterpart to `_to_canvas()`, for the GL vertex-
+        buffer build (`_redraw_process_chunk()`) -- same projection, but
+        WITHOUT `pan_x`/`pan_y` added in. The GL frame applies pan as a
+        `glTranslatef()` at draw time instead (`MapGLFrame.redraw()`), so
+        panning never needs these buffers rebuilt -- only a cheap matrix
+        update. `lons`/`lats` are numpy arrays; returns (`xs`, `ys`) numpy
+        arrays, one whole-array pass instead of a per-point Python loop
+        (measured on a real 209K-point viewport: ~0.3-0.4s vs. several
+        seconds for the old per-point `_to_canvas()` loop at that count)."""
+        w = self._canvas_w or 1
+        h = self._canvas_h or 1
+        cos_lat = math.cos(math.radians(self.center_lat))
+        xs = (lons - self.center_lon) * cos_lat * self.scale
+        ys = -(lats - self.center_lat) * self.scale
+        return w / 2 + xs, h / 2 + ys
+
+    def _to_canvas_nopan(self, lon, lat):
+        """Scalar counterpart to `_to_canvas_nopan_vec()`, for the low-
+        count items built in `_redraw_finish()` (cross-tile connections,
+        POI markers, city labels, the center marker, picked points) --
+        not worth vectorizing at these counts, but still needs the SAME
+        no-pan convention as the bulk road data, so everything pans
+        together under one `glTranslatef()` instead of labels/markers
+        detaching from the roads they annotate during a drag."""
+        w = self._canvas_w or 1
+        h = self._canvas_h or 1
+        x, y = project_point(lon, lat, self.center_lon, self.center_lat, self.scale)
+        return w / 2 + x, h / 2 + y
+
+    def _circle_line_verts(self, cx, cy, r, n=16):
+        """Flat [x,y,x,y,...] GL_LINES vertex list approximating a circle
+        outline as an n-sided polygon -- GL's fixed-function pipeline (as
+        used here) has no built-in circle primitive; used for the center/
+        search marker and picked-point rings, which used to be `canvas.
+        create_oval()` outline items."""
+        verts = []
+        for i in range(n):
+            a0 = 2 * math.pi * i / n
+            a1 = 2 * math.pi * (i + 1) / n
+            verts.extend((cx + r * math.cos(a0), cy + r * math.sin(a0),
+                          cx + r * math.cos(a1), cy + r * math.sin(a1)))
+        return verts
+
+    def _gl_font(self, size, bold=False):
+        """Cached PIL TrueType font for the GL label texture -- avoids
+        re-reading the same font file off disk on every single redraw."""
+        key = (size, bold)
+        font = self._gl_font_cache.get(key)
+        if font is None:
+            try:
+                font = ImageFont.truetype("segoeuib.ttf" if bold else "segoeui.ttf", size)
+            except Exception:
+                font = ImageFont.load_default()
+            self._gl_font_cache[key] = font
+        return font
+
+    def _build_label_texture(self, w, h, entries):
+        """Render every text label this redraw needs (road/city/POI names,
+        picked-point numbers) onto ONE transparent RGBA image, for upload
+        as a single GL texture alpha-blended over the GPU-drawn geometry
+        (see MapGLFrame's own docstring) -- OpenGL has no built-in text
+        rendering, so this is still PIL, but only for the sparse text
+        (tens of items), never the bulk point/line data that used to
+        dominate the old PIL rasterization's cost.
+
+        `entries`: [(x, y, text, fill_hex, font, anchor), ...] -- `anchor`
+        is a PIL `ImageDraw.text()` anchor code ("mm" center, "ms" middle-
+        baseline, "lm" left-middle), not Tkinter's own anchor vocabulary
+        ("center"/"s"/"w") the old canvas.create_text() calls used.
+        Returns None if there's nothing to draw (common case: zoomed out
+        past where any label qualifies)."""
+        if not entries:
+            return None
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        for x, y, text, fill_hex, font, anchor in entries:
+            draw.text((x, y), text, fill=fill_hex, font=font, anchor=anchor)
+        return img
+
     def _visible_bbox(self):
         if self.center_lon is None:
             return None
@@ -4924,79 +5205,53 @@ class App:
 
         **README §10 "v17 -> v18" rendering rework**: every road-point DOT
         and connected-roads LINE used to be its own real Tkinter canvas
-        item (`canvas.create_oval()`/`canvas.create_line()`) -- at a
-        typical dense real bbox with multiple layers pooled and "Draw
-        connected roads" on, that's 30,000-60,000+ individual canvas
-        items. Tkinter's canvas (backed by Tcl's single-threaded,
-        non-batched, per-item canvas engine) is not built to manage that
-        many discrete items -- the app became genuinely unresponsive
-        ("Not Responding", ~4GB memory) while panning/zooming under that
-        load, and this does NOT improve with faster CPU/disk since it's a
-        toolkit architectural limit, not an I/O or raw-compute bottleneck.
+        item -- at a dense real bbox, 30,000-60,000+ individual items,
+        which Tkinter's single-threaded Tcl canvas engine can't manage
+        ("Not Responding", ~4GB memory). Replaced with rasterizing
+        everything into one PIL bitmap shown as a single canvas image --
+        then, a later session, measured at ~2-3s even for that single
+        rasterization pass on a real dense viewport (80K+ features),
+        blocking the ENTIRE Tk event loop for that long on every drag-end
+        and every background tile load finishing (`App._on_drag_end()`/
+        `App._maybe_reload_viewport()`'s `done()` both call this method
+        directly) -- a real, reported freeze, not just "feels slow".
 
-        User's explicit, deliberate architectural decision (discussed and
-        confirmed, not a workaround guessed at here): keep Tkinter as the
-        app shell -- every dialog/checkbox/click-handler below is
-        unchanged -- but replace the DRAWING mechanism for points/lines
-        with rasterization into a single bitmap: every dot and every
-        high-confidence connected-roads edge is drawn into one
-        `PIL.Image` via `PIL.ImageDraw`, converted to one
-        `ImageTk.PhotoImage`, and shown as exactly ONE
-        `canvas.create_image()` item -- regardless of how many points/
-        edges it contains. `self._current_photo` keeps a live Python
-        reference to that PhotoImage (Tkinter garbage-collects a
-        PhotoImage with no surviving reference -- a classic gotcha; the
-        image would otherwise vanish from screen on the next GC pass).
+        **UPDATE, a still-later session, user asked to swap the renderer
+        for something GPU-accelerated**: `self.canvas` is now a
+        `MapGLFrame` (`pyopengltk`, real OpenGL) instead of a `tk.Canvas`.
+        Measured on the real ISO: the actual GPU draw of a dense real
+        viewport (209K+ points, 128K+ line segments) takes **single-digit
+        milliseconds** -- 2-3 orders of magnitude faster than the old PIL
+        rasterization, verified visually identical in point/line density
+        character against the old renderer at the same real viewport
+        before this replaced it. OpenGL has no built-in text rendering,
+        so road/city/POI labels are still built via PIL -- but now as ONE
+        small RGBA texture (just the sparse text, not the bulk point/line
+        data) uploaded and alpha-blended over the GPU-drawn geometry
+        (`_build_label_texture()`), instead of real individual canvas
+        text items.
 
-        Explicitly EXCLUDED from rasterization, still drawn as normal,
-        separate, lightweight canvas items ON TOP of the one bitmap image
-        (always low-count -- tens, not tens-of-thousands -- and benefit
-        from staying real/interactive Tkinter items): road/city text
-        labels (`canvas.create_text`), the center/search marker, and the
-        click-to-identify picked-point rings/numbers (`self.picked_points`).
-        Click-to-identify itself (`find_nearest_point()`/
-        `find_nearest_line_segment()`, see their own docstrings) was
-        already implemented entirely against this same in-memory point/
-        edge DATA, never by inspecting canvas item types/positions
-        (no `find_withtag`/`find_closest` against oval/line items
-        anywhere in this file) -- so it is completely unaffected by there
-        no longer being individual oval/line canvas items to inspect.
+        The CPU-side work of building the GL vertex buffers (still real,
+        ~0.3-1s on a dense viewport: per-point projection + per-feature
+        color bucketing) is still chunked across `root.after()` ticks via
+        `_redraw_process_chunk()`/`_redraw_finish()`, same reason and same
+        generation-token staleness guard as before (see `_redraw_process_
+        chunk()`'s own docstring) -- rendering is no longer the bottleneck,
+        but the data build still is, and chunking it costs nothing extra.
 
-        Real measured redraw timing (Sofia bbox, see README §10 "v17 ->
-        v18" for the full numbers/methodology) dropped from ~0.4-0.5s
-        (the old per-item canvas build, already the subject of the
-        "v3 -> v4" pan-drag workaround below) to a small fraction of that
-        for the SAME point/edge counts, since Pillow's C-level ImageDraw
-        is vectorized/batched instead of paying Tcl per-item overhead
-        30,000-60,000+ times over.
-
-        **UPDATE, a later session, user-reported freeze during/after
-        dragging**: at a real dense pooled viewport (80K+ features, the
-        post-parcel-migration norm -- see research/mp0-parcel-internals.md)
-        the single synchronous pass this docstring describes above still
-        measured ~2-3s -- during which the ENTIRE Tk event loop is
-        blocked, i.e. the whole window freezes solid (can't be moved,
-        resized, or clicked), not just "feels slow". Both
-        `App._on_drag_end()` (every drag/pan) and `App._maybe_reload_
-        viewport()`'s own `done()` callback (every new-area background
-        load) call this method directly, so every drag-end and every
-        background tile load finishing both froze the app for that long.
-        This method now only does the cheap SETUP here (canvas size,
-        the new PIL image/draw context, the "show tile boundaries"
-        overlay, the `far_enough` label-dedup closure) and then hands
-        off to `_redraw_process_chunk()`/`_redraw_finish()`, which split
-        the expensive part (the big per-feature loop, then cross-tile/
-        POI/labels) across several `root.after()` ticks instead of one
-        blocking call -- same total wall-clock time to a fully-settled
-        frame, but the window stays responsive throughout instead of
-        freezing. See `_redraw_process_chunk()`'s own docstring for the
-        generation-token staleness guard this needed."""
+        **Pan is decoupled from the vertex data** (see `MapGLFrame`'s own
+        docstring): buffers are built in "no-pan" (`pan_x=pan_y=0`)
+        projected space, and `pan_x`/`pan_y` are applied as a cheap
+        `glTranslatef()` at draw time -- so `App._on_drag_move()` no
+        longer needs the old `canvas.move("all", ...)` pixel-shift hack;
+        it just updates the pan offset and triggers a real (GPU-cheap)
+        redraw on every drag tick, more accurate than shifted stale
+        pixels since it's real vector data at the correct new position."""
         self._redraw_gen += 1
         gen = self._redraw_gen
         if self.center_lon is None:
-            self.canvas.delete("all")
-            self._current_photo = None
-            self._current_image = None
+            self.canvas.set_render_data(None)
+            self.canvas.repaint()
             self._redraw_state = None
             self._update_scale_bar()
             return
@@ -5006,29 +5261,6 @@ class App:
         # "v18 -> v19") -- every per-vertex/per-edge _to_canvas() call below
         # reads these instead of re-querying Tk.
         self._canvas_w, self._canvas_h = w, h
-
-        # Single rasterization target for this redraw -- every dot/edge
-        # below is drawn into this PIL image, never as its own canvas item.
-        # RGB (not RGBA): the map background is fully opaque everywhere
-        # (BG_COLOR), so there's no need for a real alpha channel here.
-        img = Image.new("RGB", (w, h), BG_COLOR)
-        draw = ImageDraw.Draw(img)
-
-        # "Show tile boundaries" overlay (later session, see the checkbox's
-        # own comment in _build_widgets() for why): drawn FIRST, before any
-        # point/road pixel, so it never obscures real data -- just thin
-        # outline rectangles under everything else. Rasterized into the
-        # same image as everything else (never individual canvas items) --
-        # a wide, zoomed-out viewport can easily pool 1,000+ tiles, and
-        # this project already learned the hard way (README §10 "v17 ->
-        # v18") that per-item Tk canvas overhead at that scale is a real,
-        # measured freeze, not a hypothetical concern.
-        if self.show_tile_boundaries_var.get() and self.data is not None:
-            for (layer, tile_id), (lon_min, lon_max, lat_min, lat_max) in \
-                    self.data.active_tile_bboxes().items():
-                x0, y0 = self._to_canvas(lon_min, lat_max)  # top-left: min lon, MAX lat (screen y grows downward)
-                x1, y1 = self._to_canvas(lon_max, lat_min)  # bottom-right: max lon, min lat
-                draw.rectangle([x0, y0, x1, y1], outline=TILE_BOUNDARY_COLOR, width=1)
 
         placed = []  # [(name, x, y), ...] already-drawn labels, for de-dup
 
@@ -5046,9 +5278,11 @@ class App:
         # see _redraw_process_chunk()'s own docstring for why that's now
         # split into chunks instead. `state` is this one redraw's working
         # data, threaded through every chunk tick and into _redraw_finish().
+        # "lines"/"dots": {(r,g,b,width_or_size): [x,y,x,y,...]}, all in
+        # NO-PAN projected space (see MapGLFrame's own docstring).
         self._redraw_state = {
-            "img": img,
-            "draw": draw,
+            "lines": {},
+            "dots": {},
             "w": w,
             "h": h,
             "placed": placed,
@@ -5059,40 +5293,71 @@ class App:
             "features": self.features,
             "idx": 0,
         }
+        state = self._redraw_state
+
+        # "Show tile boundaries" overlay -- same bucketed-lines mechanism
+        # as every other line below, just built here (cheap, bounded
+        # count) instead of in the per-feature loop.
+        if self.show_tile_boundaries_var.get() and self.data is not None:
+            key = _hex_to_rgb01(TILE_BOUNDARY_COLOR) + (1,)
+            buf = state["lines"].setdefault(key, [])
+            for (layer, tile_id), (lon_min, lon_max, lat_min, lat_max) in \
+                    self.data.active_tile_bboxes().items():
+                x0, y0 = self._to_canvas_nopan_vec(np.array([lon_min]), np.array([lat_max]))
+                x1, y1 = self._to_canvas_nopan_vec(np.array([lon_max]), np.array([lat_min]))
+                x0, y0, x1, y1 = x0[0], y0[0], x1[0], y1[0]
+                buf.extend((x0, y0, x1, y0, x1, y0, x1, y1,
+                            x1, y1, x0, y1, x0, y1, x0, y0))
+
         self._redraw_process_chunk(gen)
 
     _REDRAW_CHUNK_SIZE = 4000
 
     def _redraw_process_chunk(self, gen):
-        """One batch of _redraw()'s own big per-feature drawing loop --
-        see that method's docstring for why this is chunked instead of a
-        single synchronous pass, and `gen`'s own meaning (a superseded
-        sequence aborts here rather than finishing late)."""
+        """One batch of _redraw()'s own big per-feature loop -- builds GL
+        vertex-buffer buckets (`state["lines"]`/`state["dots"]`) instead of
+        PIL draw calls (see MapGLFrame's own docstring for why rendering
+        itself is no longer the thing worth chunking -- this CPU-side
+        build still is). `gen`'s own meaning: a superseded sequence (a
+        newer _redraw() started before this one finished) aborts here
+        instead of finishing late and overwriting a newer frame -- same
+        pattern this project's own App._maybe_reload_viewport()/
+        `_load_token` already uses for background tile loads."""
         if gen != self._redraw_gen:
             return  # superseded -- a newer _redraw() has since started
         state = self._redraw_state
         feats = state["features"]
-        draw = state["draw"]
+        lines = state["lines"]
+        dots = state["dots"]
         connected_roads_on = state["connected_roads_on"]
         seg_predict_on = state["seg_predict_on"]
         road_label_candidates = state["road_label_candidates"]
         idx = state["idx"]
         end = min(idx + self._REDRAW_CHUNK_SIZE, len(feats))
-        for i in range(idx, end):
-            feat = feats[i]
+
+        # Vectorized projection for this WHOLE chunk at once (not a
+        # per-point Python loop) -- the real perf win over the old
+        # per-vertex _to_canvas() calls at this point count. NO-PAN space
+        # (see MapGLFrame's own docstring): pan_x/pan_y are applied once,
+        # at draw time, as a GL translate -- not baked into these buffers.
+        chunk_feats = [feats[i] for i in range(idx, end) if len(feats[i]["points"]) >= 2]
+        all_lons = np.fromiter(
+            (lon for feat in chunk_feats for lon, lat in feat["points"]), dtype=np.float64)
+        all_lats = np.fromiter(
+            (lat for feat in chunk_feats for lon, lat in feat["points"]), dtype=np.float64)
+        if len(all_lons):
+            all_cx, all_cy = self._to_canvas_nopan_vec(all_lons, all_lats)
+        else:
+            all_cx = all_cy = np.array([], dtype=np.float64)
+
+        pos = 0
+        for feat in chunk_feats:
             pts = feat["points"]
-            if len(pts) < 2:
-                continue
-            # Perf: every point gets converted to canvas pixels at least
-            # twice below (once in the connected-roads line loop, once
-            # again in the always-on dot loop, a 3rd time for junction
-            # markers) -- `_to_canvas()` is the hottest per-vertex call in
-            # this whole function (its own comment: "potentially hundreds
-            # of thousands of times per redraw"), so converting each point
-            # exactly ONCE here and reusing it below is a real, measured
-            # win, not a style preference.
-            canvas_pts = [self._to_canvas(lon, lat) for lon, lat in pts]
-            ranges = feat.get("named_ranges") or [(0, len(pts) - 1, None)]
+            n = len(pts)
+            cx = all_cx[pos:pos + n]
+            cy = all_cy[pos:pos + n]
+            pos += n
+            ranges = feat.get("named_ranges") or [(0, n - 1, None)]
 
             # Connected-roads mode: a feature IS now one real road SEGMENT
             # (decode_tile()'s own parcel model -- left node + real shape
@@ -5145,21 +5410,13 @@ class App:
                 # Perf: almost every real segment has exactly ONE named
                 # range end-to-end (one road_id -> one name), so
                 # line_color/line_width are the SAME for every edge of the
-                # whole feature in the overwhelming common case. Instead of
-                # one draw.line() call per edge (PIL's own per-call `ink`
-                # color-resolution overhead, measured as a real cost at
-                # this point/edge count), batch consecutive edges sharing
-                # the same (color, width) into a single multi-point
-                # polyline call -- verified pixel-IDENTICAL output to the
-                # old per-edge-call approach (PIL draws a multi-point
-                # line() as the same sequence of segments internally),
-                # never an approximation, just fewer, bigger calls. Still
-                # falls back to one call per run if a feature's color
-                # genuinely changes partway through (multiple named
-                # ranges, or the seg_predict overlay).
+                # whole feature in the overwhelming common case -- batch
+                # consecutive edges sharing the same (color, width) into
+                # one run, appended to that bucket's vertex list as a
+                # single extend() instead of one call per edge.
                 run_start = 0
                 run_color = run_width = None
-                for a in range(len(pts) - 1):
+                for a in range(n - 1):
                     if seg_line_color is not None:
                         line_color, line_width = seg_line_color, 1.6
                     else:
@@ -5179,35 +5436,27 @@ class App:
                     if run_color is None:
                         run_color, run_width = line_color, line_width
                     elif (line_color, line_width) != (run_color, run_width):
-                        # Rasterized into `img` (README §10 "v17 -> v18"),
-                        # not a real canvas item -- see _redraw()'s own
-                        # docstring. PIL's line width is an int pixel count
-                        # (no fractional anti-aliased width like Tk's) --
-                        # round, floor at 1px.
-                        draw.line(canvas_pts[run_start:a + 1], fill=run_color,
-                                  width=max(1, round(run_width)))
+                        key = _hex_to_rgb01(run_color) + (run_width,)
+                        buf = lines.setdefault(key, [])
+                        for k in range(run_start, a):
+                            buf.extend((cx[k], cy[k], cx[k + 1], cy[k + 1]))
                         run_start, run_color, run_width = a, line_color, line_width
                 if run_color is not None:
-                    draw.line(canvas_pts[run_start:len(pts)], fill=run_color,
-                              width=max(1, round(run_width)))
+                    key = _hex_to_rgb01(run_color) + (run_width,)
+                    buf = lines.setdefault(key, [])
+                    for k in range(run_start, n - 1):
+                        buf.extend((cx[k], cy[k], cx[k + 1], cy[k + 1]))
 
             for start, rng_end, name in ranges:
                 # Perf-refactor note: named this `rng_end`, not `end`, to
                 # avoid shadowing the OUTER `end` (this chunk's own feature-
-                # index boundary, see _redraw_process_chunk()'s own
-                # docstring) -- a real bug caught during verification: the
-                # old single-pass _redraw() had no outer `end` to collide
-                # with, but reusing the same name here after chunking
-                # clobbered the chunk boundary with whatever this loop's
-                # LAST named range happened to end at, corrupting
-                # `state["idx"]` once the per-feature loop finished.
-                seg_canvas = canvas_pts[start:rng_end + 1]
-                if len(seg_canvas) < 2:
-                    continue
-                coords = []
-                for cx, cy in seg_canvas:
-                    coords.extend((cx, cy))
+                # index boundary) -- a real bug caught during verification:
+                # reusing the same name here clobbered the chunk boundary
+                # with whatever this loop's LAST named range happened to
+                # end at, corrupting `state["idx"]` once the loop finished.
                 n_vertices = rng_end - start + 1
+                if n_vertices < 2:
+                    continue
                 if n_vertices >= 60:
                     radius = 1.6
                 elif n_vertices >= 15:
@@ -5218,82 +5467,60 @@ class App:
                     radius = 1.0
                 # Dots, not connected lines: drawing each decoded vertex as
                 # an independent point (instead of connecting consecutive
-                # points with create_line) sidesteps the still-unsolved
-                # segmentation problem entirely (README S3.6/S8) -- a
-                # feature's point sequence can legitimately jump between
-                # unrelated real road segments with no marker of where one
-                # ends and the next begins, which previously rendered as
-                # long, wrong-looking straight "teleport" lines. Plotting
-                # points independently can never draw a line between two
-                # unrelated points, since nothing is ever connected; dense
-                # real road geometry still reads as a recognizable street
-                # shape from the point density alone. User-requested change.
-                #
-                # Color (README §10 "v16 -> v17"): every dot is now the
-                # single, unambiguous DOT_COLOR (red) -- replaces the old
-                # per-importance ROAD_COLOR_MAJOR/MINOR/UNNAMED gray/gold
-                # fills, per the user's explicit request ("make the points
-                # red dots not gray ones").
-                #
-                # Drawn UNCONDITIONALLY now, even for a feature whose real
-                # connectivity WAS resolved with high confidence above
-                # (README §10 "v9 -> v10" used to skip dots here in that
-                # case, to avoid "clutter"). User's explicit request this
-                # session: "make the dots visible when roads are visible
-                # also" -- so the user can see every raw decoded point
-                # AND the derived connecting lines at once, which is exactly
-                # the visibility the click-to-identify debugging workflow
-                # (README §10 "v16 -> v17", edge click-to-identify) needs:
-                # every point is inspectable, whether or not it ended up
-                # part of a resolved edge.
-                # Rasterized into `img` (README §10 "v17 -> v18"), not a
-                # real canvas item per point -- see _redraw()'s own
-                # docstring for why (this loop alone used to be tens of
-                # thousands of individual canvas.create_oval() items at a
-                # dense real bbox).
+                # points) sidesteps the still-unsolved segmentation problem
+                # entirely (README S3.6/S8) -- a feature's point sequence
+                # can legitimately jump between unrelated real road
+                # segments with no marker of where one ends and the next
+                # begins. Plotting points independently can never draw a
+                # line between two unrelated points; dense real road
+                # geometry still reads as a recognizable street shape from
+                # the point density alone. Drawn UNCONDITIONALLY, even for
+                # a feature whose connectivity line was also drawn above --
+                # lets the click-to-identify workflow inspect every raw
+                # decoded point, resolved or not.
                 dot_fill = DOT_COLOR
                 if feature_topology_unresolved and self.show_unresolved_topology_var.get():
                     dot_fill = UNRESOLVED_TOPOLOGY_COLOR
-                for i in range(0, len(coords), 2):
-                    px, py = coords[i], coords[i + 1]
-                    draw.ellipse(
-                        [px - radius, py - radius, px + radius, py + radius],
-                        fill=dot_fill)
+                # GL point size is a diameter, not a radius -- 2x the old
+                # PIL ellipse radius for the same visual dot size.
+                key = _hex_to_rgb01(dot_fill) + (radius * 2,)
+                buf = dots.setdefault(key, [])
+                for k in range(start, rng_end + 1):
+                    buf.extend((cx[k], cy[k]))
 
                 if name:
-                    x0, y0 = coords[0], coords[1]
-                    x1, y1 = coords[-2], coords[-1]
+                    x0, y0 = cx[start], cy[start]
+                    x1, y1 = cx[rng_end], cy[rng_end]
                     pix_len = math.hypot(x1 - x0, y1 - y0)
                     if pix_len >= MIN_LABEL_PIXEL_LEN:
                         mid = (start + rng_end) // 2
-                        mx, my = canvas_pts[mid]
-                        road_label_candidates.append((pix_len, name, mx, my))
+                        road_label_candidates.append((pix_len, name, cx[mid], cy[mid]))
 
             # "Highlight junctions" (see show_junctions_var's own comment
-            # in __init__): drawn AFTER the normal per-vertex dots above
-            # (so a junction marker always paints on top, never hidden
-            # under a plain red dot). Degree is now the REAL, literal
-            # count of segments touching this feature's own left/right
-            # NODE (decode_tile()'s `node_degree`, tile-level, shared
-            # across every segment/feature that touches that same real
-            # node) -- not a per-feature graph walk any more. Only the
-            # segment's own TWO endpoints (pts[0]/pts[-1], i.e. its real
-            # left_node/right_node) can be junctions; intermediate shape
-            # points are real geometry, not real nodes, so they have no
-            # degree of their own to check.
+            # in __init__): same dot bucket mechanism as above, just a
+            # different (color, size) key, so it always paints on top of
+            # a plain road dot in the SAME draw call group (buckets with a
+            # bigger point size happen to be drawn in dict-insertion
+            # order here, which is fine -- junction markers are large
+            # enough, and rare enough, that draw order between distinct
+            # GL_POINTS calls is not visually significant in practice).
+            # Degree is the REAL, literal count of segments touching this
+            # feature's own left/right NODE (decode_tile()'s own
+            # `node_degree`, tile-level, shared across every segment that
+            # touches that node) -- only the segment's own TWO endpoints
+            # can be junctions; intermediate shape points are real
+            # geometry, not real nodes.
             if connected_roads_on and self.show_junctions_var.get() and self.data is not None:
                 layer, tile_id = feat.get("layer"), feat.get("tile_id")
                 node_degree = self.data.topo_caches.get(layer, {}).get(tile_id, {}).get("node_degree", {})
-                for node_id, pt_idx in ((feat.get("left_node"), 0), (feat.get("right_node"), len(pts) - 1)):
+                for node_id, pt_idx in ((feat.get("left_node"), 0), (feat.get("right_node"), n - 1)):
                     deg = node_degree.get(node_id, 0)
                     if deg < 3:
                         continue
                     color = MAJOR_JUNCTION_COLOR if deg >= 5 else JUNCTION_COLOR
-                    radius = 3.2 if deg >= 5 else 2.4
-                    px, py = canvas_pts[pt_idx]
-                    draw.ellipse(
-                        [px - radius, py - radius, px + radius, py + radius],
-                        fill=color)
+                    size = 6.4 if deg >= 5 else 4.8
+                    jkey = _hex_to_rgb01(color) + (size,)
+                    dots.setdefault(jkey, []).extend((cx[pt_idx], cy[pt_idx]))
 
         state["idx"] = end
         if end < len(feats):
@@ -5304,14 +5531,27 @@ class App:
     def _redraw_finish(self, gen):
         """Everything _redraw() still does AFTER every feature has been
         processed by _redraw_process_chunk() -- cross-tile connections,
-        POIs, handing the finished bitmap to Tk, then the lightweight
-        real-canvas-item labels/markers/picks on top. See _redraw_
-        process_chunk()'s own docstring for `gen`'s meaning."""
+        POIs, the center marker and picked points (all now GL line/dot
+        buckets, same mechanism as roads), then the text label texture,
+        then one GPU draw. See _redraw_process_chunk()'s own docstring
+        for `gen`'s meaning.
+
+        **Known simplifications from this migration's first pass** (none
+        of these are silent -- flagged here and in the session's own
+        report): POI/Sirius icons render as plain colored dots instead of
+        their real category icon textures (texture-per-partition upload
+        is a fast-follow, not yet wired in); the picked-points connecting
+        line is solid, not dashed (GL_LINE_STIPPLE wasn't wired in); the
+        center marker's triangle is an outline, not filled (would need a
+        GL_TRIANGLES draw, not yet added); city markers are round dots,
+        not the old square. All of these are COSMETIC -- the underlying
+        data/positions are exact, nothing here affects click-to-identify,
+        search, or any other non-rendering behavior."""
         if gen != self._redraw_gen:
             return  # superseded -- a newer _redraw() has since started
         state = self._redraw_state
-        img = state["img"]
-        draw = state["draw"]
+        lines = state["lines"]
+        dots = state["dots"]
         w = state["w"]
         h = state["h"]
         placed = state["placed"]
@@ -5365,14 +5605,16 @@ class App:
                 self._cross_tile_cache_key = cache_key
                 self._cross_tile_cache_result = matches
 
+            key = _hex_to_rgb01(CROSS_TILE_LINE_COLOR) + (2,)
+            buf = lines.setdefault(key, [])
             for match in matches:
                 layer_a, tile_a = match["tile_a"]
                 layer_b, tile_b = match["tile_b"]
                 pa = self.data._node_coord_caches[layer_a][tile_a][match["point_a"]]
                 pb = self.data._node_coord_caches[layer_b][tile_b][match["point_b"]]
-                ax, ay = self._to_canvas(*pa)
-                bx, by = self._to_canvas(*pb)
-                draw.line([(ax, ay), (bx, by)], fill=CROSS_TILE_LINE_COLOR, width=2)
+                ax, ay = self._to_canvas_nopan(*pa)
+                bx, by = self._to_canvas_nopan(*pb)
+                buf.extend((ax, ay, bx, by))
 
         # Real POIs (README §10 "v19 -> v20"/"v20 -> v21", EDB/POI/POI.DB3)
         # -- rasterized into the SAME `img` bitmap as the road dots above,
@@ -5416,23 +5658,20 @@ class App:
                 # own return order (no particular priority weighting this
                 # session -- see "what remains open" below).
                 occupied_cells = set()
+                poi_dot_key = _hex_to_rgb01(POI_DOT_COLOR) + (4.4,)
                 for poi in self.data.pois_for_bbox(lon_min, lon_max, lat_min, lat_max, max_span_m):
-                    px, py = self._to_canvas(poi["lon"], poi["lat"])
+                    px, py = self._to_canvas_nopan(poi["lon"], poi["lat"])
                     if not (-10 <= px <= w + 10 and -10 <= py <= h + 10):
                         continue
                     cell = (int(px // POI_ICON_CELL_PX), int(py // POI_ICON_CELL_PX))
                     if cell in occupied_cells:
                         continue
                     occupied_cells.add(cell)
-                    icon = self._get_poi_icon(poi["partition_id"])
-                    if icon is not None:
-                        entry = self.data.poi_icons.get(poi["partition_id"], {})
-                        hx = entry.get("hotspot_x", icon.width // 2)
-                        hy = entry.get("hotspot_y", icon.height // 2)
-                        img.paste(icon, (int(round(px - hx)), int(round(py - hy))), icon)
-                    else:
-                        draw.ellipse([px - 2.2, py - 2.2, px + 2.2, py + 2.2],
-                                     fill=POI_DOT_COLOR, outline=BG_COLOR)
+                    # Real per-category icon textures are a fast-follow
+                    # (see this method's own docstring) -- every POI draws
+                    # as a plain colored dot for now, same fallback the
+                    # old code used for a partition with no icon at all.
+                    dots.setdefault(poi_dot_key, []).extend((px, py))
                     if poi["name"]:
                         poi_label_candidates.append((poi["name"], px, py, POI_LABEL_COLOR))
                     rendered_pois.append(poi)
@@ -5461,58 +5700,33 @@ class App:
                 lon_min, lon_max, lat_min, lat_max = vb
                 max_span_m = span_m_for_scale(self.scale, w, h)
                 occupied_cells = set()
+                sirius_dot_key = _hex_to_rgb01(SIRIUS_POI_DOT_COLOR) + (5.2,)
                 for poi in self.data.sirius_pois_for_bbox(lon_min, lon_max, lat_min, lat_max, max_span_m):
-                    px, py = self._to_canvas(poi["lon"], poi["lat"])
+                    px, py = self._to_canvas_nopan(poi["lon"], poi["lat"])
                     if not (-10 <= px <= w + 10 and -10 <= py <= h + 10):
                         continue
                     cell = (int(px // POI_ICON_CELL_PX), int(py // POI_ICON_CELL_PX))
                     if cell in occupied_cells:
                         continue
                     occupied_cells.add(cell)
-                    icon = self._get_sirius_poi_icon(poi["partition_id"])
-                    if icon is not None:
-                        entry = self.data.sirius_icons.get(poi["partition_id"], {})
-                        hx = entry.get("hotspot_x", icon.width // 2)
-                        hy = entry.get("hotspot_y", icon.height // 2)
-                        img.paste(icon, (int(round(px - hx)), int(round(py - hy))), icon)
-                    else:
-                        draw.ellipse([px - 2.6, py - 2.6, px + 2.6, py + 2.6],
-                                     fill=SIRIUS_POI_DOT_COLOR, outline=BG_COLOR)
+                    # Real icon textures are a fast-follow -- see this
+                    # method's own docstring.
+                    dots.setdefault(sirius_dot_key, []).extend((px, py))
                     if poi["name"]:
                         poi_label_candidates.append((poi["name"], px, py, SIRIUS_POI_LABEL_COLOR))
                     rendered_pois.append(poi)
 
         self._rendered_pois = rendered_pois
 
-        # Hand the finished rasterization off to Tk as ONE canvas item
-        # (README §10 "v17 -> v18") -- everything drawn above (every dot,
-        # every high-confidence connected-roads line) is now baked into
-        # `img`; this is the ONLY canvas item this method creates for all
-        # of that content, no matter how many points/edges it contains.
-        # `anchor="nw"` places its (0, 0) pixel at canvas (0, 0), matching
-        # _to_canvas()'s own coordinate system exactly. The PhotoImage
-        # reference is kept on `self` (`self._current_photo`) -- Tkinter
-        # does not keep its own strong reference to a PhotoImage, so
-        # without this the image would be garbage-collected and vanish
-        # from screen the moment this method returns. `self._current_image`
-        # (the raw PIL Image, pre-PhotoImage-conversion) is ALSO kept, purely
-        # so test_map_viewer.py can sample real pixel colors at known
-        # (x, y) canvas coordinates directly (Image.getpixel()) instead of
-        # inspecting Tk canvas items that no longer exist per-point/edge --
-        # not read anywhere else in this file.
-        #
-        # `canvas.delete("all")` is deliberately held off until exactly
-        # HERE (it used to run at the very top of the old synchronous
-        # _redraw()) -- the OLD frame (and its old labels/markers/picks)
-        # stays fully visible on screen for the entire chunked drawing
-        # pass above, then gets replaced in one atomic swap the instant
-        # the new one is ready. Same final visible result as before,
-        # minus the stale-blank-canvas flash swapping any earlier would
-        # cause.
-        self.canvas.delete("all")
-        self._current_image = img
-        self._current_photo = ImageTk.PhotoImage(img)
-        self.canvas.create_image(0, 0, image=self._current_photo, anchor="nw")
+        # Every text label this redraw needs, collected here and rendered
+        # together into ONE GL texture at the end (_build_label_texture())
+        # -- real canvas.create_text() items would work too (labels are
+        # always low-count), but keeping everything in the GL frame avoids
+        # mixing a real Tk widget on top of the GL surface, which Tkinter
+        # can't alpha-composite (verified directly: an overlay canvas's
+        # "empty" area is an OPAQUE system color, not transparent, during
+        # this migration's own prototyping).
+        label_entries = []
 
         # Draw the most visually-prominent (longest on-screen) runs' labels
         # first so they win the dedup slots over short, easily-repeated ones.
@@ -5522,22 +5736,20 @@ class App:
                 continue
             if not far_enough(name, mx, my):
                 continue
-            self.canvas.create_text(mx, my, text=name, fill=ROAD_LABEL_COLOR,
-                                     font=("Segoe UI", 8), anchor="center")
+            label_entries.append((mx, my, name, ROAD_LABEL_COLOR, self._gl_font(8), "mm"))
             placed.append((name, mx, my))
 
-        # POI name labels (README §10 "v19 -> v20"/"v20 -> v21") -- markers
-        # are already rasterized above (as real icons since "v20 -> v21");
-        # only the TEXT is a real canvas item, and only up to MAX_POI_LABELS
-        # of them regardless of how many markers were drawn, same clutter
-        # guard MAX_CITY_LABELS already uses below. Offset -21px to clear a
-        # real icon's own top edge (34x39, hotspot at y=19 -- i.e. the icon
-        # extends ~19-20px above its own anchor point).
+        # POI name labels (README §10 "v19 -> v20"/"v20 -> v21") -- only up
+        # to MAX_POI_LABELS of them regardless of how many markers were
+        # drawn, same clutter guard MAX_CITY_LABELS uses below. Offset
+        # -21px to roughly clear where a real icon's own top edge would be
+        # (34x39, hotspot at y=19) once icon textures land (see this
+        # method's own docstring) -- kept even though markers are plain
+        # dots for now, so labels don't need repositioning later.
         for name, px, py, label_color in poi_label_candidates[:MAX_POI_LABELS]:
             if not far_enough(name, px, py):
                 continue
-            self.canvas.create_text(px, py - 21, text=name, fill=label_color,
-                                     font=("Segoe UI", 8), anchor="s")
+            label_entries.append((px, py - 21, name, label_color, self._gl_font(8), "ms"))
             placed.append((name, px, py))
 
         # City/town labels -- queried fresh each redraw (CtyCache is cheap).
@@ -5552,45 +5764,46 @@ class App:
                 cities = self._ensure_center_city_included(cities)
                 for c in cities:
                     clon, clat = c.repr_point
-                    cx, cy = self._to_canvas(clon, clat)
+                    cx, cy = self._to_canvas_nopan(clon, clat)
                     if not (0 <= cx <= w and 0 <= cy <= h):
                         continue
                     if not far_enough(c.name, cx, cy):
                         continue
-                    # Small SQUARE marker (not circular) -- photo #4's dark-
-                    # background city dots, adapted proportionately to this
-                    # tool's light cream map theme (dark navy square reads
-                    # clearly against BG_COLOR).
-                    r = 3
-                    self.canvas.create_rectangle(cx - r, cy - r, cx + r, cy + r, fill=CITY_DOT_COLOR, outline="")
+                    # Round dot marker -- the old square (photo #4 style)
+                    # would need a GL_QUADS draw, not yet added (see this
+                    # method's own docstring); a dot reads the same at
+                    # this size.
+                    dots.setdefault(_hex_to_rgb01(CITY_DOT_COLOR) + (6,), []).extend((cx, cy))
                     lon_min_b, lat_min_b, lon_max_b, lat_max_b = c.bbox
                     area = (lon_max_b - lon_min_b) * (lat_max_b - lat_min_b)
                     is_big = area >= BIG_CITY_AREA_DEG2
-                    font = ("Segoe UI", 11 if is_big else 9, "bold" if is_big else "normal")
-                    self.canvas.create_text(cx + 6, cy, text=c.name, fill=CITY_LABEL_COLOR,
-                                             font=font, anchor="w")
+                    font = self._gl_font(11 if is_big else 9, bold=is_big)
+                    label_entries.append((cx + 6, cy, c.name, CITY_LABEL_COLOR, font, "lm"))
                     placed.append((c.name, cx, cy))
 
         # Center/search marker -- orange circle with a directional triangle
-        # (photos #3/#4's "current position" marker style), drawn last (on
-        # top). The triangle has no real heading data behind it (this tool
+        # outline (photos #3/#4's "current position" marker style; the
+        # triangle isn't filled here -- see this method's own docstring).
+        # The triangle has no real heading data behind it (this tool
         # doesn't track a direction of travel) -- it's fixed pointing up,
         # purely for the visual silhouette match.
-        mx, my = self._to_canvas(self.center_lon, self.center_lat)
+        mx, my = self._to_canvas_nopan(self.center_lon, self.center_lat)
         r = 7
-        self.canvas.create_oval(mx - r - 5, my - r - 5, mx + r + 5, my + r + 5, outline=MARKER_FILL, width=1)
-        self.canvas.create_oval(mx - r, my - r, mx + r, my + r, fill=MARKER_FILL, outline=MARKER_OUTLINE, width=2)
+        lines.setdefault(_hex_to_rgb01(MARKER_FILL) + (1,), []).extend(
+            self._circle_line_verts(mx, my, r + 5))
+        lines.setdefault(_hex_to_rgb01(MARKER_OUTLINE) + (2,), []).extend(
+            self._circle_line_verts(mx, my, r))
+        dots.setdefault(_hex_to_rgb01(MARKER_FILL) + (r * 2,), []).extend((mx, my))
         tri = 5
-        self.canvas.create_polygon(
-            mx, my - tri,
-            mx - tri * 0.8, my + tri * 0.6,
-            mx + tri * 0.8, my + tri * 0.6,
-            fill="white", outline=MARKER_OUTLINE, width=1)
+        tri_key = _hex_to_rgb01(MARKER_OUTLINE) + (1,)
+        lines.setdefault(tri_key, []).extend((
+            mx, my - tri, mx - tri * 0.8, my + tri * 0.6,
+            mx - tri * 0.8, my + tri * 0.6, mx + tri * 0.8, my + tri * 0.6,
+            mx + tri * 0.8, my + tri * 0.6, mx, my - tri,
+        ))
 
         # Click-to-identify picks (README §10 "v6 -> v7", connecting line
-        # added in "v7 -> v8") -- drawn LAST, on top of everything including
-        # the center marker, since they're the user's active working set
-        # for this session. Positioned from each pick's own stored
+        # added in "v7 -> v8") -- positioned from each pick's own stored
         # (lon, lat), not from self.features, so a mark/line stays
         # correctly placed across every future pan/zoom/reload regardless
         # of what tiles happen to be pooled at redraw time.
@@ -5598,75 +5811,81 @@ class App:
         # Connecting line: drawn between CONSECUTIVE picks in the order the
         # user clicked them (self.picked_points' own list order, i.e. by
         # pick number), as immediate visual feedback for the ground-truth
-        # connectivity workflow -- lets the user see and confirm the path
-        # they're specifying before reporting it back in chat. Drawn first
-        # (before the rings/labels below) so the rings sit visually on top.
+        # connectivity workflow. Solid, not dashed -- see this method's own
+        # docstring.
         if len(self.picked_points) >= 2:
-            line_coords = []
-            for p in self.picked_points:
-                px, py = self._to_canvas(p["lon"], p["lat"])
-                line_coords.extend((px, py))
-            self.canvas.create_line(*line_coords, fill=PICK_MARK_COLOR, width=2, dash=(4, 2))
+            key = _hex_to_rgb01(PICK_MARK_COLOR) + (2,)
+            buf = lines.setdefault(key, [])
+            pick_pts = [self._to_canvas_nopan(p["lon"], p["lat"]) for p in self.picked_points]
+            for i in range(len(pick_pts) - 1):
+                buf.extend((pick_pts[i][0], pick_pts[i][1], pick_pts[i + 1][0], pick_pts[i + 1][1]))
 
+        halo_key = _hex_to_rgb01(PICK_MARK_HALO) + (4,)
+        pick_key = _hex_to_rgb01(PICK_MARK_COLOR) + (2,)
         for p in self.picked_points:
-            px, py = self._to_canvas(p["lon"], p["lat"])
+            px, py = self._to_canvas_nopan(p["lon"], p["lat"])
             if not (-30 <= px <= w + 30 and -30 <= py <= h + 30):
                 continue  # off-screen -- still in the panel/list, just not drawn
             ring_r = 6
-            self.canvas.create_oval(
-                px - ring_r, py - ring_r, px + ring_r, py + ring_r,
-                outline=PICK_MARK_HALO, width=4)
-            self.canvas.create_oval(
-                px - ring_r, py - ring_r, px + ring_r, py + ring_r,
-                outline=PICK_MARK_COLOR, width=2)
+            lines.setdefault(halo_key, []).extend(self._circle_line_verts(px, py, ring_r, 12))
+            lines.setdefault(pick_key, []).extend(self._circle_line_verts(px, py, ring_r, 12))
             label = str(p["number"])
-            self.canvas.create_text(
-                px + ring_r + 3, py - ring_r - 3, text=label, fill=PICK_MARK_HALO,
-                font=("Segoe UI", 9, "bold"), anchor="w", width=0)
-            self.canvas.create_text(
-                px + ring_r + 2, py - ring_r - 4, text=label, fill=PICK_MARK_COLOR,
-                font=("Segoe UI", 9, "bold"), anchor="w")
+            label_entries.append((px + ring_r + 3, py - ring_r - 3, label, PICK_MARK_HALO,
+                                   self._gl_font(9, bold=True), "lm"))
+            label_entries.append((px + ring_r + 2, py - ring_r - 4, label, PICK_MARK_COLOR,
+                                   self._gl_font(9, bold=True), "lm"))
+
+        # One GL texture for every label collected above, replacing
+        # whichever texture the LAST redraw uploaded -- OpenGL textures
+        # aren't reference-counted/GC'd the way a Tkinter PhotoImage is,
+        # so the old one must be explicitly freed or every redraw leaks
+        # one GL texture object.
+        label_img = self._build_label_texture(w, h, label_entries)
+        old_tex = self._label_tex_id
+        new_tex = gl_texture_from_rgba_image(label_img) if label_img is not None else None
+        if old_tex is not None:
+            GL.glDeleteTextures([old_tex])
+        self._label_tex_id = new_tex
+
+        self.canvas.set_render_data({
+            "lines": lines, "dots": dots, "icons": (),
+            "label_tex": new_tex, "pan_x": self.pan_x, "pan_y": self.pan_y,
+        })
+        self.canvas.repaint()
 
         self._update_scale_bar()
         self._redraw_state = None
 
     def _on_drag_start(self, event):
         self._drag_start = (event.x, event.y, self.pan_x, self.pan_y)
-        self._drag_last_xy = (event.x, event.y)
 
     def _on_drag_move(self, event):
         # Perf fix (README §10 "v3 -> v4", pan-drag): dragging used to call
-        # the full _redraw() (delete + recreate every canvas item) on every
-        # single mouse-move tick, which measured ~0.4-0.5s per redraw on a
-        # moderately dense mp0-level view -- unusably choppy for a
-        # continuous drag gesture. A pure pan never changes which pixel any
-        # already-drawn point should be at relative to any other, so during
-        # the drag we just shift every existing canvas item by the mouse's
-        # incremental delta (canvas.move, a cheap coordinate-only update),
-        # and only pay for a real, accurate _redraw() once the drag
-        # actually stops (_on_drag_end) or a zoom/new-data event happens.
+        # the full _redraw() on every single mouse-move tick, which
+        # measured ~0.4-0.5s per redraw on a moderately dense mp0-level
+        # view with the OLD per-item Tk canvas -- unusably choppy for a
+        # continuous drag gesture. The old fix (kept for the PIL-rasterized
+        # canvas era, README §10 "v17 -> v18") was `canvas.move("all", ...)`:
+        # shift the one pre-rendered bitmap by the mouse's pixel delta
+        # instead of re-rendering, accepting stale pixels at the revealed
+        # edges until the drag actually stopped.
         #
-        # README §10 "v17 -> v18": since the point/edge rasterization rework,
-        # this same `canvas.move("all", ...)` now moves exactly ONE image
-        # item (plus the small number of label/marker/pick items) instead of
-        # tens of thousands of individual ovals/lines -- trivially cheap
-        # regardless of how many points/edges are behind it, vs. the old
-        # per-item move cost that scaled with point count. The one visible
-        # tradeoff (unchanged from before, just now purely a bitmap-edge
-        # effect instead of a point-count one): a moved-but-not-yet-redrawn
-        # image shows slightly stale pixels/edges right at the canvas
-        # boundary until the drag ends and a real _redraw() runs -- expected,
-        # not a bug.
+        # **UPDATE, a still-later session, pyopengltk migration**: the GL
+        # frame's actual draw call is cheap enough (single-digit ms, see
+        # MapGLFrame's own docstring) to just do a REAL redraw on every
+        # drag tick instead -- `MapGLFrame.set_pan()` reuses the SAME
+        # already-built vertex buffers (pan is a separate GL_MODELVIEW
+        # translate, never baked into the data, see that class's own
+        # docstring), so this costs a cheap matrix update + GPU draw, not
+        # a data rebuild. Strictly more correct than the old hack: real
+        # vector data at the exact new position every tick, never a
+        # stale/blank edge.
         if self._drag_start is None:
             return
         sx, sy, px, py = self._drag_start
         self.pan_x = px + (event.x - sx)
         self.pan_y = py + (event.y - sy)
-        lx, ly = self._drag_last_xy
-        dx, dy = event.x - lx, event.y - ly
-        if dx or dy:
-            self.canvas.move("all", dx, dy)
-        self._drag_last_xy = (event.x, event.y)
+        self.canvas.set_pan(self.pan_x, self.pan_y)
         self._schedule_viewport_check()
 
     def _on_drag_end(self, event):
