@@ -3428,6 +3428,19 @@ class MapGLFrame(OpenGLFrame):
         GL.glMatrixMode(GL.GL_MODELVIEW)
         GL.glLoadIdentity()
         GL.glTranslatef(data.get("pan_x", 0.0), data.get("pan_y", 0.0), 0.0)
+        # Zoom preview (see App._on_zoom()/set_zoom_preview()): vertex
+        # positions are LINEAR in `scale` (project_point()'s own x/y are
+        # each a plain `* scale`), so scaling the already-built buffers by
+        # exactly `current_scale / scale_the_buffers_were_built_at` around
+        # the SAME pan translate above is not an approximation -- it's
+        # the exact position a real rebuild at the new scale would also
+        # produce. Lets a fast scroll gesture get instant, geometrically
+        # correct feedback reusing the existing buffers (no rebuild),
+        # the same idea as set_pan() for dragging. 1.0 (the common case,
+        # no zoom in flight) is a no-op scale.
+        zoom_ratio = data.get("zoom_ratio", 1.0)
+        if zoom_ratio != 1.0:
+            GL.glScalef(zoom_ratio, zoom_ratio, 1.0)
 
         GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
         for (r, g, b, width), verts in data.get("lines", {}).items():
@@ -3509,6 +3522,24 @@ class MapGLFrame(OpenGLFrame):
             self._render_data["pan_y"] = pan_y
         self.repaint()
 
+    def set_zoom_preview(self, scale, pan_x, pan_y):
+        """Cheap zoom-only update for App._on_zoom() -- see `redraw()`'s
+        own comment for why scaling the already-built buffers by `scale /
+        (the scale they were built at)` is an EXACT preview, not an
+        approximation, letting a fast scroll wheel gesture get instant
+        feedback reusing the same vertex buffers (no rebuild) the same
+        way `set_pan()` does for dragging. `pan_x`/`pan_y` here are the
+        CURRENT (not build-time) pan -- App._on_zoom() already computes
+        the correct "keep the point under the cursor fixed" pan for the
+        new scale on every tick; this only needs to combine that with
+        however much the buffers themselves are now stale by scale."""
+        if self._render_data is not None:
+            build_scale = self._render_data.get("build_scale") or scale
+            self._render_data["zoom_ratio"] = scale / build_scale if build_scale else 1.0
+            self._render_data["pan_x"] = pan_x
+            self._render_data["pan_y"] = pan_y
+        self.repaint()
+
 
 def gl_texture_from_rgba_image(img):
     """Upload a PIL RGBA image as a GL texture, return its texture id.
@@ -3579,6 +3610,9 @@ class App:
         self.busy = False
         self._area_loading = False
         self._viewport_check_id = None
+        # Debounce for the real _redraw() after a zoom-preview tick -- see
+        # _on_zoom()/_schedule_zoom_redraw()'s own comments.
+        self._zoom_redraw_after_id = None
         # Generation token guarding against a stale reload's late completion
         # clobbering newer state (see _maybe_reload_viewport()'s docstring):
         # e.g. a debounced _schedule_viewport_check() reload left pending
@@ -5882,6 +5916,12 @@ class App:
         self.canvas.set_render_data({
             "lines": lines_arr, "dots": dots_arr, "icons": (),
             "label_tex": new_tex, "pan_x": self.pan_x, "pan_y": self.pan_y,
+            # The scale these buffers were projected at -- see
+            # MapGLFrame.set_zoom_preview()'s own docstring. zoom_ratio
+            # isn't set here (defaults to 1.0 in redraw()): a FRESH build
+            # is, by definition, already exactly correct for the current
+            # scale.
+            "build_scale": self.scale,
         })
         self.canvas.repaint()
 
@@ -5956,8 +5996,46 @@ class App:
         self.pan_x = self.pan_x * ratio + cx * (1 - ratio)
         self.pan_y = self.pan_y * ratio + cy * (1 - ratio)
         self.scale = new_scale
-        self._redraw()
+
+        # User-reported, after the GL migration shipped: zooming was
+        # laggy -- this used to call the full (chunked, but still real)
+        # _redraw() on EVERY wheel tick. A fast scroll (several ticks
+        # within the ~1-2s a full rebuild takes on a dense viewport)
+        # meant each new tick's _redraw() superseded the previous one
+        # still in flight (the generation-token guard, see _redraw_
+        # process_chunk()'s own docstring) before any of them finished --
+        # the view stayed frozen at the OLD scale for the whole gesture,
+        # only catching up once scrolling actually stopped. Fixed the
+        # same way dragging was: an instant, EXACT GPU-only preview
+        # (MapGLFrame.set_zoom_preview() -- see its own docstring for why
+        # scaling the existing buffers is exact, not approximate, since
+        # projected position is linear in `scale`) on every tick, with
+        # the real rebuild (picks up new tiles/labels at the new scale)
+        # debounced to fire once scrolling actually settles.
+        self.canvas.set_zoom_preview(self.scale, self.pan_x, self.pan_y)
+        self._schedule_zoom_redraw()
         self._schedule_viewport_check()
+
+    def _schedule_zoom_redraw(self, delay_ms=150):
+        """Debounce for the REAL _redraw() after a zoom-preview tick (see
+        _on_zoom()'s own comment) -- same cancel-and-reschedule pattern as
+        _schedule_viewport_check(), just a separate timer: that one only
+        decides whether NEW TILES need loading (a no-op when the already-
+        covered area doesn't change, which a pure zoom usually doesn't),
+        so it can't be relied on to ever actually call _redraw() again --
+        without this, the view would stay on the cheap preview forever
+        once scrolling stops, never refreshing labels for the new scale."""
+        if self._zoom_redraw_after_id is not None:
+            try:
+                self.root.after_cancel(self._zoom_redraw_after_id)
+            except Exception:
+                pass
+        self._zoom_redraw_after_id = self.root.after(delay_ms, self._zoom_redraw_fire)
+
+    def _zoom_redraw_fire(self):
+        self._zoom_redraw_after_id = None
+        if self.center_lon is not None:
+            self._redraw()
 
     # ------------------------------------------- click-to-identify (v6 -> v7)
 
