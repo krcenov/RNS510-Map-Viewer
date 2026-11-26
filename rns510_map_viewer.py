@@ -3406,6 +3406,20 @@ class App:
         self._current_photo = None
         self._current_image = None  # raw PIL Image behind it -- see _redraw()
 
+        # Chunked redraw (a later session, perf fix -- see _redraw()'s own
+        # docstring "UPDATE" note): `_redraw_gen` is bumped every time
+        # _redraw() is (re-)started; `_redraw_process_chunk()`/
+        # `_redraw_finish()` each check their own captured `gen` against
+        # the CURRENT `self._redraw_gen` before doing any work, so a
+        # superseded in-progress chunked redraw (one more _redraw() call
+        # arrived before it finished) quietly aborts instead of finishing
+        # late and overwriting a newer, more correct frame. `_redraw_state`
+        # holds the one in-progress redraw's working state (the PIL image/
+        # draw context, label candidates, which feature index it's up to,
+        # etc.) between ticks -- None when no chunked redraw is in flight.
+        self._redraw_gen = 0
+        self._redraw_state = None
+
         # Click-to-identify picks (README §10 "v6 -> v7"): a running,
         # numbered list of points the user has right-clicked, each an
         # identifying-info dict from find_nearest_point() plus a "number".
@@ -4954,11 +4968,36 @@ class App:
         "v3 -> v4" pan-drag workaround below) to a small fraction of that
         for the SAME point/edge counts, since Pillow's C-level ImageDraw
         is vectorized/batched instead of paying Tcl per-item overhead
-        30,000-60,000+ times over."""
-        self.canvas.delete("all")
+        30,000-60,000+ times over.
+
+        **UPDATE, a later session, user-reported freeze during/after
+        dragging**: at a real dense pooled viewport (80K+ features, the
+        post-parcel-migration norm -- see research/mp0-parcel-internals.md)
+        the single synchronous pass this docstring describes above still
+        measured ~2-3s -- during which the ENTIRE Tk event loop is
+        blocked, i.e. the whole window freezes solid (can't be moved,
+        resized, or clicked), not just "feels slow". Both
+        `App._on_drag_end()` (every drag/pan) and `App._maybe_reload_
+        viewport()`'s own `done()` callback (every new-area background
+        load) call this method directly, so every drag-end and every
+        background tile load finishing both froze the app for that long.
+        This method now only does the cheap SETUP here (canvas size,
+        the new PIL image/draw context, the "show tile boundaries"
+        overlay, the `far_enough` label-dedup closure) and then hands
+        off to `_redraw_process_chunk()`/`_redraw_finish()`, which split
+        the expensive part (the big per-feature loop, then cross-tile/
+        POI/labels) across several `root.after()` ticks instead of one
+        blocking call -- same total wall-clock time to a fully-settled
+        frame, but the window stays responsive throughout instead of
+        freezing. See `_redraw_process_chunk()`'s own docstring for the
+        generation-token staleness guard this needed."""
+        self._redraw_gen += 1
+        gen = self._redraw_gen
         if self.center_lon is None:
+            self.canvas.delete("all")
             self._current_photo = None
             self._current_image = None
+            self._redraw_state = None
             self._update_scale_bar()
             return
         w = max(self.canvas.winfo_width(), 1)
@@ -5002,8 +5041,45 @@ class App:
         connected_roads_on = self.connected_roads_var.get()
         seg_predict_on = self.show_seg_predict_var.get()
 
-        road_label_candidates = []
-        for feat in self.features:
+        # Everything from here on used to run as one single synchronous
+        # pass (the big per-feature loop, then cross-tile/POI/labels) --
+        # see _redraw_process_chunk()'s own docstring for why that's now
+        # split into chunks instead. `state` is this one redraw's working
+        # data, threaded through every chunk tick and into _redraw_finish().
+        self._redraw_state = {
+            "img": img,
+            "draw": draw,
+            "w": w,
+            "h": h,
+            "placed": placed,
+            "far_enough": far_enough,
+            "connected_roads_on": connected_roads_on,
+            "seg_predict_on": seg_predict_on,
+            "road_label_candidates": [],
+            "features": self.features,
+            "idx": 0,
+        }
+        self._redraw_process_chunk(gen)
+
+    _REDRAW_CHUNK_SIZE = 4000
+
+    def _redraw_process_chunk(self, gen):
+        """One batch of _redraw()'s own big per-feature drawing loop --
+        see that method's docstring for why this is chunked instead of a
+        single synchronous pass, and `gen`'s own meaning (a superseded
+        sequence aborts here rather than finishing late)."""
+        if gen != self._redraw_gen:
+            return  # superseded -- a newer _redraw() has since started
+        state = self._redraw_state
+        feats = state["features"]
+        draw = state["draw"]
+        connected_roads_on = state["connected_roads_on"]
+        seg_predict_on = state["seg_predict_on"]
+        road_label_candidates = state["road_label_candidates"]
+        idx = state["idx"]
+        end = min(idx + self._REDRAW_CHUNK_SIZE, len(feats))
+        for i in range(idx, end):
+            feat = feats[i]
             pts = feat["points"]
             if len(pts) < 2:
                 continue
@@ -5115,14 +5191,23 @@ class App:
                     draw.line(canvas_pts[run_start:len(pts)], fill=run_color,
                               width=max(1, round(run_width)))
 
-            for start, end, name in ranges:
-                seg_canvas = canvas_pts[start:end + 1]
+            for start, rng_end, name in ranges:
+                # Perf-refactor note: named this `rng_end`, not `end`, to
+                # avoid shadowing the OUTER `end` (this chunk's own feature-
+                # index boundary, see _redraw_process_chunk()'s own
+                # docstring) -- a real bug caught during verification: the
+                # old single-pass _redraw() had no outer `end` to collide
+                # with, but reusing the same name here after chunking
+                # clobbered the chunk boundary with whatever this loop's
+                # LAST named range happened to end at, corrupting
+                # `state["idx"]` once the per-feature loop finished.
+                seg_canvas = canvas_pts[start:rng_end + 1]
                 if len(seg_canvas) < 2:
                     continue
                 coords = []
                 for cx, cy in seg_canvas:
                     coords.extend((cx, cy))
-                n_vertices = end - start + 1
+                n_vertices = rng_end - start + 1
                 if n_vertices >= 60:
                     radius = 1.6
                 elif n_vertices >= 15:
@@ -5180,7 +5265,7 @@ class App:
                     x1, y1 = coords[-2], coords[-1]
                     pix_len = math.hypot(x1 - x0, y1 - y0)
                     if pix_len >= MIN_LABEL_PIXEL_LEN:
-                        mid = (start + end) // 2
+                        mid = (start + rng_end) // 2
                         mx, my = canvas_pts[mid]
                         road_label_candidates.append((pix_len, name, mx, my))
 
@@ -5210,6 +5295,30 @@ class App:
                         [px - radius, py - radius, px + radius, py + radius],
                         fill=color)
 
+        state["idx"] = end
+        if end < len(feats):
+            self.root.after(1, lambda: self._redraw_process_chunk(gen))
+        else:
+            self._redraw_finish(gen)
+
+    def _redraw_finish(self, gen):
+        """Everything _redraw() still does AFTER every feature has been
+        processed by _redraw_process_chunk() -- cross-tile connections,
+        POIs, handing the finished bitmap to Tk, then the lightweight
+        real-canvas-item labels/markers/picks on top. See _redraw_
+        process_chunk()'s own docstring for `gen`'s meaning."""
+        if gen != self._redraw_gen:
+            return  # superseded -- a newer _redraw() has since started
+        state = self._redraw_state
+        img = state["img"]
+        draw = state["draw"]
+        w = state["w"]
+        h = state["h"]
+        placed = state["placed"]
+        far_enough = state["far_enough"]
+        connected_roads_on = state["connected_roads_on"]
+        road_label_candidates = state["road_label_candidates"]
+
         # "Draw cross-tile connections (EXPERIMENTAL)" (see show_cross_
         # tile_var's own comment in __init__): computed ONCE here, after
         # the per-feature loop above, because it needs every currently-
@@ -5225,7 +5334,7 @@ class App:
         # pair needed -- nodes were never per-feature to begin with).
         if self.show_cross_tile_var.get() and connected_roads_on and self.data is not None:
             visible_tiles = set()
-            for feat in self.features:
+            for feat in state["features"]:
                 layer, tile_id = feat.get("layer"), feat.get("tile_id")
                 if layer is not None and tile_id is not None:
                     visible_tiles.add((layer, tile_id))
@@ -5391,6 +5500,16 @@ class App:
         # (x, y) canvas coordinates directly (Image.getpixel()) instead of
         # inspecting Tk canvas items that no longer exist per-point/edge --
         # not read anywhere else in this file.
+        #
+        # `canvas.delete("all")` is deliberately held off until exactly
+        # HERE (it used to run at the very top of the old synchronous
+        # _redraw()) -- the OLD frame (and its old labels/markers/picks)
+        # stays fully visible on screen for the entire chunked drawing
+        # pass above, then gets replaced in one atomic swap the instant
+        # the new one is ready. Same final visible result as before,
+        # minus the stale-blank-canvas flash swapping any earlier would
+        # cause.
+        self.canvas.delete("all")
         self._current_image = img
         self._current_photo = ImageTk.PhotoImage(img)
         self.canvas.create_image(0, 0, image=self._current_photo, anchor="nw")
@@ -5509,6 +5628,7 @@ class App:
                 font=("Segoe UI", 9, "bold"), anchor="w")
 
         self._update_scale_bar()
+        self._redraw_state = None
 
     def _on_drag_start(self, event):
         self._drag_start = (event.x, event.y, self.pan_x, self.pan_y)
